@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
 use ata_core::{compute_ata_seed, get_associated_token_account_id};
-use common::{HashType, transaction::NSSATransaction};
+use common::HashType;
 use nssa::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use nssa_core::SharedSecretKey;
-use sequencer_service_rpc::RpcClient as _;
 
 use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
 
@@ -24,38 +23,21 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, definition_id, ata_id];
-
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Create { ata_program_id };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_pub_tx(
+                vec![
+                    AccountManagerAccountIdentity::Public(owner_id),
+                    AccountManagerAccountIdentity::Public(definition_id),
+                    AccountManagerAccountIdentity::Public(ata_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
+            .await
     }
 
     pub async fn send_transfer(
@@ -71,41 +53,24 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, sender_ata_id, recipient_id];
-
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Transfer {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_pub_tx(
+                vec![
+                    AccountManagerAccountIdentity::Public(owner_id),
+                    AccountManagerAccountIdentity::Public(sender_ata_id),
+                    AccountManagerAccountIdentity::Public(recipient_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
+            .await
     }
 
     pub async fn send_burn(
@@ -120,41 +85,24 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, holder_ata_id, definition_id];
-
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Burn {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_pub_tx(
+                vec![
+                    AccountManagerAccountIdentity::Public(owner_id),
+                    AccountManagerAccountIdentity::Public(holder_ata_id),
+                    AccountManagerAccountIdentity::Public(definition_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
+            .await
     }
 
     pub async fn send_create_private_owner(

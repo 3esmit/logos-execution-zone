@@ -1,7 +1,6 @@
-use common::{HashType, transaction::NSSATransaction};
-use nssa::AccountId;
+use common::HashType;
+use nssa::{AccountId, program::Program};
 use nssa_core::{MembershipProof, SharedSecretKey};
-use sequencer_service_rpc::RpcClient as _;
 
 use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
 
@@ -14,20 +13,21 @@ impl Pinata<'_> {
         winner_account_id: AccountId,
         solution: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let account_ids = vec![pinata_account_id, winner_account_id];
-        let program_id = nssa::program::Program::pinata().id();
-        let message =
-            nssa::public_transaction::Message::try_new(program_id, account_ids, vec![], solution)
-                .unwrap();
+        let program = Program::pinata();
+        let instruction = solution;
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_pub_tx(
+                vec![
+                    AccountManagerAccountIdentity::Public(pinata_account_id),
+                    AccountManagerAccountIdentity::Public(winner_account_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
+            .await
     }
 
     /// Claim a pinata reward using a privacy-preserving transaction for an already-initialized
