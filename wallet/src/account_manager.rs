@@ -11,7 +11,7 @@ use nssa_core::{
 use crate::{ExecutionFailureKind, WalletCore};
 
 #[derive(Clone)]
-pub enum PrivacyPreservingAccount {
+pub enum AccountManagerAccountIdentity {
     Public(AccountId),
     PrivateOwned(AccountId),
     PrivateForeign {
@@ -50,7 +50,7 @@ pub enum PrivacyPreservingAccount {
     },
 }
 
-impl PrivacyPreservingAccount {
+impl AccountManagerAccountIdentity {
     #[must_use]
     pub const fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_))
@@ -92,13 +92,13 @@ pub struct AccountManager {
 impl AccountManager {
     pub async fn new(
         wallet: &WalletCore,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountManagerAccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states = Vec::with_capacity(accounts.len());
 
         for account in accounts {
             let state = match account {
-                PrivacyPreservingAccount::Public(account_id) => {
+                AccountManagerAccountIdentity::Public(account_id) => {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
@@ -109,12 +109,12 @@ impl AccountManager {
 
                     State::Public { account, sk }
                 }
-                PrivacyPreservingAccount::PrivateOwned(account_id) => {
+                AccountManagerAccountIdentity::PrivateOwned(account_id) => {
                     let pre = private_key_tree_acc_preparation(wallet, account_id, false).await?;
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivateForeign {
+                AccountManagerAccountIdentity::PrivateForeign {
                     npk,
                     vpk,
                     identifier,
@@ -138,11 +138,11 @@ impl AccountManager {
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaOwned(account_id) => {
+                AccountManagerAccountIdentity::PrivatePdaOwned(account_id) => {
                     let pre = private_key_tree_acc_preparation(wallet, account_id, true).await?;
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaForeign {
+                AccountManagerAccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
                     vpk,
@@ -166,7 +166,7 @@ impl AccountManager {
                     };
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivateShared {
+                AccountManagerAccountIdentity::PrivateShared {
                     nsk,
                     npk,
                     vpk,
@@ -180,7 +180,7 @@ impl AccountManager {
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaShared {
+                AccountManagerAccountIdentity::PrivatePdaShared {
                     account_id,
                     nsk,
                     npk,
@@ -410,7 +410,7 @@ mod tests {
 
     #[test]
     fn private_shared_is_private() {
-        let acc = PrivacyPreservingAccount::PrivateShared {
+        let acc = AccountManagerAccountIdentity::PrivateShared {
             nsk: [0; 32],
             npk: NullifierPublicKey([1; 32]),
             vpk: ViewingPublicKey::from_scalar([2; 32]),

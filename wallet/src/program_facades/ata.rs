@@ -8,7 +8,7 @@ use nssa::{
 use nssa_core::SharedSecretKey;
 use sequencer_service_rpc::RpcClient as _;
 
-use crate::{ExecutionFailureKind, PrivacyPreservingAccount, WalletCore};
+use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -176,8 +176,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(definition_id),
-            PrivacyPreservingAccount::Public(ata_id),
+            AccountManagerAccountIdentity::Public(definition_id),
+            AccountManagerAccountIdentity::Public(ata_id),
         ];
 
         self.0
@@ -213,8 +213,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(sender_ata_id),
-            PrivacyPreservingAccount::Public(recipient_id),
+            AccountManagerAccountIdentity::Public(sender_ata_id),
+            AccountManagerAccountIdentity::Public(recipient_id),
         ];
 
         self.0
@@ -249,8 +249,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(holder_ata_id),
-            PrivacyPreservingAccount::Public(definition_id),
+            AccountManagerAccountIdentity::Public(holder_ata_id),
+            AccountManagerAccountIdentity::Public(definition_id),
         ];
 
         self.0

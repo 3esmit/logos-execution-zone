@@ -3,7 +3,7 @@ use nssa::AccountId;
 use nssa_core::{MembershipProof, SharedSecretKey};
 use sequencer_service_rpc::RpcClient as _;
 
-use crate::{ExecutionFailureKind, PrivacyPreservingAccount, WalletCore};
+use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Pinata<'wallet>(pub &'wallet WalletCore);
 
@@ -55,7 +55,7 @@ impl Pinata<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(pinata_account_id),
+                    AccountManagerAccountIdentity::Public(pinata_account_id),
                     self.0
                         .resolve_private_account(winner_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
