@@ -345,7 +345,7 @@ impl Token<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(definition_account_id),
+                    AccountManagerAccountIdentity::PublicNoSign(definition_account_id),
                     AccountManagerAccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,

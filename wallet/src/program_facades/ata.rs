@@ -31,8 +31,8 @@ impl Ata<'_> {
             .send_pub_tx(
                 vec![
                     AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::Public(definition_id),
-                    AccountManagerAccountIdentity::Public(ata_id),
+                    AccountManagerAccountIdentity::PublicNoSign(definition_id),
+                    AccountManagerAccountIdentity::PublicNoSign(ata_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -64,8 +64,8 @@ impl Ata<'_> {
             .send_pub_tx(
                 vec![
                     AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::Public(sender_ata_id),
-                    AccountManagerAccountIdentity::Public(recipient_id),
+                    AccountManagerAccountIdentity::PublicNoSign(sender_ata_id),
+                    AccountManagerAccountIdentity::PublicNoSign(recipient_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -96,8 +96,8 @@ impl Ata<'_> {
             .send_pub_tx(
                 vec![
                     AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::Public(holder_ata_id),
-                    AccountManagerAccountIdentity::Public(definition_id),
+                    AccountManagerAccountIdentity::PublicNoSign(holder_ata_id),
+                    AccountManagerAccountIdentity::PublicNoSign(definition_id),
                 ],
                 instruction_data,
                 &program.into(),

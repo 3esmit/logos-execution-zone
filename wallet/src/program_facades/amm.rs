@@ -51,10 +51,10 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(amm_pool),
-                    AccountManagerAccountIdentity::Public(vault_holding_a),
-                    AccountManagerAccountIdentity::Public(vault_holding_b),
-                    AccountManagerAccountIdentity::Public(pool_lp),
+                    AccountManagerAccountIdentity::PublicNoSign(amm_pool),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountManagerAccountIdentity::PublicNoSign(pool_lp),
                     AccountManagerAccountIdentity::Public(user_holding_a),
                     AccountManagerAccountIdentity::Public(user_holding_b),
                     AccountManagerAccountIdentity::Public(user_holding_lp),
@@ -105,14 +105,34 @@ impl Amm<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
+        if (token_definition_id_in != definition_token_a_id)
+            && (token_definition_id_in != definition_token_b_id)
+        {
+            return Err(ExecutionFailureKind::AccountDataError(
+                token_definition_id_in,
+            ));
+        }
+
+        let user_a_signing_indentity = if token_definition_id_in == definition_token_a_id {
+            AccountManagerAccountIdentity::Public(user_holding_a)
+        } else {
+            AccountManagerAccountIdentity::PublicNoSign(user_holding_a)
+        };
+
+        let user_b_signing_indentity = if token_definition_id_in == definition_token_b_id {
+            AccountManagerAccountIdentity::Public(user_holding_b)
+        } else {
+            AccountManagerAccountIdentity::PublicNoSign(user_holding_b)
+        };
+
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(amm_pool),
-                    AccountManagerAccountIdentity::Public(vault_holding_a),
-                    AccountManagerAccountIdentity::Public(vault_holding_b),
-                    AccountManagerAccountIdentity::Public(user_holding_a),
-                    AccountManagerAccountIdentity::Public(user_holding_b),
+                    AccountManagerAccountIdentity::PublicNoSign(amm_pool),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_b),
+                    user_a_signing_indentity,
+                    user_b_signing_indentity,
                 ],
                 instruction_data,
                 &program.into(),
@@ -160,14 +180,34 @@ impl Amm<'_> {
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
+        if (token_definition_id_in != definition_token_a_id)
+            && (token_definition_id_in != definition_token_b_id)
+        {
+            return Err(ExecutionFailureKind::AccountDataError(
+                token_definition_id_in,
+            ));
+        }
+
+        let user_a_signing_indentity = if token_definition_id_in == definition_token_a_id {
+            AccountManagerAccountIdentity::Public(user_holding_a)
+        } else {
+            AccountManagerAccountIdentity::PublicNoSign(user_holding_a)
+        };
+
+        let user_b_signing_indentity = if token_definition_id_in == definition_token_b_id {
+            AccountManagerAccountIdentity::Public(user_holding_b)
+        } else {
+            AccountManagerAccountIdentity::PublicNoSign(user_holding_b)
+        };
+
         self.0
             .send_pub_tx(
                 vec![
                     AccountManagerAccountIdentity::Public(amm_pool),
                     AccountManagerAccountIdentity::Public(vault_holding_a),
                     AccountManagerAccountIdentity::Public(vault_holding_b),
-                    AccountManagerAccountIdentity::Public(user_holding_a),
-                    AccountManagerAccountIdentity::Public(user_holding_b),
+                    user_a_signing_indentity,
+                    user_b_signing_indentity,
                 ],
                 instruction_data,
                 &program.into(),
@@ -220,13 +260,13 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(amm_pool),
-                    AccountManagerAccountIdentity::Public(vault_holding_a),
-                    AccountManagerAccountIdentity::Public(vault_holding_b),
-                    AccountManagerAccountIdentity::Public(pool_lp),
+                    AccountManagerAccountIdentity::PublicNoSign(amm_pool),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountManagerAccountIdentity::PublicNoSign(pool_lp),
                     AccountManagerAccountIdentity::Public(user_holding_a),
                     AccountManagerAccountIdentity::Public(user_holding_b),
-                    AccountManagerAccountIdentity::Public(user_holding_lp),
+                    AccountManagerAccountIdentity::PublicNoSign(user_holding_lp),
                 ],
                 instruction_data,
                 &program.into(),
@@ -279,12 +319,12 @@ impl Amm<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(amm_pool),
-                    AccountManagerAccountIdentity::Public(vault_holding_a),
-                    AccountManagerAccountIdentity::Public(vault_holding_b),
-                    AccountManagerAccountIdentity::Public(pool_lp),
-                    AccountManagerAccountIdentity::Public(user_holding_a),
-                    AccountManagerAccountIdentity::Public(user_holding_b),
+                    AccountManagerAccountIdentity::PublicNoSign(amm_pool),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountManagerAccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountManagerAccountIdentity::PublicNoSign(pool_lp),
+                    AccountManagerAccountIdentity::PublicNoSign(user_holding_a),
+                    AccountManagerAccountIdentity::PublicNoSign(user_holding_b),
                     AccountManagerAccountIdentity::Public(user_holding_lp),
                 ],
                 instruction_data,

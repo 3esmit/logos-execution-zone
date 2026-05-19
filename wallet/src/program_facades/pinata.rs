@@ -21,8 +21,8 @@ impl Pinata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(pinata_account_id),
-                    AccountManagerAccountIdentity::Public(winner_account_id),
+                    AccountManagerAccountIdentity::PublicNoSign(pinata_account_id),
+                    AccountManagerAccountIdentity::PublicNoSign(winner_account_id),
                 ],
                 instruction_data,
                 &program.into(),

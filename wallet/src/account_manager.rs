@@ -13,6 +13,8 @@ use crate::{ExecutionFailureKind, WalletCore};
 #[derive(Clone)]
 pub enum AccountManagerAccountIdentity {
     Public(AccountId),
+    /// A public account without signing. Would not try to sign, even if account is owned.
+    PublicNoSign(AccountId),
     PrivateOwned(AccountId),
     PrivateForeign {
         npk: NullifierPublicKey,
@@ -53,7 +55,7 @@ pub enum AccountManagerAccountIdentity {
 impl AccountManagerAccountIdentity {
     #[must_use]
     pub const fn is_public(&self) -> bool {
-        matches!(&self, Self::Public(_))
+        matches!(&self, Self::Public(_) | Self::PublicNoSign(_))
     }
 
     #[must_use]
@@ -105,6 +107,17 @@ impl AccountManager {
                         .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
+                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+
+                    State::Public { account, sk }
+                }
+                AccountManagerAccountIdentity::PublicNoSign(account_id) => {
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let sk = None;
                     let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
 
                     State::Public { account, sk }
