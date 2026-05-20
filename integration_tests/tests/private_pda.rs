@@ -18,7 +18,7 @@ use nssa::{
 use nssa_core::{NullifierPublicKey, encryption::ViewingPublicKey, program::PdaSeed};
 use tokio::test;
 use wallet::{
-    AccountManagerAccountIdentity, WalletCore,
+    AccountIdentity, WalletCore,
     cli::{Command, account::AccountSubcommand},
 };
 
@@ -46,8 +46,8 @@ async fn fund_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                AccountManagerAccountIdentity::Public(sender),
-                AccountManagerAccountIdentity::PrivatePdaForeign {
+                AccountIdentity::Public(sender),
+                AccountIdentity::PrivatePdaForeign {
                     account_id: pda_account_id,
                     npk,
                     vpk,
@@ -83,8 +83,8 @@ async fn spend_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                AccountManagerAccountIdentity::PrivatePdaOwned(pda_account_id),
-                AccountManagerAccountIdentity::PrivateForeign {
+                AccountIdentity::PrivatePdaOwned(pda_account_id),
+                AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
                     identifier: 0,

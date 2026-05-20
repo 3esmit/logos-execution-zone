@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-pub use account_manager::AccountManagerAccountIdentity;
+pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
@@ -273,10 +273,7 @@ impl WalletCore {
     /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(
-        &self,
-        account_id: nssa::AccountId,
-    ) -> Option<AccountManagerAccountIdentity> {
+    pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
         if self
             .storage
@@ -284,7 +281,7 @@ impl WalletCore {
             .private_account(account_id)
             .is_some()
         {
-            return Some(AccountManagerAccountIdentity::PrivateOwned(account_id));
+            return Some(AccountIdentity::PrivateOwned(account_id));
         }
 
         // Check shared private accounts
@@ -299,7 +296,7 @@ impl WalletCore {
 
         if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.pda_program_id) {
             let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
-            Some(AccountManagerAccountIdentity::PrivatePdaShared {
+            Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
@@ -316,7 +313,7 @@ impl WalletCore {
                 result
             };
             let keys = holder.derive_keys_for_shared_account(&derivation_seed);
-            Some(AccountManagerAccountIdentity::PrivateShared {
+            Some(AccountIdentity::PrivateShared {
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
                 vpk: keys.generate_viewing_public_key(),
@@ -541,7 +538,7 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx(
         &self,
-        accounts: Vec<AccountManagerAccountIdentity>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
@@ -553,7 +550,7 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountManagerAccountIdentity>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
@@ -612,7 +609,7 @@ impl WalletCore {
 
     pub async fn send_pub_tx(
         &self,
-        accounts: Vec<AccountManagerAccountIdentity>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -622,16 +619,13 @@ impl WalletCore {
 
     pub async fn send_pub_tx_with_pre_check(
         &self,
-        accounts: Vec<AccountManagerAccountIdentity>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
-        if accounts
-            .iter()
-            .any(AccountManagerAccountIdentity::is_private)
-        {
+        if accounts.iter().any(AccountIdentity::is_private) {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 nssa::error::NssaError::InvalidInput(
                     "Private accounts are not allowed in public transactions".to_owned(),

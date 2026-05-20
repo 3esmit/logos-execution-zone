@@ -5,7 +5,7 @@ use nssa::{AccountId, program::Program};
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{AccountManagerAccountIdentity, ExecutionFailureKind};
+use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
     pub async fn register_account_private(
@@ -49,7 +49,7 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountManagerAccountIdentity::PrivateForeign {
+                    AccountIdentity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
                         identifier: to_identifier,

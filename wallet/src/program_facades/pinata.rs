@@ -2,7 +2,7 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 use nssa_core::{MembershipProof, SharedSecretKey};
 
-use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Pinata<'wallet>(pub &'wallet WalletCore);
 
@@ -21,8 +21,8 @@ impl Pinata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::PublicNoSign(pinata_account_id),
-                    AccountManagerAccountIdentity::PublicNoSign(winner_account_id),
+                    AccountIdentity::PublicNoSign(pinata_account_id),
+                    AccountIdentity::PublicNoSign(winner_account_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -55,7 +55,7 @@ impl Pinata<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(pinata_account_id),
+                    AccountIdentity::Public(pinata_account_id),
                     self.0
                         .resolve_private_account(winner_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
