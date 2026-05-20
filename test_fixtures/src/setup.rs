@@ -9,9 +9,7 @@ use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::RpcClient as _;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{
-    AccDecodeData::Decode, AccountIdentity, WalletCore, config::WalletConfigOverrides,
-};
+use wallet::{AccDecodeData::Decode, AccountIdentity, WalletCore, config::WalletConfigOverrides};
 
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,

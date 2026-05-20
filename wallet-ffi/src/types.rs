@@ -444,15 +444,13 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
 
     fn try_from(value: &FfiAccountIdentity) -> Result<Self, Self::Error> {
         match value.kind {
-            FfiAccountIdentityKind::Public => Ok(
-                AccountIdentity::Public(value.account_id.into()),
-            ),
-            FfiAccountIdentityKind::PublicNoSign => Ok(
-                AccountIdentity::PublicNoSign(value.account_id.into()),
-            ),
-            FfiAccountIdentityKind::PrivateOwned => Ok(
-                AccountIdentity::PrivateOwned(value.account_id.into()),
-            ),
+            FfiAccountIdentityKind::Public => Ok(AccountIdentity::Public(value.account_id.into())),
+            FfiAccountIdentityKind::PublicNoSign => {
+                Ok(AccountIdentity::PublicNoSign(value.account_id.into()))
+            }
+            FfiAccountIdentityKind::PrivateOwned => {
+                Ok(AccountIdentity::PrivateOwned(value.account_id.into()))
+            }
             FfiAccountIdentityKind::PrivateForeign => {
                 let vpk = if value.viewing_public_key_len == 33 {
                     let slice = unsafe {
@@ -472,9 +470,9 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     identifier: value.identifier.into(),
                 })
             }
-            FfiAccountIdentityKind::PrivatePdaOwned => Ok(
-                AccountIdentity::PrivatePdaOwned(value.account_id.into()),
-            ),
+            FfiAccountIdentityKind::PrivatePdaOwned => {
+                Ok(AccountIdentity::PrivatePdaOwned(value.account_id.into()))
+            }
             FfiAccountIdentityKind::PrivatePdaForeign => {
                 let vpk = if value.viewing_public_key_len == 33 {
                     let slice = unsafe {

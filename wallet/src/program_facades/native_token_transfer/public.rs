@@ -19,10 +19,7 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_pub_tx_with_pre_check(
-                vec![
-                    AccountIdentity::Public(from),
-                    AccountIdentity::Public(to),
-                ],
+                vec![AccountIdentity::Public(from), AccountIdentity::Public(to)],
                 instruction_data,
                 &program.into(),
                 tx_pre_check,

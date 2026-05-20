@@ -262,7 +262,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
 ///
 /// # Returns
 /// - `Success` on successful retrieval
-/// 
+///
 /// # Safety
 /// - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
 #[no_mangle]

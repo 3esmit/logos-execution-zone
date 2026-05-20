@@ -273,10 +273,7 @@ impl WalletCore {
     /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(
-        &self,
-        account_id: nssa::AccountId,
-    ) -> Option<AccountIdentity> {
+    pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
         if self
             .storage
@@ -628,10 +625,7 @@ impl WalletCore {
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
-        if accounts
-            .iter()
-            .any(AccountIdentity::is_private)
-        {
+        if accounts.iter().any(AccountIdentity::is_private) {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 nssa::error::NssaError::InvalidInput(
                     "Private accounts are not allowed in public transactions".to_owned(),
