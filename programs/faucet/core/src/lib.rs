@@ -11,11 +11,18 @@ pub enum Instruction {
     /// Required accounts (2):
     /// - Faucet PDA account
     /// - Recipient vault PDA account
-    Transfer {
+    TransferVault {
         vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u128,
     },
+
+    /// Transfers native tokens from system faucet directly to a recipient account.
+    ///
+    /// Required accounts (2):
+    /// - Faucet PDA account
+    /// - Recipient account
+    TransferDirect { amount: u128 },
 }
 
 #[must_use]

@@ -363,6 +363,9 @@ fn build_genesis_state(config: &SequencerConfig) -> (nssa::V03State, Vec<NSSATra
                 account_id,
                 balance,
             } => build_supply_account_genesis_transaction(account_id, *balance),
+            GenesisAction::SupplyBridgeAccount { balance } => {
+                build_supply_bridge_account_genesis_transaction(*balance)
+            }
         })
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
@@ -388,13 +391,29 @@ fn build_supply_account_genesis_transaction(
         faucet_program_id,
         vec![nssa::system_faucet_account_id(), recipient_vault_id],
         vec![],
-        faucet_core::Instruction::Transfer {
+        faucet_core::Instruction::TransferVault {
             vault_program_id,
             recipient_id: *account_id,
             amount: balance,
         },
     )
     .expect("Failed to serialize genesis transfer instruction");
+    let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
+
+    PublicTransaction::new(message, witness_set)
+}
+
+fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
+    let faucet_program_id = Program::faucet().id();
+    let bridge_account_id = nssa::system_bridge_account_id();
+
+    let message = Message::try_new(
+        faucet_program_id,
+        vec![nssa::system_faucet_account_id(), bridge_account_id],
+        vec![],
+        faucet_core::Instruction::TransferDirect { amount: balance },
+    )
+    .expect("Failed to serialize bridge genesis transfer instruction");
     let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
 
     PublicTransaction::new(message, witness_set)

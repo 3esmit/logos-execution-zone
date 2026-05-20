@@ -67,7 +67,7 @@ impl NSSATransaction {
     }
 
     /// Validates the transaction against the current state and returns the resulting diff
-    /// without applying it. Rejects transactions that modify clock or faucet system accounts,
+    /// without applying it. Rejects transactions that modify clock, faucet or bridge accounts,
     /// whether directly or indirectly via chain calls.
     ///
     /// This check is required for all user transactions. Only sequencer transactions may bypass
@@ -90,26 +90,12 @@ impl NSSATransaction {
             }
         }?;
 
-        let public_diff = diff.public_diff();
-        let touches_clock = nssa::CLOCK_PROGRAM_ACCOUNT_IDS.iter().any(|id| {
-            public_diff
-                .get(id)
-                .is_some_and(|post| *post != state.get_account_by_id(*id))
-        });
-        if touches_clock {
-            return Err(nssa::error::NssaError::InvalidInput(
-                "Transaction modifies system clock accounts".into(),
-            ));
-        }
-
-        let faucet_id = nssa::system_faucet_account_id();
-        if public_diff
-            .get(&faucet_id)
-            .is_some_and(|post| *post != state.get_account_by_id(faucet_id))
-        {
-            return Err(nssa::error::NssaError::InvalidInput(
-                "Transaction modifies system faucet account".into(),
-            ));
+        let system_accounts = nssa::CLOCK_PROGRAM_ACCOUNT_IDS.iter().copied().chain([
+            nssa::system_faucet_account_id(),
+            nssa::system_bridge_account_id(),
+        ]);
+        for account_id in system_accounts {
+            validate_doesnt_modify_account(state, &diff, account_id)?;
         }
 
         Ok(diff)
@@ -183,4 +169,22 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> nssa::PublicTrans
         message,
         nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+fn validate_doesnt_modify_account(
+    state: &V03State,
+    diff: &ValidatedStateDiff,
+    account_id: AccountId,
+) -> Result<(), nssa::error::NssaError> {
+    if diff
+        .public_diff()
+        .get(&account_id)
+        .is_some_and(|post| *post != state.get_account_by_id(account_id))
+    {
+        Err(nssa::error::NssaError::InvalidInput(format!(
+            "Transaction modifies restricted system account {account_id}"
+        )))
+    } else {
+        Ok(())
+    }
 }

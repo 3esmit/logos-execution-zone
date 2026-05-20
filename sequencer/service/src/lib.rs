@@ -1,11 +1,21 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
+#[cfg(not(feature = "standalone"))]
+use borsh::BorshDeserialize;
 use bytesize::ByteSize;
 use common::transaction::NSSATransaction;
+#[cfg(not(feature = "standalone"))]
+use futures::StreamExt as _;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
+#[cfg(not(feature = "standalone"))]
+use log::warn;
 use log::{error, info};
+#[cfg(not(feature = "standalone"))]
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient, ZoneMessage, adapter::Node as _, adapter::NodeHttpClient,
+};
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
 use sequencer_core::SequencerCore;
@@ -19,6 +29,19 @@ pub mod service;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
+#[cfg(not(feature = "standalone"))]
+#[derive(Clone, Debug, BorshDeserialize)]
+struct DepositMetadata {
+    recipient_id: nssa::AccountId,
+}
+
+#[cfg(not(feature = "standalone"))]
+impl DepositMetadata {
+    fn decode(bytes: &[u8]) -> Result<Self, std::io::Error> {
+        Self::try_from_slice(bytes)
+    }
+}
+
 /// Handle to manage the sequencer and its tasks.
 ///
 /// Implements `Drop` to ensure all tasks are aborted and the RPC server is stopped when dropped.
@@ -27,6 +50,7 @@ pub struct SequencerHandle {
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<ServerHandle>,
     main_loop_handle: JoinHandle<Result<Never>>,
+    bedrock_deposit_loop_handle: Option<JoinHandle<Result<Never>>>,
 }
 
 impl SequencerHandle {
@@ -34,11 +58,13 @@ impl SequencerHandle {
         addr: SocketAddr,
         server_handle: ServerHandle,
         main_loop_handle: JoinHandle<Result<Never>>,
+        bedrock_deposit_loop_handle: Option<JoinHandle<Result<Never>>>,
     ) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
             main_loop_handle,
+            bedrock_deposit_loop_handle,
         }
     }
 
@@ -52,18 +78,25 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            bedrock_deposit_loop_handle,
         } = &mut self;
 
         let server_handle = server_handle.take().expect("Server handle is set");
-
+        let deposit_opt_fut =
+            futures::future::OptionFuture::from(bedrock_deposit_loop_handle.take());
         tokio::select! {
             () = server_handle.stopped() => {
                 Err(anyhow!("RPC Server stopped"))
             }
             res = main_loop_handle => {
                 res
-                   .context("Main loop task panicked")?
-                   .context("Main loop exited unexpectedly")
+                    .context("Main loop task panicked")?
+                    .context("Main loop exited unexpectedly")
+            }
+            Some(res) = deposit_opt_fut => {
+                res
+                    .context("Bedrock deposit loop task panicked")?
+                    .context("Bedrock deposit loop exited unexpectedly")
             }
         }
     }
@@ -78,10 +111,14 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            bedrock_deposit_loop_handle,
         } = self;
 
         let stopped = server_handle.as_ref().is_none_or(ServerHandle::is_stopped)
-            || main_loop_handle.is_finished();
+            || main_loop_handle.is_finished()
+            || bedrock_deposit_loop_handle
+                .as_ref()
+                .is_some_and(JoinHandle::is_finished);
         !stopped
     }
 
@@ -97,9 +134,13 @@ impl Drop for SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            bedrock_deposit_loop_handle,
         } = self;
 
         main_loop_handle.abort();
+        if let Some(handle) = bedrock_deposit_loop_handle {
+            handle.abort();
+        }
 
         let Some(handle) = server_handle else {
             return;
@@ -114,16 +155,19 @@ impl Drop for SequencerHandle {
 pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> {
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
+    #[cfg(not(feature = "standalone"))]
+    let bedrock_config = config.bedrock_config.clone();
 
     let (sequencer_core, mempool_handle) = SequencerCore::start_from_config(config).await;
 
     info!("Sequencer core set up");
 
     let seq_core_wrapped = Arc::new(Mutex::new(sequencer_core));
+    let mempool_handle_for_server = mempool_handle.clone();
 
     let (server_handle, addr) = run_server(
         Arc::clone(&seq_core_wrapped),
-        mempool_handle,
+        mempool_handle_for_server,
         port,
         max_block_size.as_u64(),
     )
@@ -133,7 +177,26 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
     info!("Starting main sequencer loop");
     let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
 
-    Ok(SequencerHandle::new(addr, server_handle, main_loop_handle))
+    #[cfg(not(feature = "standalone"))]
+    let bedrock_deposit_loop_handle = {
+        info!("Starting Bedrock deposit listener loop");
+        Some(tokio::spawn(bedrock_deposit_loop(
+            bedrock_config,
+            mempool_handle,
+        )))
+    };
+    #[cfg(feature = "standalone")]
+    let bedrock_deposit_loop_handle = {
+        let _ = mempool_handle;
+        None
+    };
+
+    Ok(SequencerHandle::new(
+        addr,
+        server_handle,
+        main_loop_handle,
+        bedrock_deposit_loop_handle,
+    ))
 }
 
 async fn run_server(
@@ -181,4 +244,114 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 
         info!("Waiting for new transactions");
     }
+}
+
+#[cfg(not(feature = "standalone"))]
+async fn bedrock_deposit_loop(
+    bedrock_config: BedrockConfig,
+    mempool_handle: MemPoolHandle<NSSATransaction>,
+) -> Result<Never> {
+    let basic_auth = bedrock_config.auth.map(Into::into);
+    let channel_id = bedrock_config.channel_id;
+    let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), bedrock_config.node_url);
+    let mut seen_deposits = HashSet::new();
+
+    loop {
+        let stream = match node.block_stream().await {
+            Ok(stream) => stream,
+            Err(err) => {
+                error!("Failed to start Bedrock deposit stream: {err}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+
+        let mut stream = std::pin::pin!(stream);
+        while let Some(block_event) = stream.next().await {
+            let block_id = block_event.block.header.id;
+
+            let zone_messages = match node.zone_messages_in_block(block_id, channel_id).await {
+                Ok(messages) => messages,
+                Err(err) => {
+                    warn!("Failed to fetch zone messages for Bedrock block {block_id}: {err}");
+                    continue;
+                }
+            };
+            let mut zone_messages = std::pin::pin!(zone_messages);
+
+            while let Some(msg) = zone_messages.next().await {
+                match msg {
+                    ZoneMessage::Block(block) => {
+                        info!("Observed Bedrock channel block id {:?}", block.id);
+                    }
+                    ZoneMessage::Deposit(deposit) => {
+                        // Dedupe by stable payload to avoid replaying the same deposit.
+                        let deposit_fingerprint =
+                            format!("{:?}:{:?}", deposit.inputs, deposit.metadata);
+                        if !seen_deposits.insert(deposit_fingerprint) {
+                            continue;
+                        }
+
+                        let metadata = match DepositMetadata::decode(&deposit.metadata) {
+                            Ok(metadata) => metadata,
+                            Err(err) => {
+                                warn!("Skipping Bedrock Deposit with invalid metadata: {err}");
+                                continue;
+                            }
+                        };
+
+                        let tx = match build_bridge_deposit_tx(&metadata) {
+                            Ok(tx) => tx,
+                            Err(err) => {
+                                warn!("Skipping Bedrock Deposit due to tx build failure: {err:#}");
+                                continue;
+                            }
+                        };
+
+                        info!(
+                            "Observed Bedrock Deposit for recipient {recipient_id}, pushing to mempool",
+                            recipient_id = metadata.recipient_id
+                        );
+                        mempool_handle.push(tx).await.context(
+                            "Mempool is closed while pushing Bedrock Deposit transaction",
+                        )?;
+                    }
+                    ZoneMessage::Withdraw(_) => {}
+                }
+            }
+        }
+
+        warn!("Bedrock deposit stream ended unexpectedly, reconnecting");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+#[cfg(not(feature = "standalone"))]
+fn build_bridge_deposit_tx(metadata: &DepositMetadata) -> Result<NSSATransaction> {
+    // TODO: Remove this constant once we have a way to get the deposit amount from Bedrock deposit
+    // inputs.
+    const TEMPORARY_BRIDGE_DEPOSIT_AMOUNT: u128 = 1;
+
+    let bridge_program_id = nssa::program::Program::bridge().id();
+    let vault_program_id = nssa::program::Program::vault().id();
+    let recipient_vault_id =
+        vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
+
+    let message = nssa::public_transaction::Message::try_new(
+        bridge_program_id,
+        vec![nssa::system_bridge_account_id(), recipient_vault_id],
+        vec![],
+        bridge_core::Instruction::Deposit {
+            vault_program_id,
+            recipient_id: metadata.recipient_id,
+            amount: TEMPORARY_BRIDGE_DEPOSIT_AMOUNT,
+        },
+    )
+    .context("Failed to build bridge deposit message")?;
+
+    let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(NSSATransaction::Public(nssa::PublicTransaction::new(
+        message,
+        witness_set,
+    )))
 }

@@ -23,11 +23,16 @@ fn main() {
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();
 
+    assert!(
+        caller_program_id.is_none(),
+        "Faucet cannot be invoked through chain calls"
+    );
+
     let pre_states_clone = pre_states.clone();
     let post_states = unchanged_post_states(&pre_states_clone);
 
     let chained_calls = match instruction {
-        Instruction::Transfer {
+        Instruction::TransferVault {
             vault_program_id,
             recipient_id,
             amount,
@@ -53,6 +58,29 @@ fn main() {
                         recipient_id,
                         amount,
                     },
+                )
+                .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
+            ]
+        }
+        Instruction::TransferDirect { amount } => {
+            let [faucet, recipient] = pre_states
+                .try_into()
+                .expect("TransferDirect requires exactly 2 accounts");
+
+            assert_eq!(
+                faucet.account_id,
+                faucet_core::compute_faucet_account_id(self_program_id),
+                "First account must be faucet PDA"
+            );
+
+            let mut faucet_for_transfer = faucet;
+            faucet_for_transfer.is_authorized = true;
+
+            vec![
+                ChainedCall::new(
+                    faucet_for_transfer.account.program_owner,
+                    vec![faucet_for_transfer, recipient],
+                    &authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
             ]

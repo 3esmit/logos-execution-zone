@@ -30,7 +30,7 @@ fn main() {
 
     let chained_calls = vec![ChainedCall {
         program_id: faucet_program_id,
-        instruction_data: to_vec(&faucet_core::Instruction::Transfer {
+        instruction_data: to_vec(&faucet_core::Instruction::TransferVault {
             vault_program_id,
             recipient_id,
             amount,

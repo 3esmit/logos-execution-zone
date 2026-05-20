@@ -126,8 +126,11 @@ impl Default for V03State {
     fn default() -> Self {
         let faucet_account_id = system_faucet_account_id();
         let faucet_account = system_faucet_account();
+        let bridge_account_id = system_bridge_account_id();
+        let bridge_account = system_bridge_account();
         let mut public_state = HashMap::new();
         public_state.insert(faucet_account_id, faucet_account);
+        public_state.insert(bridge_account_id, bridge_account);
 
         Self {
             public_state,
@@ -150,6 +153,7 @@ impl V03State {
         genesis_timestamp: nssa_core::Timestamp,
     ) -> Self {
         let faucet_account_id = system_faucet_account_id();
+        let bridge_account_id = system_bridge_account_id();
         let authenticated_transfer_program = Program::authenticated_transfer_program();
         let mut public_state: HashMap<_, _> = initial_data
             .iter()
@@ -164,7 +168,9 @@ impl V03State {
             })
             .collect();
         let faucet_account = system_faucet_account();
+        let bridge_account = system_bridge_account();
         public_state.insert(faucet_account_id, faucet_account);
+        public_state.insert(bridge_account_id, bridge_account);
 
         let mut commitment_set = CommitmentSet::with_capacity(32);
         commitment_set.extend(&[DUMMY_COMMITMENT]);
@@ -190,6 +196,7 @@ impl V03State {
         this.insert_program(Program::ata());
         this.insert_program(Program::vault());
         this.insert_program(Program::faucet());
+        this.insert_program(Program::bridge());
 
         this
     }
@@ -384,9 +391,21 @@ fn system_faucet_account() -> Account {
     }
 }
 
+fn system_bridge_account() -> Account {
+    Account {
+        program_owner: Program::authenticated_transfer_program().id(),
+        ..Account::default()
+    }
+}
+
 #[must_use]
 pub fn system_faucet_account_id() -> AccountId {
     faucet_core::compute_faucet_account_id(Program::faucet().id())
+}
+
+#[must_use]
+pub fn system_bridge_account_id() -> AccountId {
+    bridge_core::compute_bridge_account_id(Program::bridge().id())
 }
 
 #[cfg(test)]
@@ -426,9 +445,10 @@ pub mod tests {
         signature::PrivateKey,
         state::{
             CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-            CLOCK_PROGRAM_ACCOUNT_IDS, MAX_NUMBER_CHAINED_CALLS, system_faucet_account,
+            CLOCK_PROGRAM_ACCOUNT_IDS, MAX_NUMBER_CHAINED_CALLS, system_bridge_account,
+            system_faucet_account,
         },
-        system_faucet_account_id,
+        system_bridge_account_id, system_faucet_account_id,
     };
 
     impl V03State {
@@ -622,6 +642,7 @@ pub mod tests {
                 },
             );
             this.insert(system_faucet_account_id(), system_faucet_account());
+            this.insert(system_bridge_account_id(), system_bridge_account());
             for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
                 this.insert(
                     account_id,
@@ -646,6 +667,7 @@ pub mod tests {
             this.insert(Program::ata().id(), Program::ata());
             this.insert(Program::vault().id(), Program::vault());
             this.insert(Program::faucet().id(), Program::faucet());
+            this.insert(Program::bridge().id(), Program::bridge());
             this
         };
 

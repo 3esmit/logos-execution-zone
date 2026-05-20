@@ -22,6 +22,7 @@ members = [
   "programs/associated_token_account",
   "programs/authenticated_transfer/core",
   "programs/faucet/core",
+  "programs/bridge/core",
   "programs/vault/core",
   "sequencer/core",
   "sequencer/service",
@@ -75,6 +76,7 @@ ata_core = { path = "programs/associated_token_account/core" }
 ata_program = { path = "programs/associated_token_account" }
 authenticated_transfer_core = { path = "programs/authenticated_transfer/core" }
 faucet_core = { path = "programs/faucet/core" }
+bridge_core = { path = "programs/bridge/core" }
 vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
@@ -141,6 +143,7 @@ logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-block
 logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",

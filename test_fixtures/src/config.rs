@@ -143,7 +143,12 @@ pub fn genesis_from_accounts(
             balance: account.balance,
         });
 
-    public_genesis.chain(private_genesis).collect()
+    let supply_bridge_account = GenesisAction::SupplyBridgeAccount { balance: 1_000_000 };
+
+    public_genesis
+        .chain(private_genesis)
+        .chain(std::iter::once(supply_bridge_account))
+        .collect()
 }
 
 pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
@@ -184,10 +189,6 @@ pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
     url_string.parse().map_err(Into::into)
 }
 
-fn bedrock_channel_id() -> ChannelId {
-    let channel_id: [u8; 32] = [0_u8, 1]
-        .repeat(16)
-        .try_into()
-        .unwrap_or_else(|_| unreachable!());
-    ChannelId::from(channel_id)
+pub fn bedrock_channel_id() -> ChannelId {
+    ChannelId::from([0_u8; 32])
 }
