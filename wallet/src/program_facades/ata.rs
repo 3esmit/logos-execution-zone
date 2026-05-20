@@ -7,7 +7,7 @@ use nssa::{
 };
 use nssa_core::SharedSecretKey;
 
-use crate::{AccountManagerAccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -30,9 +30,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::PublicNoSign(definition_id),
-                    AccountManagerAccountIdentity::PublicNoSign(ata_id),
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(definition_id),
+                    AccountIdentity::PublicNoSign(ata_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -63,9 +63,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::PublicNoSign(sender_ata_id),
-                    AccountManagerAccountIdentity::PublicNoSign(recipient_id),
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(sender_ata_id),
+                    AccountIdentity::PublicNoSign(recipient_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -95,9 +95,9 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountManagerAccountIdentity::Public(owner_id),
-                    AccountManagerAccountIdentity::PublicNoSign(holder_ata_id),
-                    AccountManagerAccountIdentity::PublicNoSign(definition_id),
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(holder_ata_id),
+                    AccountIdentity::PublicNoSign(definition_id),
                 ],
                 instruction_data,
                 &program.into(),
@@ -124,8 +124,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountManagerAccountIdentity::Public(definition_id),
-            AccountManagerAccountIdentity::Public(ata_id),
+            AccountIdentity::Public(definition_id),
+            AccountIdentity::Public(ata_id),
         ];
 
         self.0
@@ -161,8 +161,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountManagerAccountIdentity::Public(sender_ata_id),
-            AccountManagerAccountIdentity::Public(recipient_id),
+            AccountIdentity::Public(sender_ata_id),
+            AccountIdentity::Public(recipient_id),
         ];
 
         self.0
@@ -197,8 +197,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            AccountManagerAccountIdentity::Public(holder_ata_id),
-            AccountManagerAccountIdentity::Public(definition_id),
+            AccountIdentity::Public(holder_ata_id),
+            AccountIdentity::Public(definition_id),
         ];
 
         self.0

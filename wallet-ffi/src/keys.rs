@@ -3,11 +3,13 @@
 use std::ptr;
 
 use nssa::{AccountId, PublicKey};
+use wallet::AccountIdentity;
 
 use crate::{
     error::{print_error, WalletFfiError},
     types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, WalletHandle},
     wallet::get_wallet,
+    FfiAccountIdentity,
 };
 
 /// Get the public key for a public account.
@@ -246,6 +248,88 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
 
     unsafe {
         (*out_account_id).data = *account_id.value();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Resolve public account.
+///
+/// # Parameters
+/// - `account_id`: 32 bytes of the public account ID
+/// - `needs_sign`: does account needs signing
+/// - `out_account_identity`: valid pointer, where output will be written
+///
+/// # Returns
+/// - `Success` on successful retrieval
+/// 
+/// # Safety
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_resolve_public_account(
+    account_id: FfiBytes32,
+    needs_sign: bool,
+    out_account_identity: *mut FfiAccountIdentity,
+) -> WalletFfiError {
+    let resolved_account = if needs_sign {
+        AccountIdentity::Public(account_id.into())
+    } else {
+        AccountIdentity::PublicNoSign(account_id.into())
+    };
+
+    unsafe {
+        *out_account_identity = resolved_account.into();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Resolve private account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `account_id`: 32 bytes of the public account ID
+/// - `out_account_identity`: valid pointer, where output will be written
+///
+/// # Returns
+/// - `Success` on successful retrieval
+/// - `InternalError` if wailed to lock wallet
+/// - `AccountNotFound` if failed to found account
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_resolve_private_account(
+    handle: *mut WalletHandle,
+    account_id: FfiBytes32,
+    out_account_identity: *mut FfiAccountIdentity,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let account_id = account_id.into();
+
+    let resolved_account = match wallet.resolve_private_account(account_id) {
+        Some(v) => v,
+        None => {
+            print_error(format!("Account not found"));
+            return WalletFfiError::AccountNotFound;
+        }
+    };
+
+    unsafe {
+        *out_account_identity = resolved_account.into();
     }
 
     WalletFfiError::Success

@@ -110,6 +110,20 @@ typedef enum WalletFfiError {
 } WalletFfiError;
 
 /**
+ * Enumeration to represent kinds of FfiAccountManagerAccountIdentity
+ */
+typedef enum FfiAccountIdentityKind {
+  PUBLIC = 0,
+  PUBLIC_NO_SIGN = 1,
+  PRIVATE_OWNED = 2,
+  PRIVATE_FOREIGN = 3,
+  PRIVATE_PDA_OWNED = 4,
+  PRIVATE_PDA_FOREIGN = 5,
+  PRIVATE_SHARED = 6,
+  PRIVATE_PDA_SHARED = 7,
+} FfiAccountIdentityKind;
+
+/**
  * Opaque pointer to the Wallet instance.
  *
  * This type is never instantiated directly - it's used as an opaque handle
@@ -206,6 +220,19 @@ typedef struct FfiAccount {
 typedef struct FfiPublicAccountKey {
   struct FfiBytes32 public_key;
 } FfiPublicAccountKey;
+
+/**
+ * Struct representing of account identity, given to `AccountManager` at intialization
+ */
+typedef struct FfiAccountIdentity {
+  enum FfiAccountIdentityKind kind;
+  struct FfiBytes32 account_id;
+  struct FfiBytes32 nullifier_secret_key;
+  struct FfiBytes32 nullifier_public_key;
+  const uint8_t *viewing_public_key;
+  uintptr_t viewing_public_key_len;
+  struct FfiU128 identifier;
+} FfiAccountIdentity;
 
 /**
  * Result of a transfer operation.
@@ -551,6 +578,45 @@ char *wallet_ffi_account_id_to_base58(const struct FfiBytes32 *account_id);
  */
 enum WalletFfiError wallet_ffi_account_id_from_base58(const char *base58_str,
                                                       struct FfiBytes32 *out_account_id);
+
+/**
+ * Resolve public account.
+ *
+ * # Parameters
+ * - `account_id`: 32 bytes of the public account ID
+ * - `needs_sign`: does account needs signing
+ * - `out_account_identity`: valid pointer, where output will be written
+ *
+ * # Returns
+ * - `Success` on successful retrieval
+ *
+ * # Safety
+ * - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+ */
+enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_id,
+                                                      bool needs_sign,
+                                                      struct FfiAccountIdentity *out_account_identity);
+
+/**
+ * Resolve private account.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `account_id`: 32 bytes of the public account ID
+ * - `out_account_identity`: valid pointer, where output will be written
+ *
+ * # Returns
+ * - `Success` on successful retrieval
+ * - `InternalError` if wailed to lock wallet
+ * - `AccountNotFound` if failed to found account
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+ */
+enum WalletFfiError wallet_ffi_resolve_private_account(struct WalletHandle *handle,
+                                                       struct FfiBytes32 account_id,
+                                                       struct FfiAccountIdentity *out_account_identity);
 
 /**
  * Claim a pinata reward using a public transaction.

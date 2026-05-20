@@ -4,7 +4,8 @@ use core::slice;
 use std::{ffi::c_char, ptr};
 
 use nssa::Data;
-use nssa_core::encryption::shared_key_derivation::Secp256k1Point;
+use nssa_core::{encryption::shared_key_derivation::Secp256k1Point, NullifierPublicKey};
+use wallet::AccountIdentity;
 
 use crate::error::WalletFfiError;
 
@@ -172,6 +173,45 @@ impl FfiPrivateAccountKeys {
     }
 }
 
+/// Enumeration to represent kinds of FfiAccountManagerAccountIdentity
+#[repr(C)]
+pub enum FfiAccountIdentityKind {
+    Public = 0,
+    PublicNoSign = 1,
+    PrivateOwned = 2,
+    PrivateForeign = 3,
+    PrivatePdaOwned = 4,
+    PrivatePdaForeign = 5,
+    PrivateShared = 6,
+    PrivatePdaShared = 7,
+}
+
+/// Struct representing of account identity, given to `AccountManager` at intialization
+#[repr(C)]
+pub struct FfiAccountIdentity {
+    kind: FfiAccountIdentityKind,
+    pub account_id: FfiBytes32,
+    pub nullifier_secret_key: FfiBytes32,
+    pub nullifier_public_key: FfiBytes32,
+    pub viewing_public_key: *const u8,
+    pub viewing_public_key_len: usize,
+    pub identifier: FfiU128,
+}
+
+impl Default for FfiAccountIdentity {
+    fn default() -> Self {
+        Self {
+            kind: FfiAccountIdentityKind::Public,
+            account_id: FfiBytes32::default(),
+            nullifier_secret_key: FfiBytes32::default(),
+            nullifier_public_key: FfiBytes32::default(),
+            viewing_public_key: std::ptr::null(),
+            viewing_public_key_len: 0,
+            identifier: FfiU128::default(),
+        }
+    }
+}
+
 impl From<u128> for FfiU128 {
     fn from(value: u128) -> Self {
         Self {
@@ -189,6 +229,12 @@ impl From<FfiU128> for u128 {
 impl From<nssa::AccountId> for FfiBytes32 {
     fn from(id: nssa::AccountId) -> Self {
         Self::from_account_id(id)
+    }
+}
+
+impl From<[u8; 32]> for FfiBytes32 {
+    fn from(value: [u8; 32]) -> Self {
+        Self { data: value }
     }
 }
 
@@ -264,5 +310,232 @@ impl TryFrom<&FfiPublicAccountKey> for nssa::PublicKey {
         let public_key = Self::try_new(value.public_key.data)
             .map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
         Ok(public_key)
+    }
+}
+
+impl From<AccountIdentity> for FfiAccountIdentity {
+    fn from(value: AccountIdentity) -> Self {
+        match value {
+            AccountIdentity::Public(account_id) => Self {
+                kind: FfiAccountIdentityKind::Public,
+                account_id: account_id.into(),
+                ..Default::default()
+            },
+            AccountIdentity::PublicNoSign(account_id) => Self {
+                kind: FfiAccountIdentityKind::PublicNoSign,
+                account_id: account_id.into(),
+                ..Default::default()
+            },
+            AccountIdentity::PrivateOwned(account_id) => Self {
+                kind: FfiAccountIdentityKind::PrivateOwned,
+                account_id: account_id.into(),
+                ..Default::default()
+            },
+            AccountIdentity::PrivateForeign {
+                npk,
+                vpk,
+                identifier,
+            } => {
+                let vpk_vec = vpk.0;
+                let vpk_len = vpk_vec.len();
+                let vpk_data = if vpk_len > 0 {
+                    let vpk_data_boxed = vpk_vec.into_boxed_slice();
+                    Box::into_raw(vpk_data_boxed) as *const u8
+                } else {
+                    ptr::null()
+                };
+
+                Self {
+                    kind: FfiAccountIdentityKind::PrivateForeign,
+                    nullifier_public_key: npk.0.into(),
+                    viewing_public_key: vpk_data,
+                    viewing_public_key_len: vpk_len,
+                    identifier: identifier.into(),
+                    ..Default::default()
+                }
+            }
+            AccountIdentity::PrivatePdaOwned(account_id) => Self {
+                kind: FfiAccountIdentityKind::PrivatePdaOwned,
+                account_id: account_id.into(),
+                ..Default::default()
+            },
+            AccountIdentity::PrivatePdaForeign {
+                account_id,
+                npk,
+                vpk,
+                identifier,
+            } => {
+                let vpk_vec = vpk.0;
+                let vpk_len = vpk_vec.len();
+                let vpk_data = if vpk_len > 0 {
+                    let vpk_data_boxed = vpk_vec.into_boxed_slice();
+                    Box::into_raw(vpk_data_boxed) as *const u8
+                } else {
+                    ptr::null()
+                };
+
+                Self {
+                    kind: FfiAccountIdentityKind::PrivatePdaForeign,
+                    account_id: account_id.into(),
+                    nullifier_public_key: npk.0.into(),
+                    viewing_public_key: vpk_data,
+                    viewing_public_key_len: vpk_len,
+                    identifier: identifier.into(),
+                    ..Default::default()
+                }
+            }
+            AccountIdentity::PrivateShared {
+                nsk,
+                npk,
+                vpk,
+                identifier,
+            } => {
+                let vpk_vec = vpk.0;
+                let vpk_len = vpk_vec.len();
+                let vpk_data = if vpk_len > 0 {
+                    let vpk_data_boxed = vpk_vec.into_boxed_slice();
+                    Box::into_raw(vpk_data_boxed) as *const u8
+                } else {
+                    ptr::null()
+                };
+
+                Self {
+                    kind: FfiAccountIdentityKind::PrivateShared,
+                    nullifier_secret_key: nsk.into(),
+                    nullifier_public_key: npk.0.into(),
+                    viewing_public_key: vpk_data,
+                    viewing_public_key_len: vpk_len,
+                    identifier: identifier.into(),
+                    ..Default::default()
+                }
+            }
+            AccountIdentity::PrivatePdaShared {
+                account_id,
+                nsk,
+                npk,
+                vpk,
+                identifier,
+            } => {
+                let vpk_vec = vpk.0;
+                let vpk_len = vpk_vec.len();
+                let vpk_data = if vpk_len > 0 {
+                    let vpk_data_boxed = vpk_vec.into_boxed_slice();
+                    Box::into_raw(vpk_data_boxed) as *const u8
+                } else {
+                    ptr::null()
+                };
+
+                Self {
+                    kind: FfiAccountIdentityKind::PrivateShared,
+                    account_id: account_id.into(),
+                    nullifier_secret_key: nsk.into(),
+                    nullifier_public_key: npk.0.into(),
+                    viewing_public_key: vpk_data,
+                    viewing_public_key_len: vpk_len,
+                    identifier: identifier.into(),
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
+    type Error = WalletFfiError;
+
+    fn try_from(value: &FfiAccountIdentity) -> Result<Self, Self::Error> {
+        match value.kind {
+            FfiAccountIdentityKind::Public => Ok(
+                AccountIdentity::Public(value.account_id.into()),
+            ),
+            FfiAccountIdentityKind::PublicNoSign => Ok(
+                AccountIdentity::PublicNoSign(value.account_id.into()),
+            ),
+            FfiAccountIdentityKind::PrivateOwned => Ok(
+                AccountIdentity::PrivateOwned(value.account_id.into()),
+            ),
+            FfiAccountIdentityKind::PrivateForeign => {
+                let vpk = if value.viewing_public_key_len == 33 {
+                    let slice = unsafe {
+                        slice::from_raw_parts(
+                            value.viewing_public_key,
+                            value.viewing_public_key_len,
+                        )
+                    };
+                    Ok(Secp256k1Point(slice.to_vec()))
+                } else {
+                    Err(WalletFfiError::InvalidKeyValue)
+                }?;
+
+                Ok(AccountIdentity::PrivateForeign {
+                    npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    vpk,
+                    identifier: value.identifier.into(),
+                })
+            }
+            FfiAccountIdentityKind::PrivatePdaOwned => Ok(
+                AccountIdentity::PrivatePdaOwned(value.account_id.into()),
+            ),
+            FfiAccountIdentityKind::PrivatePdaForeign => {
+                let vpk = if value.viewing_public_key_len == 33 {
+                    let slice = unsafe {
+                        slice::from_raw_parts(
+                            value.viewing_public_key,
+                            value.viewing_public_key_len,
+                        )
+                    };
+                    Ok(Secp256k1Point(slice.to_vec()))
+                } else {
+                    Err(WalletFfiError::InvalidKeyValue)
+                }?;
+
+                Ok(AccountIdentity::PrivatePdaForeign {
+                    account_id: value.account_id.into(),
+                    npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    vpk,
+                    identifier: value.identifier.into(),
+                })
+            }
+            FfiAccountIdentityKind::PrivateShared => {
+                let vpk = if value.viewing_public_key_len == 33 {
+                    let slice = unsafe {
+                        slice::from_raw_parts(
+                            value.viewing_public_key,
+                            value.viewing_public_key_len,
+                        )
+                    };
+                    Ok(Secp256k1Point(slice.to_vec()))
+                } else {
+                    Err(WalletFfiError::InvalidKeyValue)
+                }?;
+
+                Ok(AccountIdentity::PrivateShared {
+                    nsk: value.nullifier_secret_key.data,
+                    npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    vpk,
+                    identifier: value.identifier.into(),
+                })
+            }
+            FfiAccountIdentityKind::PrivatePdaShared => {
+                let vpk = if value.viewing_public_key_len == 33 {
+                    let slice = unsafe {
+                        slice::from_raw_parts(
+                            value.viewing_public_key,
+                            value.viewing_public_key_len,
+                        )
+                    };
+                    Ok(Secp256k1Point(slice.to_vec()))
+                } else {
+                    Err(WalletFfiError::InvalidKeyValue)
+                }?;
+
+                Ok(AccountIdentity::PrivatePdaShared {
+                    account_id: value.account_id.into(),
+                    nsk: value.nullifier_secret_key.data,
+                    npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    vpk,
+                    identifier: value.identifier.into(),
+                })
+            }
+        }
     }
 }

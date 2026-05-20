@@ -4,7 +4,7 @@ use nssa::{AccountId, program::Program};
 
 use super::NativeTokenTransfer;
 use crate::{
-    AccountManagerAccountIdentity, ExecutionFailureKind,
+    AccountIdentity, ExecutionFailureKind,
     program_facades::native_token_transfer::auth_transfer_preparation,
 };
 
@@ -20,8 +20,8 @@ impl NativeTokenTransfer<'_> {
         self.0
             .send_pub_tx_with_pre_check(
                 vec![
-                    AccountManagerAccountIdentity::Public(from),
-                    AccountManagerAccountIdentity::Public(to),
+                    AccountIdentity::Public(from),
+                    AccountIdentity::Public(to),
                 ],
                 instruction_data,
                 &program.into(),
@@ -39,7 +39,7 @@ impl NativeTokenTransfer<'_> {
 
         self.0
             .send_pub_tx(
-                vec![AccountManagerAccountIdentity::Public(from)],
+                vec![AccountIdentity::Public(from)],
                 instruction_data,
                 &program.into(),
             )
