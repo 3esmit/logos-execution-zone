@@ -41,6 +41,10 @@ members = [
   "examples/program_deployment/methods/guest",
   "testnet_initial_state",
   "indexer/ffi",
+  "test_fixtures",
+  "tools/cycle_bench",
+  "tools/crypto_primitives_bench",
+  "tools/integration_bench",
 ]
 
 [workspace.dependencies]
@@ -73,6 +77,7 @@ faucet_core = { path = "programs/faucet/core" }
 vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
+test_fixtures = { path = "test_fixtures" }
 
 tokio = { version = "1.50", features = [
   "net",
