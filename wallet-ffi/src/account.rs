@@ -14,7 +14,7 @@ use crate::{
         WalletHandle,
     },
     wallet::get_wallet,
-    FfiU128,
+    FfiAccountIdentity, FfiU128,
 };
 
 /// Create a new public account.
@@ -650,6 +650,32 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         Err(e) => {
             print_error(format!("Failed to save wallet after private import: {e}"));
             WalletFfiError::StorageError
+        }
+    }
+}
+
+/// Free account identity returned by `wallet_ffi_resolve_private_account` or
+/// `wallet_ffi_resolve_public_account`.
+///
+/// # Safety
+/// The account must be either null or a valid account returned by
+/// `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_account_identity(
+    account_identity: *mut FfiAccountIdentity,
+) {
+    if account_identity.is_null() {
+        return;
+    }
+
+    unsafe {
+        let account_identity = &*account_identity;
+        if !account_identity.viewing_public_key.is_null() {
+            let slice = std::slice::from_raw_parts_mut(
+                account_identity.viewing_public_key.cast_mut(),
+                account_identity.viewing_public_key_len,
+            );
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
         }
     }
 }

@@ -104,6 +104,10 @@ typedef enum WalletFfiError {
    */
   INVALID_KEY_VALUE = 16,
   /**
+   * Invalid program bytecode
+   */
+  INVALID_BYTECODE = 17,
+  /**
    * Internal error (catch-all).
    */
   INTERNAL_ERROR = 99,
@@ -215,13 +219,6 @@ typedef struct FfiAccount {
 } FfiAccount;
 
 /**
- * Public key info for a public account.
- */
-typedef struct FfiPublicAccountKey {
-  struct FfiBytes32 public_key;
-} FfiPublicAccountKey;
-
-/**
  * Struct representing of account identity, given to `AccountManager` at intialization
  */
 typedef struct FfiAccountIdentity {
@@ -233,6 +230,29 @@ typedef struct FfiAccountIdentity {
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
 } FfiAccountIdentity;
+
+typedef struct SerializationHelperResult {
+  uint32_t *instruction_words;
+  uintptr_t instruction_words_size;
+  enum WalletFfiError error;
+} SerializationHelperResult;
+
+/**
+ * Intended to be created manually
+ */
+typedef struct FfiProgram {
+  const uint8_t *elf_data;
+  uintptr_t elf_size;
+} FfiProgram;
+
+/**
+ * Intended to be created manually
+ */
+typedef struct FfiProgramWithDependencies {
+  struct FfiProgram program;
+  const struct FfiProgram *deps;
+  uintptr_t deps_size;
+} FfiProgramWithDependencies;
 
 /**
  * Result of a transfer operation.
@@ -247,6 +267,13 @@ typedef struct FfiTransferResult {
    */
   bool success;
 } FfiTransferResult;
+
+/**
+ * Public key info for a public account.
+ */
+typedef struct FfiPublicAccountKey {
+  struct FfiBytes32 public_key;
+} FfiPublicAccountKey;
 
 /**
  * Create a new public account.
@@ -480,6 +507,60 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
                                                       const char *chain_index,
                                                       const struct FfiU128 *identifier,
                                                       const char *account_state_json);
+
+/**
+ * Free account identity returned by `wallet_ffi_resolve_private_account` or
+ * `wallet_ffi_resolve_public_account`.
+ *
+ * # Safety
+ * The account must be either null or a valid account returned by
+ * `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
+ */
+void wallet_ffi_free_account_identity(struct FfiAccountIdentity *account_identity);
+
+/**
+ * Serialize sequence of bytes into RISC0 readable words
+ *
+ * # Parameters
+ * - `input_instruction_data`: Valid pointer to a sequence of bytes
+ * - `input_instruction_data_size`: Size of `input_instruction_data`
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Safety
+ * - `input_instruction_data` must be a valid pointer
+ */
+struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *input_instruction_data,
+                                                                 uintptr_t input_instruction_data_size);
+
+/**
+ * Send generic transaction
+ *
+ * # Parameters
+ * - `handle`: Valid pointer to wallet handle
+ * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+ * - `instruction_words`: Valid pointer to instruction words
+ * - `out_result`: Valid pointer to `FfiTransferResult`
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid pointer
+ * - `account_identities` must be a valid pointer
+ * - `instruction_words` must be a valid pointer
+ * - `out_result` must be a valid pointer
+ */
+enum WalletFfiError wallet_ffi_send_generic_transaction(struct WalletHandle *handle,
+                                                        const struct FfiAccountIdentity *account_identities,
+                                                        uintptr_t account_identities_size,
+                                                        const uint32_t *instruction_words,
+                                                        uintptr_t instruction_words_size,
+                                                        struct FfiProgramWithDependencies program_with_dependencies,
+                                                        struct FfiTransferResult *out_result);
 
 /**
  * Get the public key for a public account.
