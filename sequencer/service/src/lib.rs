@@ -25,6 +25,7 @@ use mempool::MemPoolHandle;
 use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
+use sequencer_core::TransactionOrigin;
 pub use sequencer_core::config::*;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
@@ -205,7 +206,7 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
 
 async fn run_server(
     sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<NSSATransaction>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
     port: u16,
     max_block_size: u64,
 ) -> Result<(ServerHandle, SocketAddr)> {
@@ -253,7 +254,7 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 #[cfg(not(feature = "standalone"))]
 async fn bedrock_deposit_loop(
     bedrock_config: BedrockConfig,
-    mempool_handle: MemPoolHandle<NSSATransaction>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
 ) -> Result<Never> {
     let basic_auth = bedrock_config.auth.map(Into::into);
     let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), bedrock_config.node_url);
@@ -320,7 +321,7 @@ async fn bedrock_deposit_loop(
                         recipient_id = metadata.recipient_id
                     );
                     mempool_handle
-                        .push(tx)
+                        .push((TransactionOrigin::Sequencer, tx))
                         .await
                         .context("Mempool is closed while pushing Bedrock Deposit transaction")?;
                 }

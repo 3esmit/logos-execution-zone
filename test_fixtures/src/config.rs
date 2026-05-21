@@ -191,5 +191,9 @@ pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
 
 #[must_use]
 pub fn bedrock_channel_id() -> ChannelId {
-    ChannelId::from([0_u8; 32])
+    let channel_id: [u8; 32] = [0_u8, 1]
+        .repeat(16)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
 }
