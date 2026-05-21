@@ -1,5 +1,6 @@
 #![expect(
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -25,6 +26,8 @@ use nssa::{
 use nssa_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
+
+const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(6);
 
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
@@ -189,16 +192,16 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(BorshSerialize)]
-struct DepositMetadata {
-    recipient_id: AccountId,
-}
-
 async fn submit_bedrock_deposit(
     bedrock_addr: std::net::SocketAddr,
     recipient_id: AccountId,
     amount: u128,
 ) -> anyhow::Result<()> {
+    #[derive(BorshSerialize)]
+    struct DepositMetadata {
+        recipient_id: AccountId,
+    }
+
     // Encode deposit metadata
     let metadata = borsh::to_vec(&DepositMetadata { recipient_id })
         .context("Failed to encode deposit metadata")?;
@@ -220,15 +223,7 @@ async fn submit_bedrock_deposit(
             .await
             .context("Failed to query Bedrock wallet balance")?;
 
-        if !balance_response.status().is_success() {
-            let status = balance_response.status();
-            let body_text = balance_response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Bedrock balance query failed with status {} and body {}",
-                status,
-                body_text,
-            );
-        }
+        let balance_response = check_response_success(balance_response).await?;
 
         balance_response
             .json::<WalletBalanceResponseBody>()
@@ -273,16 +268,7 @@ async fn submit_bedrock_deposit(
             .send()
             .await
             .context("Failed to submit Bedrock transfer-funds request")?;
-
-        if !transfer_response.status().is_success() {
-            let status = transfer_response.status();
-            let body_text = transfer_response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Bedrock transfer-funds request failed with status {} and body {}",
-                status,
-                body_text,
-            );
-        }
+        let transfer_response = check_response_success(transfer_response).await?;
 
         let transfer: WalletTransferFundsResponseBody = transfer_response
             .json()
@@ -312,8 +298,7 @@ async fn submit_bedrock_deposit(
 
     let Some(selected_note_id) = selected_note_id else {
         anyhow::bail!(
-            "Failed to locate exact-value note {:?} for Bedrock deposit; available notes: {:?}",
-            amount,
+            "Failed to locate exact-value note {amount:?} for Bedrock deposit; available notes: {:?}",
             balance.notes,
         );
     };
@@ -336,26 +321,26 @@ async fn submit_bedrock_deposit(
         .send()
         .await
         .context("Failed to submit Bedrock deposit request")?;
+    let response = check_response_success(response).await?;
 
+    let body_text = response
+        .text()
+        .await
+        .unwrap_or_else(|_| "<failed to decode>".to_owned());
+    info!(
+        "Successfully submitted Bedrock deposit request for recipient {recipient_id} and amount {amount}, response body: {body_text}",
+    );
+
+    Ok(())
+}
+
+async fn check_response_success(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
     if response.status().is_success() {
-        let body_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<failed to decode>".to_owned());
-        info!(
-            "Successfully submitted Bedrock deposit request for recipient {recipient_id} and amount {amount}, response body: {}",
-            body_text
-        );
-
-        return Ok(());
+        Ok(response)
     } else {
         let status = response.status();
         let body_text = response.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "Bedrock deposit request failed with status {} and body {}",
-            status,
-            body_text,
-        );
+        anyhow::bail!("Request failed with status {status} and body {body_text}");
     }
 }
 
@@ -363,8 +348,9 @@ async fn wait_for_vault_balance(
     ctx: &TestContext,
     vault_id: AccountId,
     expected_balance: u128,
-    timeout: Duration,
 ) -> anyhow::Result<()> {
+    let timeout = TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK
+        + Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS);
     tokio::time::timeout(timeout, async {
         loop {
             let balance = ctx.sequencer_client().get_account_balance(vault_id).await?;
@@ -401,13 +387,7 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
     submit_bedrock_deposit(ctx.bedrock_addr(), recipient_id, 1).await?;
 
     // Wait for vault to receive the deposit (minted from bridge to vault)
-    wait_for_vault_balance(
-        &ctx,
-        recipient_vault_id,
-        vault_balance_before + 1,
-        Duration::from_mins(5),
-    )
-    .await?;
+    wait_for_vault_balance(&ctx, recipient_vault_id, vault_balance_before + 1).await?;
 
     // Now claim funds from vault back to recipient
     let nonces = ctx

@@ -189,6 +189,7 @@ pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
     url_string.parse().map_err(Into::into)
 }
 
+#[must_use]
 pub fn bedrock_channel_id() -> ChannelId {
     ChannelId::from([0_u8; 32])
 }

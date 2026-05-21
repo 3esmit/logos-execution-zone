@@ -1,4 +1,4 @@
-use std::{collections::HashSet, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 #[cfg(not(feature = "standalone"))]
@@ -13,8 +13,10 @@ use jsonrpsee::server::ServerHandle;
 use log::warn;
 use log::{error, info};
 #[cfg(not(feature = "standalone"))]
+use logos_blockchain_core::mantle::ops::channel::MsgId;
+#[cfg(not(feature = "standalone"))]
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient, ZoneMessage, adapter::Node as _, adapter::NodeHttpClient,
+    CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
@@ -252,77 +254,60 @@ async fn bedrock_deposit_loop(
     mempool_handle: MemPoolHandle<NSSATransaction>,
 ) -> Result<Never> {
     let basic_auth = bedrock_config.auth.map(Into::into);
-    let channel_id = bedrock_config.channel_id;
     let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), bedrock_config.node_url);
-    let mut seen_deposits = HashSet::new();
+    let zone_indexer = ZoneIndexer::new(bedrock_config.channel_id, node);
+
+    let mut cursor: Option<(MsgId, Slot)> = None;
+    let poll_interval = Duration::from_secs(1);
 
     loop {
-        let stream = match node.block_stream().await {
+        let stream = match zone_indexer.next_messages(cursor).await {
             Ok(stream) => stream,
             Err(err) => {
                 error!("Failed to start Bedrock deposit stream: {err}");
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(poll_interval).await;
                 continue;
             }
         };
 
         let mut stream = std::pin::pin!(stream);
-        while let Some(block_event) = stream.next().await {
-            let block_id = block_event.block.header.id;
-
-            let zone_messages = match node.zone_messages_in_block(block_id, channel_id).await {
-                Ok(messages) => messages,
-                Err(err) => {
-                    warn!("Failed to fetch zone messages for Bedrock block {block_id}: {err}");
-                    continue;
+        while let Some((msg, slot)) = stream.next().await {
+            match msg {
+                ZoneMessage::Block(block) => {
+                    cursor = Some((block.id, slot));
+                    info!("Observed Bedrock channel block id {:?}", block.id);
                 }
-            };
-            let mut zone_messages = std::pin::pin!(zone_messages);
-
-            while let Some(msg) = zone_messages.next().await {
-                match msg {
-                    ZoneMessage::Block(block) => {
-                        info!("Observed Bedrock channel block id {:?}", block.id);
-                    }
-                    ZoneMessage::Deposit(deposit) => {
-                        // Dedupe by stable payload to avoid replaying the same deposit.
-                        let deposit_fingerprint =
-                            format!("{:?}:{:?}", deposit.inputs, deposit.metadata);
-                        if !seen_deposits.insert(deposit_fingerprint) {
+                ZoneMessage::Deposit(deposit) => {
+                    let metadata = match DepositMetadata::decode(&deposit.metadata) {
+                        Ok(metadata) => metadata,
+                        Err(err) => {
+                            warn!("Skipping Bedrock Deposit with invalid metadata: {err}");
                             continue;
                         }
+                    };
 
-                        let metadata = match DepositMetadata::decode(&deposit.metadata) {
-                            Ok(metadata) => metadata,
-                            Err(err) => {
-                                warn!("Skipping Bedrock Deposit with invalid metadata: {err}");
-                                continue;
-                            }
-                        };
+                    let tx = match build_bridge_deposit_tx(&metadata) {
+                        Ok(tx) => tx,
+                        Err(err) => {
+                            warn!("Skipping Bedrock Deposit due to tx build failure: {err:#}");
+                            continue;
+                        }
+                    };
 
-                        let tx = match build_bridge_deposit_tx(&metadata) {
-                            Ok(tx) => tx,
-                            Err(err) => {
-                                warn!("Skipping Bedrock Deposit due to tx build failure: {err:#}");
-                                continue;
-                            }
-                        };
-
-                        info!(
-                            "Observed Bedrock Deposit for recipient {recipient_id}, pushing to mempool",
-                            recipient_id = metadata.recipient_id
-                        );
-                        mempool_handle.push(tx).await.context(
-                            "Mempool is closed while pushing Bedrock Deposit transaction",
-                        )?;
-                    }
-                    ZoneMessage::Withdraw(_) => {}
+                    info!(
+                        "Observed Bedrock Deposit for recipient {recipient_id}, pushing to mempool",
+                        recipient_id = metadata.recipient_id
+                    );
+                    mempool_handle
+                        .push(tx)
+                        .await
+                        .context("Mempool is closed while pushing Bedrock Deposit transaction")?;
                 }
+                ZoneMessage::Withdraw(_) => {}
             }
         }
 
-        warn!("Bedrock deposit stream ended unexpectedly, reconnecting");
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(poll_interval).await;
     }
 }
 
