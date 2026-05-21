@@ -54,6 +54,8 @@ pub enum AccountIdentity {
 
 impl AccountIdentity {
     #[must_use]
+    /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
+    /// lookup.
     pub const fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_) | Self::PublicNoSign(_))
     }

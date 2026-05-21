@@ -270,7 +270,7 @@ impl WalletCore {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
-    /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
+    /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
     pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
