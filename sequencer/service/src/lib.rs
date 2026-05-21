@@ -1,5 +1,3 @@
-#[cfg(not(feature = "standalone"))]
-use std::collections::HashSet;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
@@ -263,20 +261,9 @@ async fn bedrock_deposit_loop(
     let mut cursor: Option<(MsgId, Slot)> = None;
     let poll_interval = Duration::from_secs(1);
 
-    /// Mirrors [`logos_blockchain_zone_sdk::Deposit`] but can be stored in a [`HashSet`].
-    #[derive(Debug, PartialEq, Eq, Hash)]
-    struct HashableDeposit {
-        inputs: logos_blockchain_core::mantle::ledger::Inputs,
-        metadata: Vec<u8>,
-    }
-    impl From<logos_blockchain_zone_sdk::Deposit> for HashableDeposit {
-        fn from(deposit: logos_blockchain_zone_sdk::Deposit) -> Self {
-            let logos_blockchain_zone_sdk::Deposit { inputs, metadata } = deposit;
-            Self { inputs, metadata }
-        }
-    }
-    // TODO: We should probably store this in DB.
-    let mut seen_deposits = HashSet::new();
+    // Short-term fix: dummy MsgId so zone-sdk skips the whole slot on re-poll.
+    // TODO: drop once zone-sdk indexer API is updated to take only `Slot`.
+    let dummy_msg_id = MsgId::from([0xff_u8; 32]);
 
     loop {
         let stream = match zone_indexer.next_messages(cursor).await {
@@ -290,16 +277,12 @@ async fn bedrock_deposit_loop(
 
         let mut stream = std::pin::pin!(stream);
         while let Some((msg, slot)) = stream.next().await {
+            cursor = Some((dummy_msg_id, slot));
             match msg {
                 ZoneMessage::Block(block) => {
-                    cursor = Some((block.id, slot));
                     info!("Observed Bedrock channel block id {:?}", block.id);
                 }
                 ZoneMessage::Deposit(deposit) => {
-                    let hashable_deposit = HashableDeposit::from(deposit.clone());
-                    if !seen_deposits.insert(hashable_deposit) {
-                        continue;
-                    }
                     let metadata = match DepositMetadata::decode(&deposit.metadata) {
                         Ok(metadata) => metadata,
                         Err(err) => {
