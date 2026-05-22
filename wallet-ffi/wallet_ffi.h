@@ -536,7 +536,7 @@ struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *
                                                                  uintptr_t input_instruction_data_size);
 
 /**
- * Send generic transaction
+ * Send generic public transaction
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
@@ -554,13 +554,13 @@ struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *
  * - `instruction_words` must be a valid pointer
  * - `out_result` must be a valid pointer
  */
-enum WalletFfiError wallet_ffi_send_generic_transaction(struct WalletHandle *handle,
-                                                        const struct FfiAccountIdentity *account_identities,
-                                                        uintptr_t account_identities_size,
-                                                        const uint32_t *instruction_words,
-                                                        uintptr_t instruction_words_size,
-                                                        struct FfiProgramWithDependencies program_with_dependencies,
-                                                        struct FfiTransferResult *out_result);
+enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHandle *handle,
+                                                               const struct FfiAccountIdentity *account_identities,
+                                                               uintptr_t account_identities_size,
+                                                               const uint32_t *instruction_words,
+                                                               uintptr_t instruction_words_size,
+                                                               struct FfiProgramWithDependencies program_with_dependencies,
+                                                               struct FfiTransferResult *out_result);
 
 /**
  * Get the public key for a public account.

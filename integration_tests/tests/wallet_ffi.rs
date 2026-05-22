@@ -21,13 +21,12 @@ use std::{
 use anyhow::Result;
 use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
 use log::info;
-use nssa::{Account, AccountId, PrivateKey, PublicKey, program::Program};
+use nssa::{Account, AccountId, PrivateKey, PublicKey, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
 use nssa_core::program::DEFAULT_PROGRAM_ID;
 use tempfile::tempdir;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
-    FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
-    FfiTransferResult, FfiU128, WalletHandle, error,
+    FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error, generic_transaction::FfiProgramWithDependencies
 };
 
 unsafe extern "C" {
@@ -178,6 +177,22 @@ unsafe extern "C" {
     fn wallet_ffi_get_current_block_height(
         handle: *mut WalletHandle,
         out_block_height: *mut u64,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_resolve_public_account(
+        account_id: FfiBytes32,
+        needs_sign: bool,
+        out_account_identity: *mut FfiAccountIdentity,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_send_generic_public_transaction(
+        handle: *mut WalletHandle,
+        account_identities: *const FfiAccountIdentity,
+        account_identities_size: usize,
+        instruction_words: *const u32,
+        instruction_words_size: usize,
+        program_with_dependencies: FfiProgramWithDependencies,
+        out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 }
 
@@ -1058,6 +1073,99 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     assert_eq!(from_balance, 9900);
     assert_eq!(to_balance, 100);
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let home = tempfile::tempdir()?;
+    let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
+    let amount = 100_u128;
+
+    let mut transfer_result = FfiTransferResult::default();
+
+    let mut from_account_identity = FfiAccountIdentity::default();
+    let mut to_account_identity = FfiAccountIdentity::default();
+
+    unsafe{
+        wallet_ffi_resolve_public_account(
+            from, 
+            true, 
+            &raw mut from_account_identity
+        )
+        .unwrap();
+    }
+
+    unsafe{
+        wallet_ffi_resolve_public_account(
+            to, 
+            true, 
+            &raw mut to_account_identity
+        )
+        .unwrap();
+    }
+
+    let ffi_accs = vec![from_account_identity, to_account_identity];
+    let account_identities_size = ffi_accs.len();
+    let account_identities = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+
+    let instruction_data =
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount,
+        })
+        .unwrap();
+    let instruction_words_size = instruction_data.len();
+    let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
+
+    let program: ProgramWithDependencies = Program::authenticated_transfer_program().into();
+    let program_with_dependencies = program.into();
+
+    unsafe{
+        wallet_ffi_send_generic_public_transaction(
+            wallet_ffi_handle, 
+            account_identities, 
+            account_identities_size, 
+            instruction_words, 
+            instruction_words_size, 
+            program_with_dependencies, 
+            &raw mut transfer_result
+        )
+        .unwrap();
+    }
+
+    info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let from_balance = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const from,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
+    let to_balance = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(wallet_ffi_handle, &raw const to, true, &raw mut out_balance)
+            .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
+    assert_eq!(from_balance, 9900);
+    assert_eq!(to_balance, 20100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);

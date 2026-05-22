@@ -96,6 +96,15 @@ impl TryFrom<&FfiProgram> for Program {
     }
 }
 
+impl From<Program> for FfiProgram {
+    fn from(value: Program) -> Self {
+        let elf_size = value.elf.len();
+        let elf_data = Box::into_raw(value.elf.into_boxed_slice()) as *const u8;
+
+        Self { elf_data, elf_size }
+    }
+}
+
 #[repr(C)]
 /// Intended to be created manually
 pub struct FfiProgramWithDependencies {
@@ -128,13 +137,26 @@ impl TryFrom<FfiProgramWithDependencies> for ProgramWithDependencies {
     }
 }
 
+impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
+    fn from(value: ProgramWithDependencies) -> Self {
+        let ffi_program = value.program.into();
+
+        let ffi_deps: Vec<FfiProgram> = value.dependencies.into_values().map(Into::into).collect::<Vec<_>>();
+
+        let deps_size = ffi_deps.len();
+        let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgram;
+
+        Self { program: ffi_program, deps, deps_size }
+    }
+}
+
 #[repr(C)]
 pub enum FfiExecutionFlow {
     Public = 0,
     PrivacyPreserving = 1,
 }
 
-/// Send generic transaction
+/// Send generic public transaction
 ///
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
@@ -152,7 +174,7 @@ pub enum FfiExecutionFlow {
 /// - `instruction_words` must be a valid pointer
 /// - `out_result` must be a valid pointer
 #[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_send_generic_transaction(
+pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     handle: *mut WalletHandle,
     account_identities: *const FfiAccountIdentity,
     account_identities_size: usize,
