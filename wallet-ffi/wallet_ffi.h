@@ -218,6 +218,12 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
+typedef struct SerializationHelperResult {
+  uint32_t *instruction_words;
+  uintptr_t instruction_words_size;
+  enum WalletFfiError error;
+} SerializationHelperResult;
+
 /**
  * Struct representing of account identity, given to `AccountManager` at intialization
  */
@@ -230,12 +236,6 @@ typedef struct FfiAccountIdentity {
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
 } FfiAccountIdentity;
-
-typedef struct SerializationHelperResult {
-  uint32_t *instruction_words;
-  uintptr_t instruction_words_size;
-  enum WalletFfiError error;
-} SerializationHelperResult;
 
 /**
  * Intended to be created manually
@@ -255,6 +255,32 @@ typedef struct FfiProgramWithDependencies {
 } FfiProgramWithDependencies;
 
 /**
+ * Result of a generic transaction operation.
+ */
+typedef struct FfiTransactionResult {
+  /**
+   * Transaction hash (null-terminated string, or null on failure).
+   */
+  char *tx_hash;
+  /**
+   * Whether the transaction succeeded.
+   */
+  bool success;
+  const struct FfiBytes32 *secrets_data;
+  /**
+   * Public transaction have 0 secrets
+   */
+  uintptr_t secrets_size;
+} FfiTransactionResult;
+
+/**
+ * Public key info for a public account.
+ */
+typedef struct FfiPublicAccountKey {
+  struct FfiBytes32 public_key;
+} FfiPublicAccountKey;
+
+/**
  * Result of a transfer operation.
  */
 typedef struct FfiTransferResult {
@@ -267,13 +293,6 @@ typedef struct FfiTransferResult {
    */
   bool success;
 } FfiTransferResult;
-
-/**
- * Public key info for a public account.
- */
-typedef struct FfiPublicAccountKey {
-  struct FfiBytes32 public_key;
-} FfiPublicAccountKey;
 
 /**
  * Create a new public account.
@@ -509,16 +528,6 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
                                                       const char *account_state_json);
 
 /**
- * Free account identity returned by `wallet_ffi_resolve_private_account` or
- * `wallet_ffi_resolve_public_account`.
- *
- * # Safety
- * The account must be either null or a valid account returned by
- * `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
- */
-void wallet_ffi_free_account_identity(struct FfiAccountIdentity *account_identity);
-
-/**
  * Serialize sequence of bytes into RISC0 readable words
  *
  * # Parameters
@@ -542,7 +551,7 @@ struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *
  * - `handle`: Valid pointer to wallet handle
  * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
  * - `instruction_words`: Valid pointer to instruction words
- * - `out_result`: Valid pointer to `FfiTransferResult`
+ * - `out_result`: Valid pointer to `FfiTransactionResult`
  *
  * # Returns
  * - `Success` on successful creation
@@ -560,7 +569,34 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
                                                                const uint32_t *instruction_words,
                                                                uintptr_t instruction_words_size,
                                                                struct FfiProgramWithDependencies program_with_dependencies,
-                                                               struct FfiTransferResult *out_result);
+                                                               struct FfiTransactionResult *out_result);
+
+/**
+ * Send generic private transaction
+ *
+ * # Parameters
+ * - `handle`: Valid pointer to wallet handle
+ * - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+ * - `instruction_words`: Valid pointer to instruction words
+ * - `out_result`: Valid pointer to `FfiTransactionResult`
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid pointer
+ * - `account_identities` must be a valid pointer
+ * - `instruction_words` must be a valid pointer
+ * - `out_result` must be a valid pointer
+ */
+enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHandle *handle,
+                                                                const struct FfiAccountIdentity *account_identities,
+                                                                uintptr_t account_identities_size,
+                                                                const uint32_t *instruction_words,
+                                                                uintptr_t instruction_words_size,
+                                                                struct FfiProgramWithDependencies program_with_dependencies,
+                                                                struct FfiTransactionResult *out_result);
 
 /**
  * Get the public key for a public account.
@@ -698,6 +734,16 @@ enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_
 enum WalletFfiError wallet_ffi_resolve_private_account(struct WalletHandle *handle,
                                                        struct FfiBytes32 account_id,
                                                        struct FfiAccountIdentity *out_account_identity);
+
+/**
+ * Free account identity returned by `wallet_ffi_resolve_private_account` or
+ * `wallet_ffi_resolve_public_account`.
+ *
+ * # Safety
+ * The account must be either null or a valid account returned by
+ * `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
+ */
+void wallet_ffi_free_account_identity(struct FfiAccountIdentity *account_identity);
 
 /**
  * Claim a pinata reward using a public transaction.

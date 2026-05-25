@@ -334,3 +334,38 @@ pub unsafe extern "C" fn wallet_ffi_resolve_private_account(
 
     WalletFfiError::Success
 }
+
+/// Free account identity returned by `wallet_ffi_resolve_private_account` or
+/// `wallet_ffi_resolve_public_account`.
+///
+/// # Safety
+/// The account must be either null or a valid account returned by
+/// `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_account_identity(
+    account_identity: *mut FfiAccountIdentity,
+) {
+    if account_identity.is_null() {
+        return;
+    }
+
+    unsafe {
+        let FfiAccountIdentity {
+            kind: _,
+            account_id: _,
+            nullifier_secret_key: _,
+            nullifier_public_key: _,
+            viewing_public_key,
+            viewing_public_key_len,
+            identifier: _,
+        } = *account_identity;
+
+        if !viewing_public_key.is_null() {
+            let slice = std::slice::from_raw_parts_mut(
+                viewing_public_key.cast_mut(),
+                viewing_public_key_len,
+            );
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        }
+    }
+}

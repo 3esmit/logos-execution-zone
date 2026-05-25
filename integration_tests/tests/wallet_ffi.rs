@@ -21,12 +21,17 @@ use std::{
 use anyhow::Result;
 use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
 use log::info;
-use nssa::{Account, AccountId, PrivateKey, PublicKey, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
+use nssa::{
+    Account, AccountId, PrivateKey, PublicKey,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
 use nssa_core::program::DEFAULT_PROGRAM_ID;
 use tempfile::tempdir;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
-    FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error, generic_transaction::FfiProgramWithDependencies
+    FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys,
+    FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
+    generic_transaction::FfiProgramWithDependencies,
 };
 
 unsafe extern "C" {
@@ -1096,27 +1101,18 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let mut from_account_identity = FfiAccountIdentity::default();
     let mut to_account_identity = FfiAccountIdentity::default();
 
-    unsafe{
-        wallet_ffi_resolve_public_account(
-            from, 
-            true, 
-            &raw mut from_account_identity
-        )
-        .unwrap();
+    unsafe {
+        wallet_ffi_resolve_public_account(from, true, &raw mut from_account_identity).unwrap();
     }
 
-    unsafe{
-        wallet_ffi_resolve_public_account(
-            to, 
-            true, 
-            &raw mut to_account_identity
-        )
-        .unwrap();
+    unsafe {
+        wallet_ffi_resolve_public_account(to, true, &raw mut to_account_identity).unwrap();
     }
 
     let ffi_accs = vec![from_account_identity, to_account_identity];
     let account_identities_size = ffi_accs.len();
-    let account_identities = Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
+    let account_identities =
+        Box::into_raw(ffi_accs.into_boxed_slice()) as *const FfiAccountIdentity;
 
     let instruction_data =
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
@@ -1129,15 +1125,15 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let program: ProgramWithDependencies = Program::authenticated_transfer_program().into();
     let program_with_dependencies = program.into();
 
-    unsafe{
+    unsafe {
         wallet_ffi_send_generic_public_transaction(
-            wallet_ffi_handle, 
-            account_identities, 
-            account_identities_size, 
-            instruction_words, 
-            instruction_words_size, 
-            program_with_dependencies, 
-            &raw mut transfer_result
+            wallet_ffi_handle,
+            account_identities,
+            account_identities_size,
+            instruction_words,
+            instruction_words_size,
+            program_with_dependencies,
+            &raw mut transfer_result,
         )
         .unwrap();
     }

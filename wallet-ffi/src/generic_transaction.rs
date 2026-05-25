@@ -1,13 +1,9 @@
-use std::{collections::HashMap, ffi::CString};
+use std::{collections::HashMap, ffi::{CString, c_char}};
 
 use nssa::{privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
 
 use crate::{
-    block_on,
-    error::{print_error, WalletFfiError},
-    map_execution_error,
-    wallet::get_wallet,
-    FfiAccountIdentity, FfiTransferResult, WalletHandle,
+    FfiAccountIdentity, FfiBytes32, WalletHandle, block_on, error::{WalletFfiError, print_error}, map_execution_error, wallet::get_wallet
 };
 
 #[repr(C)]
@@ -141,19 +137,45 @@ impl From<ProgramWithDependencies> for FfiProgramWithDependencies {
     fn from(value: ProgramWithDependencies) -> Self {
         let ffi_program = value.program.into();
 
-        let ffi_deps: Vec<FfiProgram> = value.dependencies.into_values().map(Into::into).collect::<Vec<_>>();
+        let ffi_deps: Vec<FfiProgram> = value
+            .dependencies
+            .into_values()
+            .map(Into::into)
+            .collect::<Vec<_>>();
 
         let deps_size = ffi_deps.len();
         let deps = Box::into_raw(ffi_deps.into_boxed_slice()) as *const FfiProgram;
 
-        Self { program: ffi_program, deps, deps_size }
+        Self {
+            program: ffi_program,
+            deps,
+            deps_size,
+        }
     }
 }
 
+/// Result of a generic transaction operation.
 #[repr(C)]
-pub enum FfiExecutionFlow {
-    Public = 0,
-    PrivacyPreserving = 1,
+pub struct FfiTransactionResult {
+    // TODO: Replace with HashType FFI representation
+    /// Transaction hash (null-terminated string, or null on failure).
+    pub tx_hash: *mut c_char,
+    /// Whether the transaction succeeded.
+    pub success: bool,
+    pub secrets_data: *const FfiBytes32,
+    /// Public transaction have 0 secrets
+    pub secrets_size: usize,
+}
+
+impl Default for FfiTransactionResult {
+    fn default() -> Self {
+        Self {
+            tx_hash: std::ptr::null_mut(),
+            success: false,
+            secrets_data: std::ptr::null(),
+            secrets_size: 0,
+        }
+    }
 }
 
 /// Send generic public transaction
@@ -162,7 +184,7 @@ pub enum FfiExecutionFlow {
 /// - `handle`: Valid pointer to wallet handle
 /// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
 /// - `instruction_words`: Valid pointer to instruction words
-/// - `out_result`: Valid pointer to `FfiTransferResult`
+/// - `out_result`: Valid pointer to `FfiTransactionResult`
 ///
 /// # Returns
 /// - `Success` on successful creation
@@ -181,7 +203,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     instruction_words: *const u32,
     instruction_words_size: usize,
     program_with_dependencies: FfiProgramWithDependencies,
-    out_result: *mut FfiTransferResult,
+    out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
@@ -262,6 +284,124 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
             unsafe {
                 (*out_result).tx_hash = std::ptr::null_mut();
                 (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
+/// Send generic private transaction
+///
+/// # Parameters
+/// - `handle`: Valid pointer to wallet handle
+/// - `account_identities`: Valid pointer to list of `FfiAccountIdentity`
+/// - `instruction_words`: Valid pointer to instruction words
+/// - `out_result`: Valid pointer to `FfiTransactionResult`
+///
+/// # Returns
+/// - `Success` on successful creation
+/// - Error code on failure
+///
+/// # Safety
+/// - `handle` must be a valid pointer
+/// - `account_identities` must be a valid pointer
+/// - `instruction_words` must be a valid pointer
+/// - `out_result` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
+    handle: *mut WalletHandle,
+    account_identities: *const FfiAccountIdentity,
+    account_identities_size: usize,
+    instruction_words: *const u32,
+    instruction_words_size: usize,
+    program_with_dependencies: FfiProgramWithDependencies,
+    out_result: *mut FfiTransactionResult,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if account_identities.is_null() {
+        print_error("Null output pointer for account identities list");
+        return WalletFfiError::NullPointer;
+    }
+
+    if instruction_words.is_null() {
+        print_error("Null output pointer for instruction data");
+        return WalletFfiError::NullPointer;
+    }
+
+    if out_result.is_null() {
+        print_error("Null output pointer return hash");
+        return WalletFfiError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let mut accounts = Vec::with_capacity(account_identities_size);
+    let mut instruction_data = Vec::with_capacity(instruction_words_size);
+
+    // Alignment will be different, we need to read elements one-by-one
+    for i in 0..account_identities_size {
+        accounts.push(
+            match match unsafe { account_identities.add(i).as_ref() }
+                .ok_or(WalletFfiError::NullPointer)
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    print_error(format!(
+                        "account_identities_size does not match actual size of account_identities"
+                    ));
+                    return err;
+                }
+            }
+            .try_into()
+            {
+                Ok(v) => v,
+                Err(err) => return err,
+            },
+        );
+    }
+
+    // Alignment will be different, we need to read elements one-by-one
+    for i in 0..instruction_words_size {
+        instruction_data.push(unsafe { *instruction_words.add(i) });
+    }
+
+    let program = match program_with_dependencies.try_into() {
+        Ok(v) => v,
+        Err(err) => return err,
+    };
+
+    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data, &program)) {
+        Ok((tx_hash, secrets)) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+
+                let secrets_size = secrets.len();
+                let boxed_slice = secrets.into_iter().map(Into::into).collect::<Vec<FfiBytes32>>().into_boxed_slice();
+                let secrets_data = Box::into_raw(boxed_slice) as *const FfiBytes32;
+
+                (*out_result).secrets_size = secrets_size;
+                (*out_result).secrets_data = secrets_data;
+            }
+            WalletFfiError::Success
+        }
+        Err(e) => {
+            print_error(format!("Public send failed: {e:?}"));
+            unsafe {
+                *out_result = FfiTransactionResult::default();
             }
             map_execution_error(e)
         }

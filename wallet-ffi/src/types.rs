@@ -3,7 +3,7 @@
 use core::slice;
 use std::{ffi::c_char, ptr};
 
-use nssa::Data;
+use nssa::{Data, SharedSecretKey};
 use nssa_core::{encryption::shared_key_derivation::Secp256k1Point, NullifierPublicKey};
 use wallet::AccountIdentity;
 
@@ -155,6 +155,12 @@ impl FfiBytes32 {
     }
 }
 
+impl From<SharedSecretKey> for FfiBytes32 {
+    fn from(value: SharedSecretKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
 impl FfiPrivateAccountKeys {
     #[must_use]
     pub const fn npk(&self) -> nssa_core::NullifierPublicKey {
@@ -189,7 +195,7 @@ pub enum FfiAccountIdentityKind {
 /// Struct representing of account identity, given to `AccountManager` at intialization
 #[repr(C)]
 pub struct FfiAccountIdentity {
-    kind: FfiAccountIdentityKind,
+    pub kind: FfiAccountIdentityKind,
     pub account_id: FfiBytes32,
     pub nullifier_secret_key: FfiBytes32,
     pub nullifier_public_key: FfiBytes32,
