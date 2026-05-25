@@ -41,6 +41,7 @@ members = [
   "examples/program_deployment/methods/guest",
   "testnet_initial_state",
   "indexer/ffi",
+  "keycard_wallet",
   "test_fixtures",
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
@@ -77,6 +78,7 @@ faucet_core = { path = "programs/faucet/core" }
 vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
+keycard_wallet = { path = "keycard_wallet" }
 test_fixtures = { path = "test_fixtures" }
 
 tokio = { version = "1.50", features = [
@@ -86,7 +88,7 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
-risc0-zkvm = { version = "3.0.5", features = ['std'] }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
@@ -131,6 +133,7 @@ url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
+criterion = { version = "0.8", features = ["html_reports"] }
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
@@ -157,6 +160,7 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 ] }
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+pyo3 = { version = "0.24", features = ["auto-initialize"] }
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

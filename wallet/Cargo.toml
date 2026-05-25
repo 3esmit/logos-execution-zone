@@ -19,6 +19,10 @@ amm_core.workspace = true
 testnet_initial_state.workspace = true
 ata_core.workspace = true
 bip39.workspace = true
+pyo3.workspace = true
+rpassword = "7"
+zeroize = "1"
+keycard_wallet.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

@@ -9,6 +9,7 @@ use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 
+pub use crate::helperfunctions::{read_mnemonic, read_pin};
 use crate::{
     WalletCore,
     account::{AccountIdWithPrivacy, Label},
@@ -17,6 +18,7 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         group::GroupSubcommand,
+        keycard::KeycardSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
@@ -30,6 +32,7 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod group;
+pub mod keycard;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
@@ -81,6 +84,9 @@ pub enum Command {
     },
     /// Deploy a program.
     DeployProgram { binary_filepath: PathBuf },
+    /// Keycard hardware wallet management.
+    #[command(subcommand)]
+    Keycard(KeycardSubcommand),
 }
 
 /// To execute commands, env var `NSSA_WALLET_HOME_DIR` must be set into directory with config.
@@ -113,10 +119,13 @@ pub enum SubcommandReturnValue {
 }
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
-#[display("{_0}")]
 pub enum CliAccountMention {
+    #[display("{_0}")]
     Id(AccountIdWithPrivacy),
+    #[display("{_0}")]
     Label(Label),
+    #[display("{_0}")]
+    KeyPath(String),
 }
 
 impl CliAccountMention {
@@ -126,6 +135,14 @@ impl CliAccountMention {
             Self::Label(label) => storage
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
+            Self::KeyPath(path) => {
+                let pin = read_pin()?;
+                let id_str =
+                    keycard_wallet::KeycardWallet::get_account_id_for_path_with_connect(&pin, path)
+                        .map_err(anyhow::Error::from)?;
+                AccountIdWithPrivacy::from_str(&id_str)
+                    .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
+            }
         }
     }
 }
@@ -134,6 +151,9 @@ impl FromStr for CliAccountMention {
     type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.starts_with("m/") {
+            return Ok(Self::KeyPath(s.to_owned()));
+        }
         AccountIdWithPrivacy::from_str(s).map_or_else(
             |_| Ok(Self::Label(Label::new(s.to_owned()))),
             |account_id| Ok(Self::Id(account_id)),
@@ -144,6 +164,12 @@ impl FromStr for CliAccountMention {
 impl From<Label> for CliAccountMention {
     fn from(label: Label) -> Self {
         Self::Label(label)
+    }
+}
+
+impl Default for CliAccountMention {
+    fn default() -> Self {
+        Self::Label(Label::new(String::new()))
     }
 }
 
@@ -208,6 +234,9 @@ pub async fn execute_subcommand(
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Keycard(keycard_subcommand) => {
+            keycard_subcommand.handle_subcommand(wallet_core).await?
+        }
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }
