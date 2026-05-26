@@ -11,13 +11,9 @@ workspace = true
 common.workspace = true
 nssa.workspace = true
 mempool.workspace = true
-bridge_core.workspace = true
-vault_core.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
 sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }
-logos-blockchain-zone-sdk.workspace = true
-logos-blockchain-core.workspace = true
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true

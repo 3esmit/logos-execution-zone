@@ -81,8 +81,8 @@ impl IndexerCore {
                             error!("Failed to deserialize L2 block from zone-sdk: {e}");
                             // Advance past the broken inscription so we don't
                             // re-process it on restart.
-                            cursor = Some((zone_block.id, slot));
-                            if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                            cursor = Some(slot);
+                            if let Err(err) = self.store.set_zone_cursor(&slot) {
                                 warn!("Failed to persist indexer cursor: {err:#}");
                             }
                             continue;
@@ -98,8 +98,8 @@ impl IndexerCore {
                         error!("Failed to store block {}: {err:#}", block.header.block_id);
                     }
 
-                    cursor = Some((zone_block.id, slot));
-                    if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                    cursor = Some(slot);
+                    if let Err(err) = self.store.set_zone_cursor(&slot) {
                         warn!("Failed to persist indexer cursor: {err:#}");
                     }
                     yield Ok(block);

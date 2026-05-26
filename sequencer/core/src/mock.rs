@@ -6,7 +6,8 @@ use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
 use crate::{
     block_publisher::{
-        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, SequencerCheckpoint,
+        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink,
+        SequencerCheckpoint,
     },
     config::BedrockConfig,
 };
@@ -24,6 +25,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _initial_checkpoint: Option<SequencerCheckpoint>,
         _on_checkpoint: CheckpointSink,
         _on_finalized_block: FinalizedBlockSink,
+        _on_deposit_event: OnDepositEventSink,
     ) -> Result<Self> {
         Ok(Self)
     }

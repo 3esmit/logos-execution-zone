@@ -27,7 +27,7 @@ use nssa_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
-const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(6);
+const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
