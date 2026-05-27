@@ -267,11 +267,13 @@ impl AccountManager {
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                 },
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
