@@ -20,13 +20,12 @@ use wallet::{
 };
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
-const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
+const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(5);
 
 /// Poll the indexer until its last finalized block id reaches the sequencer's
 /// current last block id or until [`L2_TO_L1_TIMEOUT_MILLIS`] elapses.
 /// Returns the last indexer block id observed.
 async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> Result<u64> {
-    let timeout = Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS);
     let block_id_to_catch_up =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
     let mut last_ind: u64 = 1;
@@ -50,11 +49,11 @@ async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> Result<u64> {
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     };
-    tokio::time::timeout(timeout, inner)
+    tokio::time::timeout(L2_TO_L1_TIMEOUT, inner)
         .await
         .with_context(|| {
             format!(
-                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT_MILLIS} milliseconds. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
+                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
             )
         })?
 }
