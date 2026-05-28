@@ -32,7 +32,7 @@ use nssa_core::{
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
-    PrivacyPreservingAccount, WalletCore,
+    AccountIdentity, WalletCore,
     cli::{Command, account::AccountSubcommand},
 };
 
@@ -129,8 +129,8 @@ async fn spend_private_pda(
     wallet
         .send_privacy_preserving_tx(
             vec![
-                PrivacyPreservingAccount::PrivatePdaOwned(pda_account_id),
-                PrivacyPreservingAccount::PrivateForeign {
+                AccountIdentity::PrivatePdaOwned(pda_account_id),
+                AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
                     identifier: 0,
