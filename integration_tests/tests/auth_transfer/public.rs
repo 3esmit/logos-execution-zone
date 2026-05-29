@@ -420,7 +420,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
         Program::faucet().id(),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
-        faucet_core::Instruction::TransferVault {
+        faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id: recipient,
             amount,

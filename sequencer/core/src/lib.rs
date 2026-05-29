@@ -457,7 +457,7 @@ fn build_supply_account_genesis_transaction(
         faucet_program_id,
         vec![nssa::system_faucet_account_id(), recipient_vault_id],
         vec![],
-        faucet_core::Instruction::TransferVault {
+        faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id: *account_id,
             amount: balance,
@@ -477,7 +477,7 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
         faucet_program_id,
         vec![nssa::system_faucet_account_id(), bridge_account_id],
         vec![],
-        faucet_core::Instruction::TransferDirect { amount: balance },
+        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize bridge genesis transfer instruction");
     let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);

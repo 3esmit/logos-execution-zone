@@ -32,7 +32,7 @@ fn main() {
     let post_states = unchanged_post_states(&pre_states_clone);
 
     let chained_calls = match instruction {
-        Instruction::TransferVault {
+        Instruction::GenesisTransferVault {
             vault_program_id,
             recipient_id,
             amount,
@@ -62,7 +62,7 @@ fn main() {
                 .with_pda_seeds(vec![faucet_core::compute_faucet_seed()]),
             ]
         }
-        Instruction::TransferDirect { amount } => {
+        Instruction::GenesisTransferDirect { amount } => {
             let [faucet, recipient] = pre_states
                 .try_into()
                 .expect("TransferDirect requires exactly 2 accounts");
