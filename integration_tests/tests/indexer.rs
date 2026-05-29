@@ -20,7 +20,7 @@ use wallet::{
 };
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
-const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(5);
+const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 
 /// Poll the indexer until its last finalized block id reaches the sequencer's
 /// current last block id or until [`L2_TO_L1_TIMEOUT_MILLIS`] elapses.
