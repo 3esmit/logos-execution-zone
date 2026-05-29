@@ -6,7 +6,7 @@ use common::{
     transaction::{NSSATransaction, clock_invocation},
 };
 use log::info;
-use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
+use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use nssa::{Account, AccountId, V03State};
 use nssa_core::BlockId;
@@ -97,16 +97,16 @@ impl IndexerStore {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
-    pub fn get_zone_cursor(&self) -> Result<Option<(MsgId, Slot)>> {
+    pub fn get_zone_cursor(&self) -> Result<Option<Slot>> {
         let Some(bytes) = self.dbio.get_zone_sdk_indexer_cursor_bytes()? else {
             return Ok(None);
         };
-        let cursor: (MsgId, Slot) = serde_json::from_slice(&bytes)
+        let cursor: Slot = serde_json::from_slice(&bytes)
             .context("Failed to deserialize stored zone-sdk indexer cursor")?;
         Ok(Some(cursor))
     }
 
-    pub fn set_zone_cursor(&self, cursor: &(MsgId, Slot)) -> Result<()> {
+    pub fn set_zone_cursor(&self, cursor: &Slot) -> Result<()> {
         let bytes =
             serde_json::to_vec(cursor).context("Failed to serialize zone-sdk indexer cursor")?;
         self.dbio.put_zone_sdk_indexer_cursor_bytes(&bytes)?;

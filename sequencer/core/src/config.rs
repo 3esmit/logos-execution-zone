@@ -22,6 +22,9 @@ pub enum GenesisAction {
         account_id: AccountId,
         balance: u128,
     },
+    SupplyBridgeAccount {
+        balance: u128,
+    },
 }
 
 // TODO: Provide default values
