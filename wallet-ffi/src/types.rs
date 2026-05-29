@@ -179,7 +179,7 @@ impl FfiPrivateAccountKeys {
     }
 }
 
-/// Enumeration to represent kinds of FfiAccountManagerAccountIdentity
+/// Enumeration to represent kinds of `FfiAccountManagerAccountIdentity`.
 #[repr(C)]
 pub enum FfiAccountIdentityKind {
     Public = 0,
@@ -192,7 +192,7 @@ pub enum FfiAccountIdentityKind {
     PrivatePdaShared = 7,
 }
 
-/// Struct representing of account identity, given to `AccountManager` at intialization
+/// Struct representing of account identity, given to `AccountManager` at intialization.
 #[repr(C)]
 pub struct FfiAccountIdentity {
     pub kind: FfiAccountIdentityKind,
@@ -450,13 +450,9 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
 
     fn try_from(value: &FfiAccountIdentity) -> Result<Self, Self::Error> {
         match value.kind {
-            FfiAccountIdentityKind::Public => Ok(AccountIdentity::Public(value.account_id.into())),
-            FfiAccountIdentityKind::PublicNoSign => {
-                Ok(AccountIdentity::PublicNoSign(value.account_id.into()))
-            }
-            FfiAccountIdentityKind::PrivateOwned => {
-                Ok(AccountIdentity::PrivateOwned(value.account_id.into()))
-            }
+            FfiAccountIdentityKind::Public => Ok(Self::Public(value.account_id.into())),
+            FfiAccountIdentityKind::PublicNoSign => Ok(Self::PublicNoSign(value.account_id.into())),
+            FfiAccountIdentityKind::PrivateOwned => Ok(Self::PrivateOwned(value.account_id.into())),
             FfiAccountIdentityKind::PrivateForeign => {
                 let vpk = if value.viewing_public_key_len == 33 {
                     let slice = unsafe {
@@ -470,14 +466,14 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
-                Ok(AccountIdentity::PrivateForeign {
+                Ok(Self::PrivateForeign {
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
                 })
             }
             FfiAccountIdentityKind::PrivatePdaOwned => {
-                Ok(AccountIdentity::PrivatePdaOwned(value.account_id.into()))
+                Ok(Self::PrivatePdaOwned(value.account_id.into()))
             }
             FfiAccountIdentityKind::PrivatePdaForeign => {
                 let vpk = if value.viewing_public_key_len == 33 {
@@ -492,7 +488,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
-                Ok(AccountIdentity::PrivatePdaForeign {
+                Ok(Self::PrivatePdaForeign {
                     account_id: value.account_id.into(),
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
@@ -512,7 +508,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
-                Ok(AccountIdentity::PrivateShared {
+                Ok(Self::PrivateShared {
                     nsk: value.nullifier_secret_key.data,
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
@@ -532,7 +528,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
-                Ok(AccountIdentity::PrivatePdaShared {
+                Ok(Self::PrivatePdaShared {
                     account_id: value.account_id.into(),
                     nsk: value.nullifier_secret_key.data,
                     npk: NullifierPublicKey(value.nullifier_public_key.data),

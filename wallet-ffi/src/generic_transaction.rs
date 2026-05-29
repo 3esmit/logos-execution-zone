@@ -1,9 +1,16 @@
-use std::{collections::HashMap, ffi::{CString, c_char}};
+use std::{
+    collections::HashMap,
+    ffi::{c_char, CString},
+};
 
 use nssa::{privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
 
 use crate::{
-    FfiAccountIdentity, FfiBytes32, WalletHandle, block_on, error::{WalletFfiError, print_error}, map_execution_error, wallet::get_wallet
+    block_on,
+    error::{print_error, WalletFfiError},
+    map_execution_error,
+    wallet::get_wallet,
+    FfiAccountIdentity, FfiBytes32, WalletHandle,
 };
 
 #[repr(C)]
@@ -14,7 +21,7 @@ pub struct SerializationHelperResult {
 }
 
 impl SerializationHelperResult {
-    fn from_err(error: WalletFfiError) -> Self {
+    const fn from_err(error: WalletFfiError) -> Self {
         Self {
             instruction_words: std::ptr::null_mut(),
             instruction_words_size: 0,
@@ -23,52 +30,8 @@ impl SerializationHelperResult {
     }
 }
 
-/// Serialize sequence of bytes into RISC0 readable words
-///
-/// # Parameters
-/// - `input_instruction_data`: Valid pointer to a sequence of bytes
-/// - `input_instruction_data_size`: Size of `input_instruction_data`
-///
-/// # Returns
-/// - `Success` on successful creation
-/// - Error code on failure
-///
-/// # Safety
-/// - `input_instruction_data` must be a valid pointer
-#[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_serialization_helper(
-    input_instruction_data: *const u8,
-    input_instruction_data_size: usize,
-) -> SerializationHelperResult {
-    if input_instruction_data.is_null() {
-        print_error("Null input pointer for instruction_data");
-        return SerializationHelperResult::from_err(WalletFfiError::NullPointer);
-    }
-
-    let input_slice =
-        unsafe { std::slice::from_raw_parts(input_instruction_data, input_instruction_data_size) };
-    let res_vec_u32 = match risc0_zkvm::serde::to_vec(input_slice).map_err(|err| {
-        print_error(format!(
-            "Failed to serialize input into words with err {err}"
-        ));
-        WalletFfiError::SerializationError
-    }) {
-        Ok(res) => res,
-        Err(err) => return SerializationHelperResult::from_err(err),
-    };
-    let res_len = res_vec_u32.len();
-    let res_boxed = res_vec_u32.into_boxed_slice();
-    let res_ptr = Box::into_raw(res_boxed).cast::<u32>();
-
-    SerializationHelperResult {
-        instruction_words: res_ptr,
-        instruction_words_size: res_len,
-        error: WalletFfiError::Success,
-    }
-}
-
 #[repr(C)]
-/// Intended to be created manually
+/// Intended to be created manually.
 pub struct FfiProgram {
     pub elf_data: *const u8,
     pub elf_size: usize,
@@ -102,17 +65,17 @@ impl From<Program> for FfiProgram {
 }
 
 #[repr(C)]
-/// Intended to be created manually
+/// Intended to be created manually.
 pub struct FfiProgramWithDependencies {
     pub program: FfiProgram,
     pub deps: *const FfiProgram,
     pub deps_size: usize,
 }
 
-impl TryFrom<FfiProgramWithDependencies> for ProgramWithDependencies {
+impl TryFrom<&FfiProgramWithDependencies> for ProgramWithDependencies {
     type Error = WalletFfiError;
 
-    fn try_from(value: FfiProgramWithDependencies) -> Result<Self, Self::Error> {
+    fn try_from(value: &FfiProgramWithDependencies) -> Result<Self, Self::Error> {
         let mut program_map = HashMap::new();
 
         let orig_program = (&value.program).try_into()?;
@@ -163,7 +126,7 @@ pub struct FfiTransactionResult {
     /// Whether the transaction succeeded.
     pub success: bool,
     pub secrets_data: *const FfiBytes32,
-    /// Public transaction have 0 secrets
+    /// Public transaction have 0 secrets.
     pub secrets_size: usize,
 }
 
@@ -178,7 +141,55 @@ impl Default for FfiTransactionResult {
     }
 }
 
-/// Send generic public transaction
+/// Serialize sequence of bytes into RISC0 readable words.
+///
+/// # Parameters
+/// - `input_instruction_data`: Valid pointer to a sequence of bytes
+/// - `input_instruction_data_size`: Size of `input_instruction_data`
+///
+/// # Returns
+/// - `Success` on successful creation
+/// - Error code on failure
+///
+/// # Safety
+/// - `input_instruction_data` must be a valid pointer
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_serialization_helper(
+    input_instruction_data: *const u8,
+    input_instruction_data_size: usize,
+) -> SerializationHelperResult {
+    if input_instruction_data.is_null() {
+        print_error("Null input pointer for instruction_data");
+        return SerializationHelperResult::from_err(WalletFfiError::NullPointer);
+    }
+
+    let input_slice =
+        unsafe { std::slice::from_raw_parts(input_instruction_data, input_instruction_data_size) };
+    let res_vec_u32_with_prefix = match risc0_zkvm::serde::to_vec(input_slice).map_err(|err| {
+        print_error(format!(
+            "Failed to serialize input into words with err {err}"
+        ));
+        WalletFfiError::SerializationError
+    }) {
+        Ok(res) => res,
+        Err(err) => return SerializationHelperResult::from_err(err),
+    };
+
+    // The resulting vec contains len as prefix
+    let res_vec_u32 = res_vec_u32_with_prefix[1..].to_vec();
+
+    let res_len = res_vec_u32.len();
+    let res_boxed = res_vec_u32.into_boxed_slice();
+    let res_ptr = Box::into_raw(res_boxed).cast::<u32>();
+
+    SerializationHelperResult {
+        instruction_words: res_ptr,
+        instruction_words_size: res_len,
+        error: WalletFfiError::Success,
+    }
+}
+
+/// Send generic public transaction.
 ///
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
@@ -202,7 +213,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     account_identities_size: usize,
     instruction_words: *const u32,
     instruction_words_size: usize,
-    program_with_dependencies: FfiProgramWithDependencies,
+    program_with_dependencies: *const FfiProgramWithDependencies,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -244,9 +255,9 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
             {
                 Ok(v) => v,
                 Err(err) => {
-                    print_error(format!(
-                        "account_identities_size does not match actual size of account_identities"
-                    ));
+                    print_error(
+                        "account_identities_size does not match actual size of account_identities",
+                    );
                     return err;
                 }
             }
@@ -263,7 +274,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         instruction_data.push(unsafe { *instruction_words.add(i) });
     }
 
-    let program = match program_with_dependencies.try_into() {
+    let program = match unsafe { &*program_with_dependencies }.try_into() {
         Ok(v) => v,
         Err(err) => return err,
     };
@@ -290,7 +301,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     }
 }
 
-/// Send generic private transaction
+/// Send generic private transaction.
 ///
 /// # Parameters
 /// - `handle`: Valid pointer to wallet handle
@@ -314,7 +325,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     account_identities_size: usize,
     instruction_words: *const u32,
     instruction_words_size: usize,
-    program_with_dependencies: FfiProgramWithDependencies,
+    program_with_dependencies: *const FfiProgramWithDependencies,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -356,9 +367,9 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
             {
                 Ok(v) => v,
                 Err(err) => {
-                    print_error(format!(
-                        "account_identities_size does not match actual size of account_identities"
-                    ));
+                    print_error(
+                        "account_identities_size does not match actual size of account_identities",
+                    );
                     return err;
                 }
             }
@@ -375,7 +386,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         instruction_data.push(unsafe { *instruction_words.add(i) });
     }
 
-    let program = match program_with_dependencies.try_into() {
+    let program = match unsafe { &*program_with_dependencies }.try_into() {
         Ok(v) => v,
         Err(err) => return err,
     };
@@ -390,7 +401,11 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
                 (*out_result).success = true;
 
                 let secrets_size = secrets.len();
-                let boxed_slice = secrets.into_iter().map(Into::into).collect::<Vec<FfiBytes32>>().into_boxed_slice();
+                let boxed_slice = secrets
+                    .into_iter()
+                    .map(Into::into)
+                    .collect::<Vec<FfiBytes32>>()
+                    .into_boxed_slice();
                 let secrets_data = Box::into_raw(boxed_slice) as *const FfiBytes32;
 
                 (*out_result).secrets_size = secrets_size;
@@ -404,6 +419,31 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
                 *out_result = FfiTransactionResult::default();
             }
             map_execution_error(e)
+        }
+    }
+}
+
+/// Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or
+/// `wallet_ffi_send_generic_private_transaction`.
+///
+/// # Safety
+/// The result must be either null or a valid result from a transaction function.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_transaction_result(result: *mut FfiTransactionResult) {
+    if result.is_null() {
+        return;
+    }
+
+    unsafe {
+        let result = &*result;
+        if !result.tx_hash.is_null() {
+            drop(CString::from_raw(result.tx_hash));
+        }
+
+        if !result.secrets_data.is_null() {
+            let secrets =
+                std::slice::from_raw_parts_mut(result.secrets_data.cast_mut(), result.secrets_size);
+            drop(Box::from_raw(std::ptr::from_mut::<[FfiBytes32]>(secrets)));
         }
     }
 }

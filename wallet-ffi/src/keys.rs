@@ -320,12 +320,9 @@ pub unsafe extern "C" fn wallet_ffi_resolve_private_account(
 
     let account_id = account_id.into();
 
-    let resolved_account = match wallet.resolve_private_account(account_id) {
-        Some(v) => v,
-        None => {
-            print_error(format!("Account not found"));
-            return WalletFfiError::AccountNotFound;
-        }
+    let Some(resolved_account) = wallet.resolve_private_account(account_id) else {
+        print_error("Account not found");
+        return WalletFfiError::AccountNotFound;
     };
 
     unsafe {

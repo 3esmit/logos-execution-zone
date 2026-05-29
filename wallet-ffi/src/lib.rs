@@ -23,6 +23,7 @@
 #![expect(
     clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
+    clippy::as_conversions,
     reason = "TODO: fix later"
 )]
 

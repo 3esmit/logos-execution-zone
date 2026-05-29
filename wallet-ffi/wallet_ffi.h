@@ -104,7 +104,7 @@ typedef enum WalletFfiError {
    */
   INVALID_KEY_VALUE = 16,
   /**
-   * Invalid program bytecode
+   * Invalid program bytecode.
    */
   INVALID_BYTECODE = 17,
   /**
@@ -114,7 +114,7 @@ typedef enum WalletFfiError {
 } WalletFfiError;
 
 /**
- * Enumeration to represent kinds of FfiAccountManagerAccountIdentity
+ * Enumeration to represent kinds of `FfiAccountManagerAccountIdentity`.
  */
 typedef enum FfiAccountIdentityKind {
   PUBLIC = 0,
@@ -225,7 +225,7 @@ typedef struct SerializationHelperResult {
 } SerializationHelperResult;
 
 /**
- * Struct representing of account identity, given to `AccountManager` at intialization
+ * Struct representing of account identity, given to `AccountManager` at intialization.
  */
 typedef struct FfiAccountIdentity {
   enum FfiAccountIdentityKind kind;
@@ -238,7 +238,7 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * Intended to be created manually
+ * Intended to be created manually.
  */
 typedef struct FfiProgram {
   const uint8_t *elf_data;
@@ -246,7 +246,7 @@ typedef struct FfiProgram {
 } FfiProgram;
 
 /**
- * Intended to be created manually
+ * Intended to be created manually.
  */
 typedef struct FfiProgramWithDependencies {
   struct FfiProgram program;
@@ -268,7 +268,7 @@ typedef struct FfiTransactionResult {
   bool success;
   const struct FfiBytes32 *secrets_data;
   /**
-   * Public transaction have 0 secrets
+   * Public transaction have 0 secrets.
    */
   uintptr_t secrets_size;
 } FfiTransactionResult;
@@ -528,7 +528,7 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
                                                       const char *account_state_json);
 
 /**
- * Serialize sequence of bytes into RISC0 readable words
+ * Serialize sequence of bytes into RISC0 readable words.
  *
  * # Parameters
  * - `input_instruction_data`: Valid pointer to a sequence of bytes
@@ -545,7 +545,7 @@ struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *
                                                                  uintptr_t input_instruction_data_size);
 
 /**
- * Send generic public transaction
+ * Send generic public transaction.
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
@@ -568,11 +568,11 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
                                                                uintptr_t account_identities_size,
                                                                const uint32_t *instruction_words,
                                                                uintptr_t instruction_words_size,
-                                                               struct FfiProgramWithDependencies program_with_dependencies,
+                                                               const struct FfiProgramWithDependencies *program_with_dependencies,
                                                                struct FfiTransactionResult *out_result);
 
 /**
- * Send generic private transaction
+ * Send generic private transaction.
  *
  * # Parameters
  * - `handle`: Valid pointer to wallet handle
@@ -595,8 +595,17 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
                                                                 uintptr_t account_identities_size,
                                                                 const uint32_t *instruction_words,
                                                                 uintptr_t instruction_words_size,
-                                                                struct FfiProgramWithDependencies program_with_dependencies,
+                                                                const struct FfiProgramWithDependencies *program_with_dependencies,
                                                                 struct FfiTransactionResult *out_result);
+
+/**
+ * Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or
+ * `wallet_ffi_send_generic_private_transaction`.
+ *
+ * # Safety
+ * The result must be either null or a valid result from a transaction function.
+ */
+void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
 
 /**
  * Get the public key for a public account.
