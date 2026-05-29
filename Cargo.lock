@@ -9042,6 +9042,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "mempool",
  "rand 0.8.6",
+ "risc0-zkvm",
  "serde",
  "serde_json",
  "storage",

@@ -34,6 +34,7 @@ borsh.workspace = true
 bytesize.workspace = true
 hex.workspace = true
 url.workspace = true
+risc0-zkvm.workspace = true
 
 [features]
 default = []

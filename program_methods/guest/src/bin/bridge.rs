@@ -33,6 +33,7 @@ fn main() {
 
     let chained_calls = match instruction {
         Instruction::Deposit {
+            l1_deposit_op_id: _,
             vault_program_id,
             recipient_id,
             amount,

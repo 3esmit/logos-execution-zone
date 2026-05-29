@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use common::block::BlockMeta;
+use common::{HashType, block::BlockMeta};
 use lee::V03State;
 
 use crate::{
@@ -8,7 +8,8 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_LEE_STATE_NAME, DB_LEE_STATE_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
-        DB_META_LATEST_BLOCK_META_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
+        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_DEPOSIT_EVENTS_KEY,
+        DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
 
@@ -131,12 +132,56 @@ impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingDepositEventRecord {
+    pub deposit_op_id: HashType,
+    pub source_tx_hash: HashType,
+    pub amount: u64,
+    pub metadata: Vec<u8>,
+    /// Set when block containing the deposit event is submitted, but not necessarily finalized.
+    pub submitted_in_block_id: Option<u64>,
+}
+
+#[derive(BorshDeserialize)]
+pub struct PendingDepositEventsCellOwned(pub Vec<PendingDepositEventRecord>);
+
+impl SimpleStorableCell for PendingDepositEventsCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_DEPOSIT_EVENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for PendingDepositEventsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct PendingDepositEventsCellRef<'records>(pub &'records [PendingDepositEventRecord]);
+
+impl SimpleStorableCell for PendingDepositEventsCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_DEPOSIT_EVENTS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for PendingDepositEventsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize pending deposit events cell".to_owned()),
+            )
+        })
+    }
+}
+
 #[cfg(test)]
 mod uniform_tests {
     use crate::{
         cells::SimpleStorableCell as _,
         sequencer::sequencer_cells::{
             LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
+            PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
         },
     };
 
@@ -163,6 +208,22 @@ mod uniform_tests {
         assert_eq!(
             LatestBlockMetaCellRef::key_constructor(()).unwrap(),
             LatestBlockMetaCellOwned::key_constructor(()).unwrap()
+        );
+    }
+
+    #[test]
+    fn pending_deposit_events_ref_and_owned_is_aligned() {
+        assert_eq!(
+            PendingDepositEventsCellRef::CELL_NAME,
+            PendingDepositEventsCellOwned::CELL_NAME
+        );
+        assert_eq!(
+            PendingDepositEventsCellRef::CF_NAME,
+            PendingDepositEventsCellOwned::CF_NAME
+        );
+        assert_eq!(
+            PendingDepositEventsCellRef::key_constructor(()).unwrap(),
+            PendingDepositEventsCellOwned::key_constructor(()).unwrap()
         );
     }
 }

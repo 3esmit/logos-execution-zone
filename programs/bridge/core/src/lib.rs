@@ -12,6 +12,9 @@ pub enum Instruction {
     /// - Bridge PDA account
     /// - Recipient vault PDA account
     Deposit {
+        /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
+        /// Deposit Event on L1.
+        l1_deposit_op_id: [u8; 32],
         vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u128,
