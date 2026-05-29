@@ -350,12 +350,12 @@ mod tests {
         }
 
         #[must_use]
-        pub fn pda_fund_spend_proxy() -> Self {
-            use test_program_methods::{PDA_FUND_SPEND_PROXY_ELF, PDA_FUND_SPEND_PROXY_ID};
+        pub fn pda_spend_proxy() -> Self {
+            use test_program_methods::{PDA_SPEND_PROXY_ELF, PDA_SPEND_PROXY_ID};
 
             Self {
-                id: PDA_FUND_SPEND_PROXY_ID,
-                elf: PDA_FUND_SPEND_PROXY_ELF.to_vec(),
+                id: PDA_SPEND_PROXY_ID,
+                elf: PDA_SPEND_PROXY_ELF.to_vec(),
             }
         }
 
@@ -468,6 +468,24 @@ mod tests {
         pub fn pinata_cooldown() -> Self {
             use test_program_methods::PINATA_COOLDOWN_ELF;
             Self::new(PINATA_COOLDOWN_ELF.to_vec()).unwrap()
+        }
+
+        #[must_use]
+        pub fn malicious_injector() -> Self {
+            use test_program_methods::{MALICIOUS_INJECTOR_ELF, MALICIOUS_INJECTOR_ID};
+            Self {
+                id: MALICIOUS_INJECTOR_ID,
+                elf: MALICIOUS_INJECTOR_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn malicious_launderer() -> Self {
+            use test_program_methods::{MALICIOUS_LAUNDERER_ELF, MALICIOUS_LAUNDERER_ID};
+            Self {
+                id: MALICIOUS_LAUNDERER_ID,
+                elf: MALICIOUS_LAUNDERER_ELF.to_vec(),
+            }
         }
     }
 

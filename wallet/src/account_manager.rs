@@ -54,6 +54,8 @@ pub enum AccountIdentity {
 
 impl AccountIdentity {
     #[must_use]
+    /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
+    /// lookup.
     pub const fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_) | Self::PublicNoSign(_))
     }
@@ -265,11 +267,13 @@ impl AccountManager {
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                 },
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {

@@ -34,7 +34,7 @@ pub mod setup;
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
 pub const NSSA_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
 pub const NSSA_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
-pub const NSSA_PROGRAM_FOR_TEST_PDA_FUND_SPEND_PROXY: &str = "pda_fund_spend_proxy.bin";
+pub const NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY: &str = "pda_spend_proxy.bin";
 
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
@@ -326,12 +326,22 @@ impl TestContextBuilder {
 
         let initial_public_accounts = config::default_public_accounts_for_wallet();
         let initial_private_accounts = config::default_private_accounts_for_wallet();
+        // Wallet genesis must always be present so that
+        // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
+        // When a test supplies custom genesis, merge rather than replace.
+        let wallet_genesis =
+            config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+        let genesis = match genesis_transactions {
+            Some(mut custom) => {
+                custom.extend(wallet_genesis);
+                custom
+            }
+            None => wallet_genesis,
+        };
         let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
             sequencer_partial_config.unwrap_or_default(),
             bedrock_addr,
-            genesis_transactions.unwrap_or_else(|| {
-                config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts)
-            }),
+            genesis,
         )
         .await
         .context("Failed to setup Sequencer")?;

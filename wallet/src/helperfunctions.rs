@@ -6,6 +6,33 @@ use rand::{RngCore as _, rngs::OsRng};
 
 use crate::HOME_DIR_ENV_VAR;
 
+/// Read the Keycard PIN without echoing it.
+///
+/// Checks `KEYCARD_PIN` first so non-interactive callers (CI, scripts) can
+/// supply it via the environment. Falls back to a TTY prompt via `rpassword`
+/// so the value never appears in argv, shell history, or `ps` output.
+pub fn read_pin() -> anyhow::Result<zeroize::Zeroizing<String>> {
+    if let Ok(pin) = std::env::var("KEYCARD_PIN") {
+        return Ok(zeroize::Zeroizing::new(pin));
+    }
+    rpassword::prompt_password("Keycard PIN: ")
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
+}
+
+/// Read the mnemonic phrase without echoing it.
+///
+/// Checks `KEYCARD_MNEMONIC` first for non-interactive callers. Falls back to
+/// a TTY prompt so the phrase never appears in argv, shell history, or `ps`.
+pub fn read_mnemonic() -> anyhow::Result<zeroize::Zeroizing<String>> {
+    if let Ok(mnemonic) = std::env::var("KEYCARD_MNEMONIC") {
+        return Ok(zeroize::Zeroizing::new(mnemonic));
+    }
+    rpassword::prompt_password("Mnemonic phrase: ")
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
+}
+
 /// Get home dir for wallet. Env var `NSSA_WALLET_HOME_DIR` must be set before execution to succeed.
 fn get_home_nssa_var() -> Result<PathBuf> {
     Ok(PathBuf::from_str(&std::env::var(HOME_DIR_ENV_VAR)?)?)
