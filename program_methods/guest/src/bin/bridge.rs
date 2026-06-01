@@ -63,11 +63,39 @@ fn main() {
                     vec![bridge_for_vault, recipient_vault],
                     &vault_core::Instruction::Transfer {
                         recipient_id,
-                        amount,
+                        amount: u128::from(amount),
                     },
                 )
                 .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
             ]
+        }
+        Instruction::Withdraw {
+            amount,
+            bedrock_account_pk: _,
+        } => {
+            let [sender, bridge] = pre_states
+                .try_into()
+                .expect("Withdraw requires exactly 2 accounts");
+
+            assert_eq!(
+                bridge.account_id,
+                bridge_core::compute_bridge_account_id(self_program_id),
+                "Second account must be bridge PDA"
+            );
+
+            let auth_transfer_program_id = bridge.account.program_owner;
+            assert_eq!(
+                sender.account.program_owner, auth_transfer_program_id,
+                "Sender account must be owned by the authenticated transfer program"
+            );
+
+            vec![ChainedCall::new(
+                auth_transfer_program_id,
+                vec![sender, bridge],
+                &authenticated_transfer_core::Instruction::Transfer {
+                    amount: u128::from(amount),
+                },
+            )]
         }
     };
 

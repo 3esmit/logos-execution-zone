@@ -18,7 +18,7 @@ use lee::{
 };
 use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use log::info;
-use logos_blockchain_core::mantle::{Value, ledger::Inputs, ops::channel::deposit::DepositOp};
+use logos_blockchain_core::mantle::{ledger::Inputs, ops::channel::deposit::DepositOp};
 use logos_blockchain_http_api_common::bodies::{
     channel::ChannelDepositRequestBody,
     wallet::{
@@ -198,7 +198,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 async fn submit_bedrock_deposit(
     bedrock_addr: std::net::SocketAddr,
     recipient_id: AccountId,
-    amount: u128,
+    amount: u64,
 ) -> anyhow::Result<()> {
     #[derive(BorshSerialize)]
     struct DepositMetadata {
@@ -213,9 +213,6 @@ async fn submit_bedrock_deposit(
 
     let funding_key = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 
-    let amount: Value = amount
-        .try_into()
-        .context("Deposit amount does not fit Bedrock Value type")?;
     let channel_id = integration_tests::config::bedrock_channel_id();
     let client = reqwest::Client::new();
 

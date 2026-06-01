@@ -5,6 +5,7 @@ use common::block::Block;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
 use crate::{
+    BridgeWithdrawData,
     block_publisher::{
         BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink,
         SequencerCheckpoint,
@@ -30,7 +31,11 @@ impl BlockPublisherTrait for MockBlockPublisher {
         Ok(Self)
     }
 
-    async fn publish_block(&self, _block: &Block) -> Result<()> {
+    async fn publish_block(
+        &self,
+        _block: &Block,
+        _bridge_withdrawals: Vec<BridgeWithdrawData>,
+    ) -> Result<()> {
         Ok(())
     }
 }

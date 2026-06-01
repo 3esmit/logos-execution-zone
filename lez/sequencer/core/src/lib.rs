@@ -242,7 +242,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // restarts.
         if is_fresh_start {
             block_publisher
-                .publish_block(&genesis_block)
+                .publish_block(&genesis_block, vec![])
                 .await
                 .expect("Failed to publish genesis block");
         }
@@ -261,16 +261,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Produces a new block from mempool transactions and publishes it via zone-sdk.
     pub async fn produce_new_block(&mut self) -> Result<u64> {
-        let block_with_meta = self
-            .build_block_from_mempool()
-            .context("Failed to build block from mempool transactions")?;
         let BlockWithMeta {
             block,
             deposit_event_ids,
-        } = block_with_meta;
+            bridge_withdrawals,
+        } = self
+            .build_block_from_mempool()
+            .context("Failed to build block from mempool transactions")?;
 
         self.block_publisher
-            .publish_block(&block)
+            .publish_block(&block, bridge_withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
 
@@ -298,6 +298,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let mut valid_transactions = Vec::new();
         let mut deposit_event_ids = Vec::new();
+        let mut bridge_withdrawals = Vec::new();
 
         let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
             .expect("`max_block_size` should fit into usize");
@@ -362,6 +363,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         }
                     };
 
+                    if let Some(withdraw_data) = extract_bridge_withdraw_data(&tx) {
+                        bridge_withdrawals.push(withdraw_data);
+                    }
+
                     self.state.apply_state_diff(validated_diff);
                 }
                 TransactionOrigin::Sequencer => {
@@ -369,17 +374,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         panic!("Sequencer may only generate Public transactions, found {tx:#?}");
                     };
 
-                    if public_tx.message.program_id == Program::bridge().id() {
-                        let instruction: bridge_core::Instruction =
-                            risc0_zkvm::serde::from_slice(&public_tx.message.instruction_data)
-                                .context("Failed to deserialize bridge instruction")?;
-                        match instruction {
-                            bridge_core::Instruction::Deposit {
-                                l1_deposit_op_id, ..
-                            } => {
-                                deposit_event_ids.push(HashType(l1_deposit_op_id));
-                            }
-                        }
+                    if let Some(deposit_op_id) = extract_bridge_deposit_id(&tx) {
+                        deposit_event_ids.push(deposit_op_id);
                     }
 
                     self.state
@@ -393,6 +389,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
 
             valid_transactions.push(tx);
+
             info!("Validated transaction with hash {tx_hash}, including it in block");
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
                 break;
@@ -427,6 +424,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         Ok(BlockWithMeta {
             block,
             deposit_event_ids,
+            bridge_withdrawals,
         })
     }
 
@@ -486,6 +484,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 struct BlockWithMeta {
     block: Block,
     deposit_event_ids: Vec<HashType>,
+    bridge_withdrawals: Vec<BridgeWithdrawData>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgeWithdrawData {
+    pub amount: u64,
+    pub bedrock_account_pk: [u8; 32],
 }
 
 /// Checks the database for any pending deposit events that have not yet been marked as submitted in
@@ -640,7 +645,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
             l1_deposit_op_id: event.deposit_op_id.0,
             vault_program_id,
             recipient_id: metadata.recipient_id,
-            amount: u128::from(event.amount),
+            amount: event.amount,
         },
     )
     .context("Failed to build bridge deposit message")?;
@@ -650,6 +655,58 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         message,
         witness_set,
     )))
+}
+
+#[must_use]
+fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
+    let LeeTransaction::Public(tx) = tx else {
+        return None;
+    };
+
+    let message = tx.message();
+    if message.program_id != lee::program::Program::bridge().id() {
+        return None;
+    }
+
+    let instruction =
+        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
+            .ok()?;
+
+    match instruction {
+        bridge_core::Instruction::Deposit {
+            l1_deposit_op_id, ..
+        } => Some(HashType(l1_deposit_op_id)),
+        bridge_core::Instruction::Withdraw { .. } => None,
+    }
+}
+
+#[must_use]
+fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<BridgeWithdrawData> {
+    let LeeTransaction::Public(tx) = tx else {
+        return None;
+    };
+
+    let message = tx.message();
+    if message.program_id != lee::program::Program::bridge().id() {
+        return None;
+    }
+
+    let instruction =
+        risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
+            .ok()?;
+
+    match instruction {
+        bridge_core::Instruction::Withdraw {
+            amount,
+            bedrock_account_pk,
+        } => Some(BridgeWithdrawData {
+            amount,
+            bedrock_account_pk,
+        }),
+        bridge_core::Instruction::Deposit { .. } => unreachable!(
+            "Deposit instructions from users should never pass validation, and thus should never be seen here"
+        ),
+    }
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.
@@ -788,7 +845,7 @@ mod tests {
                 l1_deposit_op_id,
                 amount,
                 ..
-            } if l1_deposit_op_id == deposit_op_id && amount == u128::from(expected_amount)
+            } if l1_deposit_op_id == deposit_op_id && amount == expected_amount
         )
     }
 

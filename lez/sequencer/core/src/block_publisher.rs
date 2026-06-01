@@ -3,8 +3,8 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use anyhow::{Context as _, Result};
 use common::block::Block;
 use log::warn;
-pub use logos_blockchain_core::mantle::ops::channel::MsgId;
-pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_core::mantle::{Note, ledger::Outputs};
+pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -12,9 +12,10 @@ use logos_blockchain_zone_sdk::{
     sequencer::{Event, SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
     state::{DepositInfo, FinalizedOp, InscriptionInfo},
 };
+use num_bigint::BigUint;
 use tokio::task::JoinHandle;
 
-use crate::config::BedrockConfig;
+use crate::{BridgeWithdrawData, config::BedrockConfig};
 
 /// Sink for `Event::Published` checkpoints emitted by the drive task.
 /// Caller is responsible for persistence (e.g. writing to rocksdb).
@@ -43,7 +44,11 @@ pub trait BlockPublisherTrait: Clone {
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
     /// retries internally; this just hands the payload off.
-    async fn publish_block(&self, block: &Block) -> Result<()>;
+    async fn publish_block(
+        &self,
+        block: &Block,
+        bridge_withdrawals: Vec<BridgeWithdrawData>,
+    ) -> Result<()>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -127,17 +132,42 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(&self, block: &Block) -> Result<()> {
+    async fn publish_block(
+        &self,
+        block: &Block,
+        bridge_withdrawals: Vec<BridgeWithdrawData>,
+    ) -> Result<()> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
-        self.handle
-            .publish_message(data_bounded)
-            .await
-            .context("Failed to publish block")?;
+        if bridge_withdrawals.is_empty() {
+            self.handle
+                .publish_message(data_bounded)
+                .await
+                .context("Failed to publish block")?;
+            return Ok(());
+        }
 
+        let withdraws = bridge_withdrawals
+            .into_iter()
+            .map(|withdrawal| {
+                let recipient_pk =
+                    logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
+                        BigUint::from_bytes_le(&withdrawal.bedrock_account_pk),
+                    );
+
+                logos_blockchain_zone_sdk::sequencer::WithdrawArg {
+                    outputs: Outputs::new(Note::new(withdrawal.amount, recipient_pk)),
+                }
+            })
+            .collect();
+
+        self.handle
+            .publish_atomic_withdraw(data_bounded, withdraws)
+            .await
+            .context("Failed to publish block with withdrawals")?;
         Ok(())
     }
 }
