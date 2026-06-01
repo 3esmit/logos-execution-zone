@@ -26,11 +26,11 @@ pub struct PersistentStorage {
 pub struct KeyChainPersistentData {
     pub accounts: Vec<PersistentAccountData>,
     #[serde(default)]
-    pub sealing_secret_key: Option<nssa_core::encryption::Scalar>,
+    pub sealing_secret_key: Option<lee_core::encryption::Scalar>,
     #[serde(default)]
     pub group_key_holders: BTreeMap<Label, GroupKeyHolder>,
     #[serde(default)]
-    pub shared_private_accounts: BTreeMap<nssa::AccountId, SharedAccountEntry>,
+    pub shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,14 +43,14 @@ pub enum PersistentAccountData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPublic {
-    pub account_id: nssa::AccountId,
+    pub account_id: lee::AccountId,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPublic,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPrivate {
-    pub account_id: nssa::AccountId,
+    pub account_id: lee::AccountId,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPrivatePersistent,
 }
@@ -59,7 +59,7 @@ pub struct PersistentAccountDataPrivate {
 pub struct ChildKeysPrivatePersistent {
     pub value: (
         key_protocol::key_management::KeyChain,
-        Vec<(nssa_core::PrivateAccountKind, nssa::Account)>,
+        Vec<(lee_core::PrivateAccountKind, lee::Account)>,
     ),
     pub ccc: [u8; 32],
     pub cci: Option<u32>,

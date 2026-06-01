@@ -3,7 +3,7 @@ on:
     paths:
       - "tools/crypto_primitives_bench/**"
       - "key_protocol/**"
-      - "nssa/core/**"
+      - "lee/core/**"
       - ".github/workflows/bench-regression.yml"
 
 permissions:

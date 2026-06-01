@@ -2,8 +2,8 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use nssa::{Account, PublicKey, program::Program};
-use nssa_core::Identifier;
+use lee::{Account, PublicKey, program::Program};
+use lee_core::Identifier;
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -195,13 +195,13 @@ impl WalletSubcommand for NewSubcommand {
                         .context("Invalid seed hex")?
                         .try_into()
                         .map_err(|_err| anyhow::anyhow!("Seed must be exactly 32 bytes"))?;
-                    let pda_seed = nssa_core::program::PdaSeed::new(seed_bytes);
+                    let pda_seed = lee_core::program::PdaSeed::new(seed_bytes);
 
                     let pid_bytes = hex::decode(&pid_hex).context("Invalid program ID hex")?;
                     if pid_bytes.len() != 32 {
                         anyhow::bail!("Program ID must be exactly 32 bytes");
                     }
-                    let mut pid: nssa_core::program::ProgramId = [0; 8];
+                    let mut pid: lee_core::program::ProgramId = [0; 8];
                     for (i, chunk) in pid_bytes.chunks_exact(4).enumerate() {
                         pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
                     }
@@ -429,7 +429,7 @@ pub enum ImportSubcommand {
     Public {
         /// Private key in hex format.
         #[arg(long)]
-        private_key: nssa::PrivateKey,
+        private_key: lee::PrivateKey,
     },
     /// Import a private account keychain and account state.
     Private {
@@ -456,7 +456,7 @@ impl WalletSubcommand for ImportSubcommand {
         match self {
             Self::Public { private_key } => {
                 let account_id =
-                    nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(&private_key));
+                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
                 wallet_core
                     .storage_mut()
@@ -477,9 +477,9 @@ impl WalletSubcommand for ImportSubcommand {
             } => {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
-                let account = nssa::Account::from(account_state);
+                let account = lee::Account::from(account_state);
                 let account_id =
-                    nssa::AccountId::from((&key_chain.nullifier_public_key, identifier));
+                    lee::AccountId::from((&key_chain.nullifier_public_key, identifier));
 
                 wallet_core
                     .storage_mut()

@@ -225,7 +225,7 @@ impl RocksDBIO {
             let acc_ids = tx
                 .affected_public_account_ids()
                 .into_iter()
-                .map(nssa::AccountId::into_value)
+                .map(lee::AccountId::into_value)
                 .collect::<Vec<_>>();
 
             for acc_id in acc_ids {

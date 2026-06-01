@@ -48,7 +48,7 @@ impl FfiBytes32 {
 
     /// Create from an `AccountId`.
     #[must_use]
-    pub const fn from_account_id(id: &nssa::AccountId) -> Self {
+    pub const fn from_account_id(id: &lee::AccountId) -> Self {
         Self { data: *id.value() }
     }
 }

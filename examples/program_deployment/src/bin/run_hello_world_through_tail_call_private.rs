@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nssa::{
+use lee::{
     AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
     program::Program,
 };

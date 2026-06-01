@@ -1,5 +1,5 @@
-use common::transaction::NSSATransaction;
-use nssa::{
+use common::transaction::LeeTransaction;
+use lee::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
@@ -73,7 +73,7 @@ async fn main() {
     // Submit the transaction
     let _response = wallet_core
         .sequencer_client
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();
 }

@@ -1,5 +1,5 @@
-use nssa::{Account, program::Program};
-use nssa_core::program::InstructionData;
+use lee::{Account, program::Program};
+use lee_core::program::InstructionData;
 
 use crate::{ExecutionFailureKind, WalletCore};
 

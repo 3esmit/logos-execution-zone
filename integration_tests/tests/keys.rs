@@ -12,8 +12,8 @@ use integration_tests::{
     public_mention, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+use lee::{AccountId, program::Program};
 use log::info;
-use nssa::{AccountId, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use key_protocol::key_management::KeyChain;
-use nssa_core::{
+use lee_core::{
     Commitment, EncryptionScheme, SharedSecretKey,
     account::{Account, AccountId},
     encryption::{EphemeralPublicKey, EphemeralSecretKey},

@@ -97,7 +97,7 @@ async fn new_public_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(
@@ -120,7 +120,7 @@ async fn new_private_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(

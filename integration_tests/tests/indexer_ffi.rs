@@ -26,8 +26,8 @@ use integration_tests::{
     BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention,
     public_mention, verify_commitment_is_in_state,
 };
+use lee::AccountId;
 use log::{debug, info};
-use nssa::AccountId;
 use tempfile::TempDir;
 use wallet::{
     account::Label,

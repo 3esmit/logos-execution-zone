@@ -2,7 +2,7 @@
 
 use std::{ffi::CString, ptr};
 
-use nssa::AccountId;
+use lee::AccountId;
 use wallet::{
     account::AccountIdWithPrivacy, cli::CliAccountMention,
     program_facades::native_token_transfer::NativeTokenTransfer,

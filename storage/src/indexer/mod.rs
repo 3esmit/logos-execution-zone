@@ -2,9 +2,9 @@ use std::{path::Path, sync::Arc};
 
 use common::{
     block::Block,
-    transaction::{NSSATransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation},
 };
-use nssa::{GENESIS_BLOCK_ID, V03State};
+use lee::{GENESIS_BLOCK_ID, V03State};
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
@@ -162,7 +162,7 @@ impl RocksDBIO {
         for mut block in self.get_block_batch_seq(
             start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
         )? {
-            let expected_clock = NSSATransaction::Public(clock_invocation(block.header.timestamp));
+            let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
 
             let clock_tx = block.body.transactions.pop().ok_or_else(|| {
                 DbError::db_interaction_error(
@@ -181,9 +181,9 @@ impl RocksDBIO {
                 let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
                 if is_genesis {
                     let genesis_tx = match transaction {
-                        NSSATransaction::Public(public_tx) => public_tx,
-                        NSSATransaction::PrivacyPreserving(_)
-                        | NSSATransaction::ProgramDeployment(_) => {
+                        LeeTransaction::Public(public_tx) => public_tx,
+                        LeeTransaction::PrivacyPreserving(_)
+                        | LeeTransaction::ProgramDeployment(_) => {
                             return Err(DbError::db_interaction_error(
                                 "Genesis block should contain only public transactions".to_owned(),
                             ));
@@ -221,7 +221,7 @@ impl RocksDBIO {
                 }
             }
 
-            let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+            let LeeTransaction::Public(clock_public_tx) = clock_tx else {
                 return Err(DbError::db_interaction_error(
                     "Clock invocation must be a public transaction".to_owned(),
                 ));
@@ -260,7 +260,7 @@ fn closest_breakpoint_id(block_id: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use common::test_utils::produce_dummy_block;
-    use nssa::{AccountId, PublicKey};
+    use lee::{AccountId, PublicKey};
     use tempfile::tempdir;
 
     use super::*;
@@ -269,12 +269,12 @@ mod tests {
         produce_dummy_block(1, None, vec![])
     }
 
-    fn acc1_sign_key() -> nssa::PrivateKey {
-        nssa::PrivateKey::try_new([1; 32]).unwrap()
+    fn acc1_sign_key() -> lee::PrivateKey {
+        lee::PrivateKey::try_new([1; 32]).unwrap()
     }
 
-    fn acc2_sign_key() -> nssa::PrivateKey {
-        nssa::PrivateKey::try_new([2; 32]).unwrap()
+    fn acc2_sign_key() -> lee::PrivateKey {
+        lee::PrivateKey::try_new([2; 32]).unwrap()
     }
 
     fn acc1() -> AccountId {
@@ -292,7 +292,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,
@@ -332,7 +332,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,
@@ -391,7 +391,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,
@@ -463,7 +463,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,
@@ -545,7 +545,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,
@@ -640,7 +640,7 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &nssa::V03State::new_with_genesis_accounts(
+            &lee::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
                 0,

@@ -37,7 +37,7 @@ pub enum WalletFfiError {
     SyncError = 13,
     /// Serialization/deserialization error.
     SerializationError = 14,
-    /// Invalid conversion from FFI types to NSSA types.
+    /// Invalid conversion from FFI types to LEE types.
     InvalidTypeConversion = 15,
     /// Invalid Key value.
     InvalidKeyValue = 16,

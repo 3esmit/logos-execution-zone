@@ -1,7 +1,7 @@
 language = "C"
 header = """
 /**
- * NSSA Wallet FFI Bindings
+ * LEE Wallet FFI Bindings
  *
  * Thread Safety: All functions are thread-safe. The wallet handle can be
  * shared across threads, but operations are serialized internally.

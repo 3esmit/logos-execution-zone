@@ -1,6 +1,6 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use common::{HashType, transaction::NSSATransaction};
-use nssa::{
+use common::{HashType, transaction::LeeTransaction};
+use lee::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
@@ -70,7 +70,7 @@ impl NativeTokenTransfer<'_> {
         Ok(self
             .0
             .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
+            .send_transaction(LeeTransaction::Public(tx))
             .await?)
     }
 
@@ -125,7 +125,7 @@ impl NativeTokenTransfer<'_> {
         Ok(self
             .0
             .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
+            .send_transaction(LeeTransaction::Public(tx))
             .await?)
     }
 }

@@ -1,6 +1,6 @@
 //! This crate defines the protocol types used by the indexer service.
 //!
-//! Currently it mostly mimics types from `nssa_core`, but it's important to have a separate crate
+//! Currently it mostly mimics types from `lee_core`, but it's important to have a separate crate
 //! to define a stable interface for the indexer service RPCs which evolves in its own way.
 
 use std::{fmt::Display, str::FromStr};

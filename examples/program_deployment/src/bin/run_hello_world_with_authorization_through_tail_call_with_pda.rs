@@ -3,13 +3,13 @@
     reason = "This is an example program, it's fine to print to stdout"
 )]
 
-use common::transaction::NSSATransaction;
-use nssa::{
+use common::transaction::LeeTransaction;
+use lee::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-use nssa_core::program::PdaSeed;
+use lee_core::program::PdaSeed;
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -58,7 +58,7 @@ async fn main() {
     // Submit the transaction
     let _response = wallet_core
         .sequencer_client
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();
 

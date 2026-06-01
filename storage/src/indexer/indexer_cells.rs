@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa::V03State;
+use lee::V03State;
 
 use crate::{
     CF_META_NAME, DbResult,

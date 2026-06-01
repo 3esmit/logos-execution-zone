@@ -1,31 +1,31 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee::{AccountId, V03State, ValidatedStateDiff};
+use lee_core::{BlockId, Timestamp};
 use log::warn;
-use nssa::{AccountId, V03State, ValidatedStateDiff};
-use nssa_core::{BlockId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::HashType;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum NSSATransaction {
-    Public(nssa::PublicTransaction),
-    PrivacyPreserving(nssa::PrivacyPreservingTransaction),
-    ProgramDeployment(nssa::ProgramDeploymentTransaction),
+pub enum LeeTransaction {
+    Public(lee::PublicTransaction),
+    PrivacyPreserving(lee::PrivacyPreservingTransaction),
+    ProgramDeployment(lee::ProgramDeploymentTransaction),
 }
 
-impl Serialize for NSSATransaction {
+impl Serialize for LeeTransaction {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         crate::borsh_base64::serialize(self, serializer)
     }
 }
 
-impl<'de> Deserialize<'de> for NSSATransaction {
+impl<'de> Deserialize<'de> for LeeTransaction {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         crate::borsh_base64::deserialize(deserializer)
     }
 }
 
-impl NSSATransaction {
+impl LeeTransaction {
     #[must_use]
     pub fn hash(&self) -> HashType {
         HashType(match self {
@@ -77,7 +77,7 @@ impl NSSATransaction {
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<ValidatedStateDiff, nssa::error::NssaError> {
+    ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = match self {
             Self::Public(tx) => {
                 ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
@@ -90,9 +90,9 @@ impl NSSATransaction {
             }
         }?;
 
-        let system_accounts = nssa::CLOCK_PROGRAM_ACCOUNT_IDS.iter().copied().chain([
-            nssa::system_faucet_account_id(),
-            nssa::system_bridge_account_id(),
+        let system_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS.iter().copied().chain([
+            lee::system_faucet_account_id(),
+            lee::system_bridge_account_id(),
         ]);
         for account_id in system_accounts {
             validate_doesnt_modify_account(state, &diff, account_id)?;
@@ -108,7 +108,7 @@ impl NSSATransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, nssa::error::NssaError> {
+    ) -> Result<Self, lee::error::LeeError> {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
@@ -117,20 +117,20 @@ impl NSSATransaction {
     }
 }
 
-impl From<nssa::PublicTransaction> for NSSATransaction {
-    fn from(value: nssa::PublicTransaction) -> Self {
+impl From<lee::PublicTransaction> for LeeTransaction {
+    fn from(value: lee::PublicTransaction) -> Self {
         Self::Public(value)
     }
 }
 
-impl From<nssa::PrivacyPreservingTransaction> for NSSATransaction {
-    fn from(value: nssa::PrivacyPreservingTransaction) -> Self {
+impl From<lee::PrivacyPreservingTransaction> for LeeTransaction {
+    fn from(value: lee::PrivacyPreservingTransaction) -> Self {
         Self::PrivacyPreserving(value)
     }
 }
 
-impl From<nssa::ProgramDeploymentTransaction> for NSSATransaction {
-    fn from(value: nssa::ProgramDeploymentTransaction) -> Self {
+impl From<lee::ProgramDeploymentTransaction> for LeeTransaction {
+    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
         Self::ProgramDeployment(value)
     }
 }
@@ -157,17 +157,17 @@ pub enum TransactionMalformationError {
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
 /// Every valid block must end with exactly one occurrence of this transaction.
 #[must_use]
-pub fn clock_invocation(timestamp: clock_core::Instruction) -> nssa::PublicTransaction {
-    let message = nssa::public_transaction::Message::try_new(
-        nssa::program::Program::clock().id(),
+pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
+    let message = lee::public_transaction::Message::try_new(
+        lee::program::Program::clock().id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
     )
     .expect("Clock invocation message should always be constructable");
-    nssa::PublicTransaction::new(
+    lee::PublicTransaction::new(
         message,
-        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
 }
 
@@ -175,13 +175,13 @@ fn validate_doesnt_modify_account(
     state: &V03State,
     diff: &ValidatedStateDiff,
     account_id: AccountId,
-) -> Result<(), nssa::error::NssaError> {
+) -> Result<(), lee::error::LeeError> {
     if diff
         .public_diff()
         .get(&account_id)
         .is_some_and(|post| *post != state.get_account_by_id(account_id))
     {
-        Err(nssa::error::NssaError::InvalidInput(format!(
+        Err(lee::error::LeeError::InvalidInput(format!(
             "Transaction modifies restricted system account {account_id}"
         )))
     } else {

@@ -4,11 +4,11 @@ use anyhow::{Context as _, Result};
 use common::{
     HashType,
     block::{Block, BlockMeta, MantleMsgId},
-    transaction::NSSATransaction,
+    transaction::LeeTransaction,
 };
+use lee::V03State;
 use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
-use nssa::V03State;
 pub use storage::DbResult;
 use storage::sequencer::RocksDBIO;
 
@@ -17,12 +17,12 @@ pub struct SequencerStore {
     // TODO: Consider adding the hashmap to the database for faster recovery.
     tx_hash_to_block_map: HashMap<HashType, u64>,
     genesis_id: u64,
-    signing_key: nssa::PrivateKey,
+    signing_key: lee::PrivateKey,
 }
 
 impl SequencerStore {
     /// Open existing database at the given location. Fails if no database is found.
-    pub fn open_db(location: &Path, signing_key: nssa::PrivateKey) -> DbResult<Self> {
+    pub fn open_db(location: &Path, signing_key: lee::PrivateKey) -> DbResult<Self> {
         let dbio = Arc::new(RocksDBIO::open(location)?);
         let genesis_id = dbio.get_meta_first_block_in_db()?;
         let last_id = dbio.latest_block_meta()?.id;
@@ -58,7 +58,7 @@ impl SequencerStore {
         genesis_block: &Block,
         genesis_msg_id: MantleMsgId,
         genesis_state: &V03State,
-        signing_key: nssa::PrivateKey,
+        signing_key: lee::PrivateKey,
     ) -> DbResult<Self> {
         let dbio = Arc::new(RocksDBIO::create(
             location,
@@ -99,7 +99,7 @@ impl SequencerStore {
 
     /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
     #[must_use]
-    pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<NSSATransaction> {
+    pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<LeeTransaction> {
         let block_id = *self.tx_hash_to_block_map.get(&hash)?;
         let block = self
             .get_block_at_id(block_id)
@@ -126,7 +126,7 @@ impl SequencerStore {
     }
 
     #[must_use]
-    pub const fn signing_key(&self) -> &nssa::PrivateKey {
+    pub const fn signing_key(&self) -> &lee::PrivateKey {
         &self.signing_key
     }
 
@@ -146,8 +146,8 @@ impl SequencerStore {
         Ok(())
     }
 
-    pub fn get_nssa_state(&self) -> DbResult<V03State> {
-        self.dbio.get_nssa_state()
+    pub fn get_lee_state(&self) -> DbResult<V03State> {
+        self.dbio.get_lee_state()
     }
 
     pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {

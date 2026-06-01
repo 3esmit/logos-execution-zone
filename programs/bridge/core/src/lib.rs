@@ -1,5 +1,5 @@
-pub use nssa_core::program::PdaSeed;
-use nssa_core::{account::AccountId, program::ProgramId};
+pub use lee_core::program::PdaSeed;
+use lee_core::{account::AccountId, program::ProgramId};
 use serde::{Deserialize, Serialize};
 
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";

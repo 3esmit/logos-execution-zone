@@ -12,19 +12,19 @@ use std::path::PathBuf;
 pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
-use common::{HashType, transaction::NSSATransaction};
+use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use log::info;
-use nssa::{
+use lee::{
     Account, AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
 };
-use nssa_core::{
+use lee_core::{
     Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
 };
+use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -46,18 +46,18 @@ pub mod program_facades;
 pub mod signing;
 pub mod storage;
 
-pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
+pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
 pub enum AccDecodeData {
     Skip,
-    Decode(nssa_core::SharedSecretKey, AccountId),
+    Decode(lee_core::SharedSecretKey, AccountId),
 }
 
 /// Info returned when creating a shared account.
 pub struct SharedAccountInfo {
     pub account_id: AccountId,
-    pub npk: nssa_core::NullifierPublicKey,
-    pub vpk: nssa_core::encryption::ViewingPublicKey,
+    pub npk: lee_core::NullifierPublicKey,
+    pub vpk: lee_core::encryption::ViewingPublicKey,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -75,7 +75,7 @@ pub enum ExecutionFailureKind {
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
     #[error("Failed to build transaction: {0}")]
-    TransactionBuildError(#[from] nssa::error::NssaError),
+    TransactionBuildError(#[from] lee::error::LeeError),
     #[error(transparent)]
     KeycardError(#[from] pyo3::PyErr),
 }
@@ -269,14 +269,14 @@ impl WalletCore {
     }
 
     /// Set the wallet's dedicated sealing secret key.
-    pub const fn set_sealing_secret_key(&mut self, key: nssa_core::encryption::Scalar) {
+    pub const fn set_sealing_secret_key(&mut self, key: lee_core::encryption::Scalar) {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
     /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
+    pub fn resolve_private_account(&self, account_id: lee::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
         if self
             .storage
@@ -338,9 +338,9 @@ impl WalletCore {
         &mut self,
         account_id: AccountId,
         group_label: Label,
-        identifier: nssa_core::Identifier,
-        pda_seed: Option<nssa_core::program::PdaSeed>,
-        authority_program_id: Option<nssa_core::program::ProgramId>,
+        identifier: lee_core::Identifier,
+        pda_seed: Option<lee_core::program::PdaSeed>,
+        authority_program_id: Option<lee_core::program::ProgramId>,
     ) {
         self.storage.key_chain_mut().insert_shared_private_account(
             account_id,
@@ -358,9 +358,9 @@ impl WalletCore {
     pub fn create_shared_pda_account(
         &mut self,
         group_name: Label,
-        pda_seed: nssa_core::program::PdaSeed,
-        program_id: nssa_core::program::ProgramId,
-        identifier: nssa_core::Identifier,
+        pda_seed: lee_core::program::PdaSeed,
+        program_id: lee_core::program::ProgramId,
+        identifier: lee_core::Identifier,
     ) -> Result<SharedAccountInfo> {
         let holder = self
             .storage
@@ -394,7 +394,7 @@ impl WalletCore {
         &mut self,
         group_name: Label,
     ) -> Result<SharedAccountInfo> {
-        let identifier: nssa_core::Identifier = rand::random();
+        let identifier: lee_core::Identifier = rand::random();
         let derivation_seed = {
             use sha2::Digest as _;
             let mut hasher = sha2::Sha256::new();
@@ -456,7 +456,7 @@ impl WalletCore {
     pub fn get_account_public_signing_key(
         &self,
         account_id: AccountId,
-    ) -> Option<&nssa::PrivateKey> {
+    ) -> Option<&lee::PrivateKey> {
         self.storage.key_chain().pub_account_signing_key(account_id)
     }
 
@@ -485,7 +485,7 @@ impl WalletCore {
     }
 
     /// Poll transactions.
-    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<NSSATransaction> {
+    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
         self.poller.poll_tx(hash).await
     }
 
@@ -505,7 +505,7 @@ impl WalletCore {
 
     pub fn decode_insert_privacy_preserving_transaction_results(
         &mut self,
-        tx: &nssa::privacy_preserving_transaction::PrivacyPreservingTransaction,
+        tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
         for (output_index, acc_decode_data) in acc_decode_mask.iter().enumerate() {
@@ -514,7 +514,7 @@ impl WalletCore {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
                     let acc_comm = tx.message.new_commitments[output_index].clone();
 
-                    let (kind, res_acc) = nssa_core::EncryptionScheme::decrypt(
+                    let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
@@ -569,7 +569,7 @@ impl WalletCore {
         )?;
 
         let private_account_keys = acc_manager.private_account_keys();
-        let (output, proof) = nssa::privacy_preserving_transaction::circuit::execute_and_prove(
+        let (output, proof) = lee::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
             acc_manager.account_identities(),
@@ -578,7 +578,7 @@ impl WalletCore {
         .unwrap();
 
         let message =
-            nssa::privacy_preserving_transaction::message::Message::try_from_circuit_output(
+            lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(
                 acc_manager.public_account_ids(),
                 Vec::from_iter(acc_manager.public_account_nonces()),
                 private_account_keys
@@ -589,12 +589,11 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set =
-            nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                &message,
-                proof,
-                &acc_manager.public_account_auth(),
-            );
+        let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+            &message,
+            proof,
+            &acc_manager.public_account_auth(),
+        );
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -604,7 +603,7 @@ impl WalletCore {
 
         Ok((
             self.sequencer_client
-                .send_transaction(NSSATransaction::PrivacyPreserving(tx))
+                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
                 .await?,
             shared_secrets,
         ))
@@ -630,7 +629,7 @@ impl WalletCore {
         // Public transaction, all accounts must be public
         if accounts.iter().any(AccountIdentity::is_private) {
             return Err(ExecutionFailureKind::TransactionBuildError(
-                nssa::error::NssaError::InvalidInput(
+                lee::error::LeeError::InvalidInput(
                     "Private accounts are not allowed in public transactions".to_owned(),
                 ),
             ));
@@ -651,21 +650,20 @@ impl WalletCore {
         let nonces = acc_manager.public_account_nonces();
         let private_keys = acc_manager.public_account_auth();
 
-        let message = nssa::public_transaction::Message::new_preserialized(
+        let message = lee::public_transaction::Message::new_preserialized(
             program_id,
             account_ids,
             nonces,
             instruction_data,
         );
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &private_keys);
 
-        let tx = nssa::public_transaction::PublicTransaction::new(message, witness_set);
+        let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
         Ok(self
             .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
+            .send_transaction(LeeTransaction::Public(tx))
             .await?)
     }
 
@@ -716,8 +714,8 @@ impl WalletCore {
         Ok(())
     }
 
-    fn sync_private_accounts_with_tx(&mut self, tx: NSSATransaction) {
-        let NSSATransaction::PrivacyPreserving(tx) = tx else {
+    fn sync_private_accounts_with_tx(&mut self, tx: LeeTransaction) {
+        let LeeTransaction::PrivacyPreserving(tx) = tx else {
             return;
         };
 
@@ -745,7 +743,7 @@ impl WalletCore {
                             index.and_then(ChainIndex::index),
                         );
 
-                        nssa_core::EncryptionScheme::decrypt(
+                        lee_core::EncryptionScheme::decrypt(
                             ciphertext,
                             &shared_secret,
                             commitment,
@@ -755,7 +753,7 @@ impl WalletCore {
                         )
                         .map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
-                            let account_id = nssa::AccountId::for_private_account(npk, &kind);
+                            let account_id = lee::AccountId::for_private_account(npk, &kind);
                             (account_id, kind, res_acc)
                         })
                     })
@@ -828,7 +826,7 @@ impl WalletCore {
                 let shared_secret = SharedSecretKey::new(vsk, &encrypted_data.epk);
                 let commitment = &tx.message.new_commitments[ciph_id];
 
-                if let Some((_kind, new_acc)) = nssa_core::EncryptionScheme::decrypt(
+                if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
                     &encrypted_data.ciphertext,
                     &shared_secret,
                     commitment,

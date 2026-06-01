@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use nssa::AccountId;
+use lee::AccountId;
 
 use crate::{
     WalletCore,

@@ -12,8 +12,8 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
+use lee::AccountId;
 use log::info;
-use nssa::AccountId;
 use wallet::{
     account::Label,
     cli::{CliAccountMention, Command, programs::native_token_transfer::AuthTransferSubcommand},

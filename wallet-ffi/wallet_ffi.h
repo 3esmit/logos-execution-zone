@@ -1,5 +1,5 @@
 /**
- * NSSA Wallet FFI Bindings
+ * LEE Wallet FFI Bindings
  *
  * Thread Safety: All functions are thread-safe. The wallet handle can be
  * shared across threads, but operations are serialized internally.
@@ -24,7 +24,7 @@
 #ifndef WALLET_FFI_H
 #define WALLET_FFI_H
 
-/* Generated with cbindgen:0.29.2 */
+/* Generated with cbindgen:0.29.3 */
 
 #include <stdarg.h>
 #include <stdbool.h>
@@ -96,7 +96,7 @@ typedef enum WalletFfiError {
    */
   SERIALIZATION_ERROR = 14,
   /**
-   * Invalid conversion from FFI types to NSSA types.
+   * Invalid conversion from FFI types to LEE types.
    */
   INVALID_TYPE_CONVERSION = 15,
   /**
@@ -175,7 +175,7 @@ typedef struct FfiU128 {
 } FfiU128;
 
 /**
- * Account data structure - C-compatible version of nssa Account.
+ * Account data structure - C-compatible version of lee Account.
  *
  * Note: `balance` and `nonce` are u128 values represented as little-endian
  * byte arrays since C doesn't have native u128 support.

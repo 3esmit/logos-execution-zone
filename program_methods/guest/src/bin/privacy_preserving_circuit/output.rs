@@ -1,4 +1,4 @@
-use nssa_core::{
+use lee_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, InputAccountIdentity,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,

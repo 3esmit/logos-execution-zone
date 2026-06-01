@@ -10,8 +10,8 @@ workspace = true
 [dependencies]
 common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
-nssa.workspace = true
-nssa_core.workspace = true
+lee.workspace = true
+lee_core.workspace = true
 storage.workspace = true
 testnet_initial_state.workspace = true
 

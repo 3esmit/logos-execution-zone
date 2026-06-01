@@ -11,7 +11,7 @@ use key_protocol::key_management::{
     key_tree::{KeyTreePrivate, KeyTreePublic},
     secret_holders::SeedHolder,
 };
-use nssa_core::BlockId;
+use lee_core::BlockId;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
@@ -205,13 +205,13 @@ mod tests {
             .key_chain_mut()
             .generate_new_privacy_preserving_transaction_key_chain(None);
 
-        let private_key = nssa::PrivateKey::new_os_random();
+        let private_key = lee::PrivateKey::new_os_random();
         storage
             .key_chain_mut()
             .add_imported_public_account(private_key);
 
         let key_chain = key_protocol::key_management::KeyChain::new_os_random();
-        let account = nssa::Account::default();
+        let account = lee::Account::default();
         storage
             .key_chain_mut()
             .add_imported_private_account(key_chain, None, 0, account);
@@ -232,7 +232,7 @@ mod tests {
         let (mut storage, _) = Storage::new("test_pass").unwrap();
 
         let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(nssa::AccountId::default());
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
 
         storage.add_label(label.clone(), account_id).unwrap();
         assert_eq!(storage.resolve_label(&label), Some(account_id));
@@ -251,7 +251,7 @@ mod tests {
         let (mut storage, _) = Storage::new("test_pass").unwrap();
 
         let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(nssa::AccountId::default());
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
 
         storage.add_label(label.clone(), account_id).unwrap();
         let another_label = Label::new("another_label");
@@ -269,7 +269,7 @@ mod tests {
         let (mut storage, _) = Storage::new("test_pass").unwrap();
 
         let label = Label::new("test_label");
-        let account_id = AccountIdWithPrivacy::Public(nssa::AccountId::default());
+        let account_id = AccountIdWithPrivacy::Public(lee::AccountId::default());
 
         assert!(storage.check_label_availability(&label).is_ok());
         storage.add_label(label.clone(), account_id).unwrap();

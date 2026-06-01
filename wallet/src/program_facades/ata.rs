@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use ata_core::{compute_ata_seed, get_associated_token_account_id};
 use common::HashType;
-use nssa::{
+use lee::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use nssa_core::SharedSecretKey;
+use lee_core::SharedSecretKey;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 

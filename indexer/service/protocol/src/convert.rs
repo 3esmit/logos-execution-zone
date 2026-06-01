@@ -1,6 +1,6 @@
-//! Conversions between `indexer_service_protocol` types and `nssa/nssa_core` types.
+//! Conversions between `indexer_service_protocol` types and `lee/lee_core` types.
 
-use nssa_core::account::Nonce;
+use lee_core::account::Nonce;
 
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,
@@ -26,24 +26,24 @@ impl From<ProgramId> for [u32; 8] {
     }
 }
 
-impl From<nssa_core::account::AccountId> for AccountId {
-    fn from(value: nssa_core::account::AccountId) -> Self {
+impl From<lee_core::account::AccountId> for AccountId {
+    fn from(value: lee_core::account::AccountId) -> Self {
         Self {
             value: value.into_value(),
         }
     }
 }
 
-impl From<AccountId> for nssa_core::account::AccountId {
+impl From<AccountId> for lee_core::account::AccountId {
     fn from(value: AccountId) -> Self {
         let AccountId { value } = value;
         Self::new(value)
     }
 }
 
-impl From<nssa_core::account::Account> for Account {
-    fn from(value: nssa_core::account::Account) -> Self {
-        let nssa_core::account::Account {
+impl From<lee_core::account::Account> for Account {
+    fn from(value: lee_core::account::Account) -> Self {
+        let lee_core::account::Account {
             program_owner,
             balance,
             data,
@@ -59,8 +59,8 @@ impl From<nssa_core::account::Account> for Account {
     }
 }
 
-impl TryFrom<Account> for nssa_core::account::Account {
-    type Error = nssa_core::account::data::DataTooBigError;
+impl TryFrom<Account> for lee_core::account::Account {
+    type Error = lee_core::account::data::DataTooBigError;
 
     fn try_from(value: Account) -> Result<Self, Self::Error> {
         let Account {
@@ -79,14 +79,14 @@ impl TryFrom<Account> for nssa_core::account::Account {
     }
 }
 
-impl From<nssa_core::account::Data> for Data {
-    fn from(value: nssa_core::account::Data) -> Self {
+impl From<lee_core::account::Data> for Data {
+    fn from(value: lee_core::account::Data) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl TryFrom<Data> for nssa_core::account::Data {
-    type Error = nssa_core::account::data::DataTooBigError;
+impl TryFrom<Data> for lee_core::account::Data {
+    type Error = lee_core::account::data::DataTooBigError;
 
     fn try_from(value: Data) -> Result<Self, Self::Error> {
         Self::try_from(value.0)
@@ -97,37 +97,37 @@ impl TryFrom<Data> for nssa_core::account::Data {
 // Commitment and Nullifier conversions
 // ============================================================================
 
-impl From<nssa_core::Commitment> for Commitment {
-    fn from(value: nssa_core::Commitment) -> Self {
+impl From<lee_core::Commitment> for Commitment {
+    fn from(value: lee_core::Commitment) -> Self {
         Self(value.to_byte_array())
     }
 }
 
-impl From<Commitment> for nssa_core::Commitment {
+impl From<Commitment> for lee_core::Commitment {
     fn from(value: Commitment) -> Self {
         Self::from_byte_array(value.0)
     }
 }
 
-impl From<nssa_core::Nullifier> for Nullifier {
-    fn from(value: nssa_core::Nullifier) -> Self {
+impl From<lee_core::Nullifier> for Nullifier {
+    fn from(value: lee_core::Nullifier) -> Self {
         Self(value.to_byte_array())
     }
 }
 
-impl From<Nullifier> for nssa_core::Nullifier {
+impl From<Nullifier> for lee_core::Nullifier {
     fn from(value: Nullifier) -> Self {
         Self::from_byte_array(value.0)
     }
 }
 
-impl From<nssa_core::CommitmentSetDigest> for CommitmentSetDigest {
-    fn from(value: nssa_core::CommitmentSetDigest) -> Self {
+impl From<lee_core::CommitmentSetDigest> for CommitmentSetDigest {
+    fn from(value: lee_core::CommitmentSetDigest) -> Self {
         Self(value)
     }
 }
 
-impl From<CommitmentSetDigest> for nssa_core::CommitmentSetDigest {
+impl From<CommitmentSetDigest> for lee_core::CommitmentSetDigest {
     fn from(value: CommitmentSetDigest) -> Self {
         value.0
     }
@@ -137,25 +137,25 @@ impl From<CommitmentSetDigest> for nssa_core::CommitmentSetDigest {
 // Encryption-related conversions
 // ============================================================================
 
-impl From<nssa_core::encryption::Ciphertext> for Ciphertext {
-    fn from(value: nssa_core::encryption::Ciphertext) -> Self {
+impl From<lee_core::encryption::Ciphertext> for Ciphertext {
+    fn from(value: lee_core::encryption::Ciphertext) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl From<Ciphertext> for nssa_core::encryption::Ciphertext {
+impl From<Ciphertext> for lee_core::encryption::Ciphertext {
     fn from(value: Ciphertext) -> Self {
         Self::from_inner(value.0)
     }
 }
 
-impl From<nssa_core::encryption::EphemeralPublicKey> for EphemeralPublicKey {
-    fn from(value: nssa_core::encryption::EphemeralPublicKey) -> Self {
+impl From<lee_core::encryption::EphemeralPublicKey> for EphemeralPublicKey {
+    fn from(value: lee_core::encryption::EphemeralPublicKey) -> Self {
         Self(value.0)
     }
 }
 
-impl From<EphemeralPublicKey> for nssa_core::encryption::EphemeralPublicKey {
+impl From<EphemeralPublicKey> for lee_core::encryption::EphemeralPublicKey {
     fn from(value: EphemeralPublicKey) -> Self {
         Self(value.0)
     }
@@ -165,28 +165,28 @@ impl From<EphemeralPublicKey> for nssa_core::encryption::EphemeralPublicKey {
 // Signature and PublicKey conversions
 // ============================================================================
 
-impl From<nssa::Signature> for Signature {
-    fn from(value: nssa::Signature) -> Self {
-        let nssa::Signature { value } = value;
+impl From<lee::Signature> for Signature {
+    fn from(value: lee::Signature) -> Self {
+        let lee::Signature { value } = value;
         Self(value)
     }
 }
 
-impl From<Signature> for nssa::Signature {
+impl From<Signature> for lee::Signature {
     fn from(value: Signature) -> Self {
         let Signature(sig_value) = value;
         Self { value: sig_value }
     }
 }
 
-impl From<nssa::PublicKey> for PublicKey {
-    fn from(value: nssa::PublicKey) -> Self {
+impl From<lee::PublicKey> for PublicKey {
+    fn from(value: lee::PublicKey) -> Self {
         Self(*value.value())
     }
 }
 
-impl TryFrom<PublicKey> for nssa::PublicKey {
-    type Error = nssa::error::NssaError;
+impl TryFrom<PublicKey> for lee::PublicKey {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: PublicKey) -> Result<Self, Self::Error> {
         Self::try_new(value.0)
@@ -197,13 +197,13 @@ impl TryFrom<PublicKey> for nssa::PublicKey {
 // Proof conversions
 // ============================================================================
 
-impl From<nssa::privacy_preserving_transaction::circuit::Proof> for Proof {
-    fn from(value: nssa::privacy_preserving_transaction::circuit::Proof) -> Self {
+impl From<lee::privacy_preserving_transaction::circuit::Proof> for Proof {
+    fn from(value: lee::privacy_preserving_transaction::circuit::Proof) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl From<Proof> for nssa::privacy_preserving_transaction::circuit::Proof {
+impl From<Proof> for lee::privacy_preserving_transaction::circuit::Proof {
     fn from(value: Proof) -> Self {
         Self::from_inner(value.0)
     }
@@ -213,10 +213,10 @@ impl From<Proof> for nssa::privacy_preserving_transaction::circuit::Proof {
 // EncryptedAccountData conversions
 // ============================================================================
 
-impl From<nssa::privacy_preserving_transaction::message::EncryptedAccountData>
+impl From<lee::privacy_preserving_transaction::message::EncryptedAccountData>
     for EncryptedAccountData
 {
-    fn from(value: nssa::privacy_preserving_transaction::message::EncryptedAccountData) -> Self {
+    fn from(value: lee::privacy_preserving_transaction::message::EncryptedAccountData) -> Self {
         Self {
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
@@ -226,7 +226,7 @@ impl From<nssa::privacy_preserving_transaction::message::EncryptedAccountData>
 }
 
 impl From<EncryptedAccountData>
-    for nssa::privacy_preserving_transaction::message::EncryptedAccountData
+    for lee::privacy_preserving_transaction::message::EncryptedAccountData
 {
     fn from(value: EncryptedAccountData) -> Self {
         Self {
@@ -241,9 +241,9 @@ impl From<EncryptedAccountData>
 // Transaction Message conversions
 // ============================================================================
 
-impl From<nssa::public_transaction::Message> for PublicMessage {
-    fn from(value: nssa::public_transaction::Message) -> Self {
-        let nssa::public_transaction::Message {
+impl From<lee::public_transaction::Message> for PublicMessage {
+    fn from(value: lee::public_transaction::Message) -> Self {
+        let lee::public_transaction::Message {
             program_id,
             account_ids,
             nonces,
@@ -258,7 +258,7 @@ impl From<nssa::public_transaction::Message> for PublicMessage {
     }
 }
 
-impl From<PublicMessage> for nssa::public_transaction::Message {
+impl From<PublicMessage> for lee::public_transaction::Message {
     fn from(value: PublicMessage) -> Self {
         let PublicMessage {
             program_id,
@@ -271,16 +271,16 @@ impl From<PublicMessage> for nssa::public_transaction::Message {
             account_ids.into_iter().map(Into::into).collect(),
             nonces
                 .iter()
-                .map(|x| nssa_core::account::Nonce(*x))
+                .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             instruction_data,
         )
     }
 }
 
-impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
-    fn from(value: nssa::privacy_preserving_transaction::message::Message) -> Self {
-        let nssa::privacy_preserving_transaction::message::Message {
+impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
+    fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
+        let lee::privacy_preserving_transaction::message::Message {
             public_account_ids,
             nonces,
             public_post_states,
@@ -309,8 +309,8 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
     }
 }
 
-impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction::message::Message {
-    type Error = nssa::error::NssaError;
+impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::message::Message {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
@@ -327,13 +327,13 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces
                 .iter()
-                .map(|x| nssa_core::account::Nonce(*x))
+                .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             public_post_states: public_post_states
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
+                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
             encrypted_private_post_states: encrypted_private_post_states
                 .into_iter()
                 .map(Into::into)
@@ -345,23 +345,23 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
                 .collect(),
             block_validity_window: block_validity_window
                 .try_into()
-                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
+                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
-                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
+                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
         })
     }
 }
 
-impl From<nssa::program_deployment_transaction::Message> for ProgramDeploymentMessage {
-    fn from(value: nssa::program_deployment_transaction::Message) -> Self {
+impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
+    fn from(value: lee::program_deployment_transaction::Message) -> Self {
         Self {
             bytecode: value.into_bytecode(),
         }
     }
 }
 
-impl From<ProgramDeploymentMessage> for nssa::program_deployment_transaction::Message {
+impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
     fn from(value: ProgramDeploymentMessage) -> Self {
         let ProgramDeploymentMessage { bytecode } = value;
         Self::new(bytecode)
@@ -372,8 +372,8 @@ impl From<ProgramDeploymentMessage> for nssa::program_deployment_transaction::Me
 // WitnessSet conversions
 // ============================================================================
 
-impl From<nssa::public_transaction::WitnessSet> for WitnessSet {
-    fn from(value: nssa::public_transaction::WitnessSet) -> Self {
+impl From<lee::public_transaction::WitnessSet> for WitnessSet {
+    fn from(value: lee::public_transaction::WitnessSet) -> Self {
         Self {
             signatures_and_public_keys: value
                 .signatures_and_public_keys()
@@ -385,8 +385,8 @@ impl From<nssa::public_transaction::WitnessSet> for WitnessSet {
     }
 }
 
-impl From<nssa::privacy_preserving_transaction::witness_set::WitnessSet> for WitnessSet {
-    fn from(value: nssa::privacy_preserving_transaction::witness_set::WitnessSet) -> Self {
+impl From<lee::privacy_preserving_transaction::witness_set::WitnessSet> for WitnessSet {
+    fn from(value: lee::privacy_preserving_transaction::witness_set::WitnessSet) -> Self {
         let (sigs_and_pks, proof) = value.into_raw_parts();
         Self {
             signatures_and_public_keys: sigs_and_pks
@@ -398,8 +398,8 @@ impl From<nssa::privacy_preserving_transaction::witness_set::WitnessSet> for Wit
     }
 }
 
-impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::WitnessSet {
-    type Error = nssa::error::NssaError;
+impl TryFrom<WitnessSet> for lee::privacy_preserving_transaction::witness_set::WitnessSet {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: WitnessSet) -> Result<Self, Self::Error> {
         let WitnessSet {
@@ -415,7 +415,7 @@ impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::
             signatures_and_public_keys,
             proof
                 .map(Into::into)
-                .ok_or_else(|| nssa::error::NssaError::InvalidInput("Missing proof".to_owned()))?,
+                .ok_or_else(|| lee::error::LeeError::InvalidInput("Missing proof".to_owned()))?,
         ))
     }
 }
@@ -424,10 +424,10 @@ impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::
 // Transaction conversions
 // ============================================================================
 
-impl From<nssa::PublicTransaction> for PublicTransaction {
-    fn from(value: nssa::PublicTransaction) -> Self {
+impl From<lee::PublicTransaction> for PublicTransaction {
+    fn from(value: lee::PublicTransaction) -> Self {
         let hash = HashType(value.hash());
-        let nssa::PublicTransaction {
+        let lee::PublicTransaction {
             message,
             witness_set,
         } = value;
@@ -440,8 +440,8 @@ impl From<nssa::PublicTransaction> for PublicTransaction {
     }
 }
 
-impl TryFrom<PublicTransaction> for nssa::PublicTransaction {
-    type Error = nssa::error::NssaError;
+impl TryFrom<PublicTransaction> for lee::PublicTransaction {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: PublicTransaction) -> Result<Self, Self::Error> {
         let PublicTransaction {
@@ -456,7 +456,7 @@ impl TryFrom<PublicTransaction> for nssa::PublicTransaction {
 
         Ok(Self::new(
             message.into(),
-            nssa::public_transaction::WitnessSet::from_raw_parts(
+            lee::public_transaction::WitnessSet::from_raw_parts(
                 signatures_and_public_keys
                     .into_iter()
                     .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
@@ -466,10 +466,10 @@ impl TryFrom<PublicTransaction> for nssa::PublicTransaction {
     }
 }
 
-impl From<nssa::PrivacyPreservingTransaction> for PrivacyPreservingTransaction {
-    fn from(value: nssa::PrivacyPreservingTransaction) -> Self {
+impl From<lee::PrivacyPreservingTransaction> for PrivacyPreservingTransaction {
+    fn from(value: lee::PrivacyPreservingTransaction) -> Self {
         let hash = HashType(value.hash());
-        let nssa::PrivacyPreservingTransaction {
+        let lee::PrivacyPreservingTransaction {
             message,
             witness_set,
         } = value;
@@ -482,8 +482,8 @@ impl From<nssa::PrivacyPreservingTransaction> for PrivacyPreservingTransaction {
     }
 }
 
-impl TryFrom<PrivacyPreservingTransaction> for nssa::PrivacyPreservingTransaction {
-    type Error = nssa::error::NssaError;
+impl TryFrom<PrivacyPreservingTransaction> for lee::PrivacyPreservingTransaction {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: PrivacyPreservingTransaction) -> Result<Self, Self::Error> {
         let PrivacyPreservingTransaction {
@@ -496,10 +496,10 @@ impl TryFrom<PrivacyPreservingTransaction> for nssa::PrivacyPreservingTransactio
     }
 }
 
-impl From<nssa::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
-    fn from(value: nssa::ProgramDeploymentTransaction) -> Self {
+impl From<lee::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
+    fn from(value: lee::ProgramDeploymentTransaction) -> Self {
         let hash = HashType(value.hash());
-        let nssa::ProgramDeploymentTransaction { message } = value;
+        let lee::ProgramDeploymentTransaction { message } = value;
 
         Self {
             hash,
@@ -508,29 +508,29 @@ impl From<nssa::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
     }
 }
 
-impl From<ProgramDeploymentTransaction> for nssa::ProgramDeploymentTransaction {
+impl From<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
     fn from(value: ProgramDeploymentTransaction) -> Self {
         let ProgramDeploymentTransaction { hash: _, message } = value;
         Self::new(message.into())
     }
 }
 
-impl From<common::transaction::NSSATransaction> for Transaction {
-    fn from(value: common::transaction::NSSATransaction) -> Self {
+impl From<common::transaction::LeeTransaction> for Transaction {
+    fn from(value: common::transaction::LeeTransaction) -> Self {
         match value {
-            common::transaction::NSSATransaction::Public(tx) => Self::Public(tx.into()),
-            common::transaction::NSSATransaction::PrivacyPreserving(tx) => {
+            common::transaction::LeeTransaction::Public(tx) => Self::Public(tx.into()),
+            common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                 Self::PrivacyPreserving(tx.into())
             }
-            common::transaction::NSSATransaction::ProgramDeployment(tx) => {
+            common::transaction::LeeTransaction::ProgramDeployment(tx) => {
                 Self::ProgramDeployment(tx.into())
             }
         }
     }
 }
 
-impl TryFrom<Transaction> for common::transaction::NSSATransaction {
-    type Error = nssa::error::NssaError;
+impl TryFrom<Transaction> for common::transaction::LeeTransaction {
+    type Error = lee::error::LeeError;
 
     fn try_from(value: Transaction) -> Result<Self, Self::Error> {
         match value {
@@ -565,7 +565,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
 }
 
 impl TryFrom<BlockHeader> for common::block::BlockHeader {
-    type Error = nssa::error::NssaError;
+    type Error = lee::error::LeeError;
 
     fn try_from(value: BlockHeader) -> Result<Self, Self::Error> {
         let BlockHeader {
@@ -592,11 +592,11 @@ impl From<common::block::BlockBody> for BlockBody {
         let transactions = transactions
             .into_iter()
             .map(|tx| match tx {
-                common::transaction::NSSATransaction::Public(tx) => Transaction::Public(tx.into()),
-                common::transaction::NSSATransaction::PrivacyPreserving(tx) => {
+                common::transaction::LeeTransaction::Public(tx) => Transaction::Public(tx.into()),
+                common::transaction::LeeTransaction::PrivacyPreserving(tx) => {
                     Transaction::PrivacyPreserving(tx.into())
                 }
-                common::transaction::NSSATransaction::ProgramDeployment(tx) => {
+                common::transaction::LeeTransaction::ProgramDeployment(tx) => {
                     Transaction::ProgramDeployment(tx.into())
                 }
             })
@@ -607,7 +607,7 @@ impl From<common::block::BlockBody> for BlockBody {
 }
 
 impl TryFrom<BlockBody> for common::block::BlockBody {
-    type Error = nssa::error::NssaError;
+    type Error = lee::error::LeeError;
 
     fn try_from(value: BlockBody) -> Result<Self, Self::Error> {
         let BlockBody { transactions } = value;
@@ -615,8 +615,8 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
         let transactions = transactions
             .into_iter()
             .map(|tx| {
-                let nssa_tx: common::transaction::NSSATransaction = tx.try_into()?;
-                Ok::<_, nssa::error::NssaError>(nssa_tx)
+                let lee_tx: common::transaction::LeeTransaction = tx.try_into()?;
+                Ok::<_, lee::error::LeeError>(lee_tx)
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -643,7 +643,7 @@ impl From<common::block::Block> for Block {
 }
 
 impl TryFrom<Block> for common::block::Block {
-    type Error = nssa::error::NssaError;
+    type Error = lee::error::LeeError;
 
     fn try_from(value: Block) -> Result<Self, Self::Error> {
         let Block {
@@ -698,14 +698,14 @@ impl From<HashType> for common::HashType {
 // ValidityWindow conversions
 // ============================================================================
 
-impl From<nssa_core::program::ValidityWindow<u64>> for ValidityWindow {
-    fn from(value: nssa_core::program::ValidityWindow<u64>) -> Self {
+impl From<lee_core::program::ValidityWindow<u64>> for ValidityWindow {
+    fn from(value: lee_core::program::ValidityWindow<u64>) -> Self {
         Self((value.start(), value.end()))
     }
 }
 
-impl TryFrom<ValidityWindow> for nssa_core::program::ValidityWindow<u64> {
-    type Error = nssa_core::program::InvalidWindow;
+impl TryFrom<ValidityWindow> for lee_core::program::ValidityWindow<u64> {
+    type Error = lee_core::program::InvalidWindow;
 
     fn try_from(value: ValidityWindow) -> Result<Self, Self::Error> {
         value.0.try_into()

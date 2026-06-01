@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use base58::{FromBase58 as _, ToBase58 as _};
 use derive_more::Display;
-use nssa::AccountId;
+use lee::AccountId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -54,7 +54,7 @@ pub enum AccountIdWithPrivacyParseError {
     #[error("Invalid format, expected 'Public/{{account_id}}' or 'Private/{{account_id}}'")]
     InvalidFormat,
     #[error("Invalid account id")]
-    InvalidAccountId(#[from] nssa_core::account::AccountIdError),
+    InvalidAccountId(#[from] lee_core::account::AccountIdError),
 }
 
 impl FromStr for AccountIdWithPrivacy {
@@ -95,8 +95,8 @@ impl std::fmt::Display for HumanReadableAccount {
     }
 }
 
-impl From<nssa::Account> for HumanReadableAccount {
-    fn from(account: nssa::Account) -> Self {
+impl From<lee::Account> for HumanReadableAccount {
+    fn from(account: lee::Account) -> Self {
         let program_owner = account
             .program_owner
             .iter()
@@ -113,7 +113,7 @@ impl From<nssa::Account> for HumanReadableAccount {
     }
 }
 
-impl From<HumanReadableAccount> for nssa::Account {
+impl From<HumanReadableAccount> for lee::Account {
     fn from(account: HumanReadableAccount) -> Self {
         let mut program_owner_bytes = [0_u8; 32];
         let decoded_program_owner = account
@@ -143,7 +143,7 @@ impl From<HumanReadableAccount> for nssa::Account {
             balance: account.balance,
             program_owner,
             data,
-            nonce: nssa_core::account::Nonce(account.nonce),
+            nonce: lee_core::account::Nonce(account.nonce),
         }
     }
 }

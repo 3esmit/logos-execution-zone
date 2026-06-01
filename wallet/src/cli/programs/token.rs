@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
-use common::transaction::NSSATransaction;
-use nssa::AccountId;
+use common::transaction::LeeTransaction;
+use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
@@ -736,7 +736,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![
                         Decode(secret_sender, sender_account_id),
                         Decode(secret_recipient, recipient_account_id),
@@ -762,12 +762,12 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let recipient_npk_res = hex::decode(recipient_npk)?;
                 let mut recipient_npk = [0; 32];
                 recipient_npk.copy_from_slice(&recipient_npk_res);
-                let recipient_npk = nssa_core::NullifierPublicKey(recipient_npk);
+                let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
                 let recipient_vpk_res = hex::decode(recipient_vpk)?;
                 let mut recipient_vpk = [0_u8; 33];
                 recipient_vpk.copy_from_slice(&recipient_vpk_res);
-                let recipient_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
+                let recipient_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
                     recipient_vpk.to_vec(),
                 );
 
@@ -785,7 +785,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -815,7 +815,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![
                         Decode(secret_definition, definition_account_id),
                         Decode(secret_holder, holder_account_id),
@@ -848,7 +848,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![
                         Decode(secret_definition, definition_account_id),
                         Decode(secret_holder, holder_account_id),
@@ -874,12 +874,12 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let holder_npk_res = hex::decode(holder_npk)?;
                 let mut holder_npk = [0; 32];
                 holder_npk.copy_from_slice(&holder_npk_res);
-                let holder_npk = nssa_core::NullifierPublicKey(holder_npk);
+                let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
                 let holder_vpk_res = hex::decode(holder_vpk)?;
                 let mut holder_vpk = [0_u8; 33];
                 holder_vpk.copy_from_slice(&holder_vpk_res);
-                let holder_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
+                let holder_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
                     holder_vpk.to_vec(),
                 );
 
@@ -897,7 +897,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -937,7 +937,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -967,7 +967,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -997,7 +997,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -1030,12 +1030,12 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let recipient_npk_res = hex::decode(recipient_npk)?;
                 let mut recipient_npk = [0; 32];
                 recipient_npk.copy_from_slice(&recipient_npk_res);
-                let recipient_npk = nssa_core::NullifierPublicKey(recipient_npk);
+                let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
                 let recipient_vpk_res = hex::decode(recipient_vpk)?;
                 let mut recipient_vpk = [0_u8; 33];
                 recipient_vpk.copy_from_slice(&recipient_vpk_res);
-                let recipient_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
+                let recipient_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
                     recipient_vpk.to_vec(),
                 );
 
@@ -1053,7 +1053,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     println!("Transaction data is {:?}", tx.message);
                 }
 
@@ -1078,7 +1078,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_recipient, recipient_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -1108,7 +1108,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -1138,7 +1138,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -1161,12 +1161,12 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let holder_npk_res = hex::decode(holder_npk)?;
                 let mut holder_npk = [0; 32];
                 holder_npk.copy_from_slice(&holder_npk_res);
-                let holder_npk = nssa_core::NullifierPublicKey(holder_npk);
+                let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
                 let holder_vpk_res = hex::decode(holder_vpk)?;
                 let mut holder_vpk = [0_u8; 33];
                 holder_vpk.copy_from_slice(&holder_vpk_res);
-                let holder_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
+                let holder_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
                     holder_vpk.to_vec(),
                 );
 
@@ -1184,7 +1184,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     println!("Transaction data is {:?}", tx.message);
                 }
 
@@ -1221,7 +1221,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![
                         Decode(secret_definition, definition_account_id),
                         Decode(secret_supply, supply_account_id),
@@ -1256,7 +1256,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
@@ -1288,7 +1288,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_supply, supply_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(

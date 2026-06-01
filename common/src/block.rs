@@ -1,10 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa_core::BlockId;
-pub use nssa_core::Timestamp;
+use lee_core::BlockId;
+pub use lee_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
-use crate::{HashType, transaction::NSSATransaction};
+use crate::{HashType, transaction::LeeTransaction};
 pub type MantleMsgId = [u8; 32];
 pub type BlockHash = HashType;
 
@@ -35,12 +35,12 @@ pub struct BlockHeader {
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
     pub timestamp: Timestamp,
-    pub signature: nssa::Signature,
+    pub signature: lee::Signature,
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
-    pub transactions: Vec<NSSATransaction>,
+    pub transactions: Vec<LeeTransaction>,
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -75,14 +75,14 @@ pub struct HashableBlockData {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
     pub timestamp: Timestamp,
-    pub transactions: Vec<NSSATransaction>,
+    pub transactions: Vec<LeeTransaction>,
 }
 
 impl HashableBlockData {
     #[must_use]
     pub fn into_pending_block(
         self,
-        signing_key: &nssa::PrivateKey,
+        signing_key: &lee::PrivateKey,
         bedrock_parent_id: MantleMsgId,
     ) -> Block {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
@@ -98,7 +98,7 @@ impl HashableBlockData {
         bytes.extend_from_slice(&data_bytes);
 
         let hash = OwnHasher::hash(&bytes);
-        let signature = nssa::Signature::new(signing_key, &hash.0);
+        let signature = lee::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {
                 block_id: self.block_id,

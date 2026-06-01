@@ -12,8 +12,8 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 wallet.workspace = true
-nssa.workspace = true
-nssa_core.workspace = true
+lee.workspace = true
+lee_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 
 tokio.workspace = true
@@ -28,4 +28,4 @@ tempfile = "3"
 
 [features]
 default = ["prove"]
-prove = ["nssa/prove"]
+prove = ["lee/prove"]

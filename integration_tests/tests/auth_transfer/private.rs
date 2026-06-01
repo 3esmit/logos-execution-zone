@@ -1,20 +1,20 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention, verify_commitment_is_in_state,
 };
-use log::info;
-use nssa::{
+use lee::{
     AccountId, SharedSecretKey, execute_and_prove,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use nssa_core::{
+use lee_core::{
     InputAccountIdentity, NullifierPublicKey, account::AccountWithMetadata,
     encryption::shared_key_derivation::Secp256k1Point,
 };
+use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -639,20 +639,20 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
     )?;
-    let deploy_tx = NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
-        nssa::program_deployment_transaction::Message::new(binary.clone()),
+    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+        lee::program_deployment_transaction::Message::new(binary.clone()),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     info!("Waiting for deploy block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_account_id = nssa::system_faucet_account_id();
+    let faucet_account_id = lee::system_faucet_account_id();
     let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = Program::faucet().id();
     let vault_program_id = Program::vault().id();
     let auth_transfer_program_id = Program::authenticated_transfer_program().id();
-    let nsk: nssa_core::NullifierSecretKey = [3; 32];
+    let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = Secp256k1Point::from_scalar([4; 32]);
     let ssk = SharedSecretKey::new([55; 32], &vpk);

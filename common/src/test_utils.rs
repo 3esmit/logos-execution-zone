@@ -1,16 +1,16 @@
-use nssa::AccountId;
+use lee::AccountId;
 
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
-    transaction::{NSSATransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation},
 };
 
 // Helpers
 
 #[must_use]
-pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
-    nssa::PrivateKey::try_new([37; 32]).unwrap()
+pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
+    lee::PrivateKey::try_new([37; 32]).unwrap()
 }
 
 // Dummy producers
@@ -26,9 +26,9 @@ pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
 pub fn produce_dummy_block(
     id: u64,
     prev_hash: Option<HashType>,
-    mut transactions: Vec<NSSATransaction>,
+    mut transactions: Vec<LeeTransaction>,
 ) -> Block {
-    transactions.push(NSSATransaction::Public(clock_invocation(
+    transactions.push(LeeTransaction::Public(clock_invocation(
         id.saturating_mul(100),
     )));
 
@@ -43,23 +43,23 @@ pub fn produce_dummy_block(
 }
 
 #[must_use]
-pub fn produce_dummy_empty_transaction() -> NSSATransaction {
-    let program_id = nssa::program::Program::authenticated_transfer_program().id();
+pub fn produce_dummy_empty_transaction() -> LeeTransaction {
+    let program_id = lee::program::Program::authenticated_transfer_program().id();
     let account_ids = vec![];
     let nonces = vec![];
-    let message = nssa::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::try_new(
         program_id,
         account_ids,
         nonces,
         authenticated_transfer_core::Instruction::Initialize,
     )
     .unwrap();
-    let private_key = nssa::PrivateKey::try_new([1; 32]).unwrap();
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[&private_key]);
+    let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&private_key]);
 
-    let nssa_tx = nssa::PublicTransaction::new(message, witness_set);
+    let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
-    NSSATransaction::Public(nssa_tx)
+    LeeTransaction::Public(lee_tx)
 }
 
 #[must_use]
@@ -68,12 +68,12 @@ pub fn create_transaction_native_token_transfer(
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: &nssa::PrivateKey,
-) -> NSSATransaction {
+    signing_key: &lee::PrivateKey,
+) -> LeeTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
-    let program_id = nssa::program::Program::authenticated_transfer_program().id();
-    let message = nssa::public_transaction::Message::try_new(
+    let program_id = lee::program::Program::authenticated_transfer_program().id();
+    let message = lee::public_transaction::Message::try_new(
         program_id,
         account_ids,
         nonces,
@@ -82,9 +82,9 @@ pub fn create_transaction_native_token_transfer(
         },
     )
     .unwrap();
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
 
-    let nssa_tx = nssa::PublicTransaction::new(message, witness_set);
+    let lee_tx = lee::PublicTransaction::new(message, witness_set);
 
-    NSSATransaction::Public(nssa_tx)
+    LeeTransaction::Public(lee_tx)
 }

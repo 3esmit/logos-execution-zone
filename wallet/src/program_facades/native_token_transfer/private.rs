@@ -1,8 +1,8 @@
 use std::vec;
 
 use common::HashType;
-use nssa::{AccountId, program::Program};
-use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use lee::{AccountId, program::Program};
+use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};

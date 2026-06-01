@@ -8,8 +8,13 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use lee::{
+    AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
+    public_transaction,
+};
+use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use log::info;
 use logos_blockchain_core::mantle::{Value, ledger::Inputs, ops::channel::deposit::DepositOp};
 use logos_blockchain_http_api_common::bodies::{
@@ -19,11 +24,6 @@ use logos_blockchain_http_api_common::bodies::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
 };
-use nssa::{
-    AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
-    public_transaction,
-};
-use nssa_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
@@ -34,7 +34,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
-    let bridge_account_id = nssa::system_bridge_account_id();
+    let bridge_account_id = lee::system_bridge_account_id();
     let vault_program_id = Program::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
@@ -50,9 +50,9 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     )
     .context("Failed to build public bridge deposit transaction")?;
 
-    let attack_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+    let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,
-        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
     let bridge_balance_before = ctx
@@ -93,7 +93,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
-    let bridge_account_id = nssa::system_bridge_account_id();
+    let bridge_account_id = lee::system_bridge_account_id();
     let vault_program_id = Program::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
@@ -115,7 +115,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Create program with dependencies
     let program_with_deps =
-        nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
+        lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             Program::bridge(),
             [
                 (vault_program_id, Program::vault()),
@@ -154,7 +154,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     .context("Failed to build privacy-preserving bridge deposit message")?;
 
     let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-    let attack_tx = NSSATransaction::PrivacyPreserving(nssa::PrivacyPreservingTransaction::new(
+    let attack_tx = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
         message,
         witness_set,
     ));
@@ -413,7 +413,7 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
 
     let claim_witness_set =
         public_transaction::WitnessSet::for_message(&claim_message, &[signing_key]);
-    let claim_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+    let claim_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         claim_message,
         claim_witness_set,
     ));

@@ -3,13 +3,13 @@ use std::{path::Path, sync::Arc};
 use anyhow::{Context as _, Result};
 use common::{
     block::{BedrockStatus, Block},
-    transaction::{NSSATransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation},
 };
+use lee::{Account, AccountId, V03State};
+use lee_core::BlockId;
 use log::info;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
-use nssa::{Account, AccountId, V03State};
-use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
@@ -53,7 +53,7 @@ impl IndexerStore {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
-    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<NSSATransaction>> {
+    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<LeeTransaction>> {
         let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
             return Ok(None);
         };
@@ -79,7 +79,7 @@ impl IndexerStore {
         acc_id: [u8; 32],
         offset: u64,
         limit: u64,
-    ) -> Result<Vec<NSSATransaction>> {
+    ) -> Result<Vec<LeeTransaction>> {
         Ok(self.dbio.get_acc_transactions(acc_id, offset, limit)?)
     }
 
@@ -146,7 +146,7 @@ impl IndexerStore {
                 .ok_or_else(|| anyhow::anyhow!("Block has no transactions"))?;
 
             anyhow::ensure!(
-                *clock_tx == NSSATransaction::Public(clock_invocation(block.header.timestamp)),
+                *clock_tx == LeeTransaction::Public(clock_invocation(block.header.timestamp)),
                 "Last transaction in block must be the clock invocation for the block timestamp"
             );
 
@@ -154,9 +154,9 @@ impl IndexerStore {
             for transaction in user_txs {
                 if is_genesis {
                     let genesis_tx = match transaction {
-                        NSSATransaction::Public(public_tx) => public_tx,
-                        NSSATransaction::PrivacyPreserving(_)
-                        | NSSATransaction::ProgramDeployment(_) => {
+                        LeeTransaction::Public(public_tx) => public_tx,
+                        LeeTransaction::PrivacyPreserving(_)
+                        | LeeTransaction::ProgramDeployment(_) => {
                             anyhow::bail!("Genesis block should contain only public transactions")
                         }
                     };
@@ -180,7 +180,7 @@ impl IndexerStore {
             }
 
             // Apply the clock invocation directly (it is expected to modify clock accounts).
-            let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+            let LeeTransaction::Public(clock_public_tx) = clock_tx else {
                 anyhow::bail!("Clock invocation must be a public transaction");
             };
             state_guard.transition_from_public_transaction(
@@ -231,7 +231,7 @@ mod tests {
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
         // Submit genesis block
-        let clock_tx = NSSATransaction::Public(clock_invocation(0));
+        let clock_tx = LeeTransaction::Public(clock_invocation(0));
         let genesis_block_data = HashableBlockData {
             block_id: 1,
             prev_block_hash: HashType::default(),
