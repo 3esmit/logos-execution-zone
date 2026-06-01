@@ -1,6 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result};
 use common::block::Block;
 use log::warn;
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
@@ -10,7 +10,7 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{Event, SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
-    state::InscriptionInfo,
+    state::{DepositInfo, FinalizedOp, InscriptionInfo},
 };
 use tokio::task::JoinHandle;
 
@@ -18,12 +18,16 @@ use crate::config::BedrockConfig;
 
 /// Sink for `Event::Published` checkpoints emitted by the drive task.
 /// Caller is responsible for persistence (e.g. writing to rocksdb).
-pub type CheckpointSink = Box<dyn Fn(SequencerCheckpoint) + Send + Sync + 'static>;
+pub type CheckpointSink = Box<dyn Fn(SequencerCheckpoint) + Send + 'static>;
 
 /// Sink for finalized L2 block ids derived from `Event::TxsFinalized` and
 /// `Event::FinalizedInscriptions`. Caller is responsible for cleanup
 /// (e.g. marking pending blocks as finalized in storage).
-pub type FinalizedBlockSink = Box<dyn Fn(u64) + Send + Sync + 'static>;
+pub type FinalizedBlockSink = Box<dyn Fn(u64) + Send + 'static>;
+
+/// Sink for finalized Bedrock deposit events.
+pub type OnDepositEventSink =
+    Box<dyn Fn(DepositInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
@@ -34,6 +38,7 @@ pub trait BlockPublisherTrait: Clone {
         initial_checkpoint: Option<SequencerCheckpoint>,
         on_checkpoint: CheckpointSink,
         on_finalized_block: FinalizedBlockSink,
+        on_deposit_event: OnDepositEventSink,
     ) -> Result<Self>;
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
@@ -65,6 +70,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         initial_checkpoint: Option<SequencerCheckpoint>,
         on_checkpoint: CheckpointSink,
         on_finalized_block: FinalizedBlockSink,
+        on_deposit_event: OnDepositEventSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
@@ -89,10 +95,20 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                 };
                 match event {
                     Event::Published { checkpoint, .. } => on_checkpoint(checkpoint),
-                    Event::TxsFinalized { inscriptions, .. }
-                    | Event::FinalizedInscriptions { inscriptions } => {
-                        if let Some(max_block_id) = max_block_id_from_inscriptions(&inscriptions) {
-                            on_finalized_block(max_block_id);
+                    Event::TxsFinalized { items } => {
+                        for op in items.into_iter().flat_map(|item| item.ops) {
+                            match op {
+                                FinalizedOp::Inscription(inscription) => {
+                                    if let Some(block_id) = block_id_from_inscription(&inscription)
+                                    {
+                                        on_finalized_block(block_id);
+                                    }
+                                }
+                                FinalizedOp::Deposit(deposit) => {
+                                    on_deposit_event(deposit).await;
+                                }
+                                FinalizedOp::Withdraw(_) => {}
+                            }
                         }
                     }
                     Event::ChannelUpdate { .. } | Event::Ready => {}
@@ -110,27 +126,26 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
     async fn publish_block(&self, block: &Block) -> Result<()> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
+        let data_bounded = data
+            .try_into()
+            .context("Block data exceeds maximum allowed size")?;
+
         self.handle
-            .publish_message(data)
+            .publish_message(data_bounded)
             .await
-            .map_err(|e| anyhow!("zone-sdk publish failed: {e}"))?;
+            .context("Failed to publish block")?;
+
         Ok(())
     }
 }
 
-/// Deserialize each inscription payload as a `Block` and return the highest
-/// `block_id`. Bad payloads are logged and skipped.
-fn max_block_id_from_inscriptions(inscriptions: &[InscriptionInfo]) -> Option<u64> {
-    inscriptions
-        .iter()
-        .filter_map(
-            |inscription| match borsh::from_slice::<Block>(&inscription.payload) {
-                Ok(block) => Some(block.header.block_id),
-                Err(err) => {
-                    warn!("Failed to deserialize finalized inscription as Block: {err:#}");
-                    None
-                }
-            },
-        )
-        .max()
+/// Deserialize inscription payload as a `Block` and return it's`block_id`.
+/// Bad payloads are logged and skipped.
+fn block_id_from_inscription(inscription: &InscriptionInfo) -> Option<u64> {
+    borsh::from_slice::<Block>(&inscription.payload)
+        .inspect_err(|err| {
+            warn!("Failed to deserialize block from inscription: {err:?}");
+        })
+        .ok()
+        .map(|block| block.header.block_id)
 }

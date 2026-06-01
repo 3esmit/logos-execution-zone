@@ -11,6 +11,7 @@ use mempool::MemPoolHandle;
 use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
+use sequencer_core::TransactionOrigin;
 pub use sequencer_core::config::*;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
@@ -55,15 +56,14 @@ impl SequencerHandle {
         } = &mut self;
 
         let server_handle = server_handle.take().expect("Server handle is set");
-
         tokio::select! {
             () = server_handle.stopped() => {
                 Err(anyhow!("RPC Server stopped"))
             }
             res = main_loop_handle => {
                 res
-                   .context("Main loop task panicked")?
-                   .context("Main loop exited unexpectedly")
+                    .context("Main loop task panicked")?
+                    .context("Main loop exited unexpectedly")
             }
         }
     }
@@ -120,10 +120,11 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
     info!("Sequencer core set up");
 
     let seq_core_wrapped = Arc::new(Mutex::new(sequencer_core));
+    let mempool_handle_for_server = mempool_handle.clone();
 
     let (server_handle, addr) = run_server(
         Arc::clone(&seq_core_wrapped),
-        mempool_handle,
+        mempool_handle_for_server,
         port,
         max_block_size.as_u64(),
     )
@@ -133,12 +134,14 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
     info!("Starting main sequencer loop");
     let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
 
+    let _ = mempool_handle;
+
     Ok(SequencerHandle::new(addr, server_handle, main_loop_handle))
 }
 
 async fn run_server(
     sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<NSSATransaction>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
     port: u16,
     max_block_size: u64,
 ) -> Result<(ServerHandle, SocketAddr)> {

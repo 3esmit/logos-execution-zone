@@ -10,6 +10,7 @@ use std::{
     fs::File,
     io::Write as _,
     net::SocketAddr,
+    time::Duration,
 };
 
 use anyhow::{Context as _, Result};
@@ -34,7 +35,7 @@ use wallet::{
 };
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
-const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
+const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 
 unsafe extern "C" {
     unsafe fn query_last_block(
@@ -114,7 +115,7 @@ fn indexer_test_run_ffi() -> Result<()> {
     let (ctx, indexer_ffi, _indexer_dir) = setup()?;
 
     // RUN OBSERVATION
-    std::thread::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS));
+    std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     // Safety: ctx runtime is valid for the lifetime of the returned Runtime
     let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
@@ -138,7 +139,7 @@ fn indexer_ffi_block_batching() -> Result<()> {
 
     // WAIT
     info!("Waiting for indexer to parse blocks");
-    std::thread::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS));
+    std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     // Safety: ctx runtime is valid for the lifetime of the returned Runtime
     let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
@@ -265,7 +266,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 
     // WAIT
     info!("Waiting for indexer to parse blocks");
-    std::thread::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS));
+    std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     // Safety: ctx runtime is valid for the lifetime of the returned Runtime
     let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
@@ -371,7 +372,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
     assert_eq!(acc_2_balance, 20100);
 
     info!("Waiting for indexer to parse blocks");
-    std::thread::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS));
+    std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     // Safety: ctx runtime is valid for the lifetime of the returned Runtime
     let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };

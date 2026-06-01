@@ -7,8 +7,14 @@ use integration_tests::{
     public_mention, verify_commitment_is_in_state,
 };
 use log::info;
-use nssa::{AccountId, program::Program};
-use nssa_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
+use nssa::{
+    AccountId, SharedSecretKey, execute_and_prove,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
+use nssa_core::{
+    InputAccountIdentity, NullifierPublicKey, account::AccountWithMetadata,
+    encryption::shared_key_derivation::Secp256k1Point,
+};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -626,13 +632,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 }
 
 #[test]
-async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
-    use nssa::{
-        EphemeralPublicKey, SharedSecretKey, execute_and_prove,
-        privacy_preserving_transaction::{self, circuit::ProgramWithDependencies},
-    };
-    use nssa_core::{InputAccountIdentity, account::AccountWithMetadata};
-
+async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let binary = std::fs::read(
@@ -656,7 +656,6 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = Secp256k1Point::from_scalar([4; 32]);
     let ssk = SharedSecretKey::new([55; 32], &vpk);
-    let epk = EphemeralPublicKey::from_scalar([55; 32]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
         AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)
@@ -695,7 +694,7 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let instruction =
         Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
 
-    let (output, proof) = execute_and_prove(
+    let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],
         instruction,
         vec![
@@ -708,47 +707,9 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
             },
         ],
         &program_with_deps,
-    )?;
+    );
 
-    let message = privacy_preserving_transaction::Message::try_from_circuit_output(
-        vec![faucet_account_id],
-        vec![],
-        vec![(npk, vpk, epk)],
-        output,
-    )?;
-    let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-    let attack_ppt = NSSATransaction::PrivacyPreserving(nssa::PrivacyPreservingTransaction::new(
-        message,
-        witness_set,
-    ));
-
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
-
-    let tx_hash = ctx.sequencer_client().send_transaction(attack_ppt).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
-
-    assert_eq!(faucet_balance_after, faucet_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
-    assert!(tx_on_chain.is_none());
+    assert!(res.is_err());
 
     Ok(())
 }

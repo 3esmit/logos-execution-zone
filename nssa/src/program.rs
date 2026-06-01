@@ -10,8 +10,9 @@ use crate::{
     error::NssaError,
     program_methods::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, FAUCET_ELF,
-        FAUCET_ID, PINATA_ELF, PINATA_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID,
+        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID, CLOCK_ELF,
+        CLOCK_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF,
+        VAULT_ID,
     },
 };
 
@@ -164,6 +165,14 @@ impl Program {
             elf: FAUCET_ELF.to_vec(),
         }
     }
+
+    #[must_use]
+    pub fn bridge() -> Self {
+        Self {
+            id: BRIDGE_ID,
+            elf: BRIDGE_ELF.to_vec(),
+        }
+    }
 }
 
 // TODO: Testnet only. Refactor to prevent compilation on mainnet.
@@ -194,9 +203,9 @@ mod tests {
         program::Program,
         program_methods::{
             AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, FAUCET_ELF,
-            FAUCET_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, TOKEN_ELF,
-            TOKEN_ID, VAULT_ELF, VAULT_ID,
+            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
+            CLOCK_ELF, CLOCK_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF,
+            PINATA_TOKEN_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID,
         },
     };
 
@@ -529,6 +538,7 @@ mod tests {
         let token_program = Program::token();
         let vault_program = Program::vault();
         let faucet_program = Program::faucet();
+        let bridge_program = Program::bridge();
         let pinata_program = Program::pinata();
 
         assert_eq!(auth_transfer_program.id, AUTHENTICATED_TRANSFER_ID);
@@ -539,6 +549,8 @@ mod tests {
         assert_eq!(vault_program.elf, VAULT_ELF);
         assert_eq!(faucet_program.id, FAUCET_ID);
         assert_eq!(faucet_program.elf, FAUCET_ELF);
+        assert_eq!(bridge_program.id, BRIDGE_ID);
+        assert_eq!(bridge_program.elf, BRIDGE_ELF);
         assert_eq!(pinata_program.id, PINATA_ID);
         assert_eq!(pinata_program.elf, PINATA_ELF);
     }
@@ -551,6 +563,7 @@ mod tests {
             (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
             (CLOCK_ELF, CLOCK_ID),
             (FAUCET_ELF, FAUCET_ID),
+            (BRIDGE_ELF, BRIDGE_ID),
             (PINATA_ELF, PINATA_ID),
             (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
             (TOKEN_ELF, TOKEN_ID),

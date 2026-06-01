@@ -8,14 +8,25 @@ const FAUCET_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/FaucetSeed/000000000
 pub enum Instruction {
     /// Transfers native tokens from system faucet to recipient's vault.
     ///
+    /// Executed only in genesis block by sequencer it-self. User transactions will be denied.
+    ///
     /// Required accounts (2):
     /// - Faucet PDA account
     /// - Recipient vault PDA account
-    Transfer {
+    GenesisTransferVault {
         vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u128,
     },
+
+    /// Transfers native tokens from system faucet directly to a recipient account.
+    ///
+    /// Executed only in genesis block by sequencer it-self. User transactions will be denied.
+    ///
+    /// Required accounts (2):
+    /// - Faucet PDA account
+    /// - Recipient account
+    GenesisTransferDirect { amount: u128 },
 }
 
 #[must_use]

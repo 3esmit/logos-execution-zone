@@ -48,6 +48,14 @@ pub struct MemPoolHandle<T> {
     sender: Sender<T>,
 }
 
+impl<T> Clone for MemPoolHandle<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+        }
+    }
+}
+
 impl<T> MemPoolHandle<T> {
     const fn new(sender: Sender<T>) -> Self {
         Self { sender }

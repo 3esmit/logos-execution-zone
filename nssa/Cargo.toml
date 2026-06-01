@@ -11,6 +11,7 @@ workspace = true
 nssa_core = { workspace = true, features = ["host"] }
 clock_core.workspace = true
 faucet_core.workspace = true
+bridge_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
