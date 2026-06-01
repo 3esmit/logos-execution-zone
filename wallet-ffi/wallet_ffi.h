@@ -114,7 +114,7 @@ typedef enum WalletFfiError {
 } WalletFfiError;
 
 /**
- * Enumeration to represent kinds of `FfiAccountManagerAccountIdentity`.
+ * Enumeration to represent kinds of `FfiAccountIdentity`.
  */
 typedef enum FfiAccountIdentityKind {
   PUBLIC = 0,
@@ -225,7 +225,7 @@ typedef struct SerializationHelperResult {
 } SerializationHelperResult;
 
 /**
- * Struct representing of account identity, given to `AccountManager` at intialization.
+ * Struct representing an account identity, given to `AccountManager` at intialization.
  */
 typedef struct FfiAccountIdentity {
   enum FfiAccountIdentityKind kind;
@@ -268,7 +268,7 @@ typedef struct FfiTransactionResult {
   bool success;
   const struct FfiBytes32 *secrets_data;
   /**
-   * Public transaction have 0 secrets.
+   * Public transactions have 0 secrets.
    */
   uintptr_t secrets_size;
 } FfiTransactionResult;
@@ -710,14 +710,14 @@ enum WalletFfiError wallet_ffi_account_id_from_base58(const char *base58_str,
  *
  * # Parameters
  * - `account_id`: 32 bytes of the public account ID
- * - `needs_sign`: does account needs signing
+ * - `needs_sign`: whether the account needs signing
  * - `out_account_identity`: valid pointer, where output will be written
  *
  * # Returns
  * - `Success` on successful retrieval
  *
  * # Safety
- * - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+ * - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
  */
 enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_id,
                                                       bool needs_sign,
@@ -733,12 +733,12 @@ enum WalletFfiError wallet_ffi_resolve_public_account(struct FfiBytes32 account_
  *
  * # Returns
  * - `Success` on successful retrieval
- * - `InternalError` if wailed to lock wallet
- * - `AccountNotFound` if failed to found account
+ * - `InternalError` if failed to lock wallet
+ * - `AccountNotFound` if the account is not found
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+ * - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
  */
 enum WalletFfiError wallet_ffi_resolve_private_account(struct WalletHandle *handle,
                                                        struct FfiBytes32 account_id,

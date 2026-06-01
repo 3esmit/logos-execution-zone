@@ -257,20 +257,25 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
 ///
 /// # Parameters
 /// - `account_id`: 32 bytes of the public account ID
-/// - `needs_sign`: does account needs signing
+/// - `needs_sign`: whether the account needs signing
 /// - `out_account_identity`: valid pointer, where output will be written
 ///
 /// # Returns
 /// - `Success` on successful retrieval
 ///
 /// # Safety
-/// - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_resolve_public_account(
     account_id: FfiBytes32,
     needs_sign: bool,
     out_account_identity: *mut FfiAccountIdentity,
 ) -> WalletFfiError {
+    if out_account_identity.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
     let resolved_account = if needs_sign {
         AccountIdentity::Public(account_id.into())
     } else {
@@ -293,18 +298,23 @@ pub unsafe extern "C" fn wallet_ffi_resolve_public_account(
 ///
 /// # Returns
 /// - `Success` on successful retrieval
-/// - `InternalError` if wailed to lock wallet
-/// - `AccountNotFound` if failed to found account
+/// - `InternalError` if failed to lock wallet
+/// - `AccountNotFound` if the account is not found
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `out_account_identity` must be a valid pointer to a `FfiAccountManagerAccountIdentity` struct
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_resolve_private_account(
     handle: *mut WalletHandle,
     account_id: FfiBytes32,
     out_account_identity: *mut FfiAccountIdentity,
 ) -> WalletFfiError {
+    if out_account_identity.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,

@@ -179,8 +179,9 @@ impl FfiPrivateAccountKeys {
     }
 }
 
-/// Enumeration to represent kinds of `FfiAccountManagerAccountIdentity`.
+/// Enumeration to represent kinds of `FfiAccountIdentity`.
 #[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfiAccountIdentityKind {
     Public = 0,
     PublicNoSign = 1,
@@ -192,7 +193,7 @@ pub enum FfiAccountIdentityKind {
     PrivatePdaShared = 7,
 }
 
-/// Struct representing of account identity, given to `AccountManager` at intialization.
+/// Struct representing an account identity, given to `AccountManager` at intialization.
 #[repr(C)]
 pub struct FfiAccountIdentity {
     pub kind: FfiAccountIdentityKind,
@@ -432,7 +433,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 };
 
                 Self {
-                    kind: FfiAccountIdentityKind::PrivateShared,
+                    kind: FfiAccountIdentityKind::PrivatePdaShared,
                     account_id: account_id.into(),
                     nullifier_secret_key: nsk.into(),
                     nullifier_public_key: npk.0.into(),
@@ -537,5 +538,123 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nssa::{AccountId, PrivateKey, PublicKey};
+    use nssa_core::{encryption::ViewingPublicKey, program::PdaSeed, PrivateAccountKind};
+    use wallet::AccountIdentity;
+
+    use crate::{FfiAccountIdentity, FfiAccountIdentityKind};
+
+    #[test]
+    fn account_identity_roundtrip() {
+        let private_key = PrivateKey::try_new([42; 32]).unwrap();
+        let public_key = PublicKey::new_from_private_key(&private_key);
+        let pub_acc_id = (&public_key).into();
+
+        let nsk = [43; 32];
+        let vpk = ViewingPublicKey::from_scalar([44; 32]);
+        let npk = (&nsk).into();
+        let identifier = u128::from_le_bytes([45; 16]);
+
+        let private_reg_acc_id =
+            AccountId::for_private_account(&npk, &PrivateAccountKind::Regular(identifier));
+        let private_pda_acc_id = AccountId::for_private_account(
+            &npk,
+            &PrivateAccountKind::Pda {
+                program_id: [46; 8],
+                seed: PdaSeed::new([47; 32]),
+                identifier,
+            },
+        );
+
+        let acc_identity_1 = AccountIdentity::Public(pub_acc_id);
+        let acc_identity_2 = AccountIdentity::PublicNoSign(pub_acc_id);
+        let acc_identity_3 = AccountIdentity::PrivateOwned(private_reg_acc_id);
+        let acc_identity_4 = AccountIdentity::PrivateForeign {
+            npk,
+            vpk: vpk.clone(),
+            identifier,
+        };
+        let acc_identity_5 = AccountIdentity::PrivatePdaOwned(private_pda_acc_id);
+        let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
+            account_id: private_pda_acc_id,
+            npk,
+            vpk: vpk.clone(),
+            identifier,
+        };
+        let acc_identity_7 = AccountIdentity::PrivateShared {
+            nsk,
+            npk,
+            vpk: vpk.clone(),
+            identifier,
+        };
+        let acc_identity_8 = AccountIdentity::PrivatePdaShared {
+            account_id: private_pda_acc_id,
+            nsk,
+            npk,
+            vpk,
+            identifier,
+        };
+
+        let ffi_acc_identity_1: FfiAccountIdentity = acc_identity_1.clone().into();
+        let ffi_acc_identity_2: FfiAccountIdentity = acc_identity_2.clone().into();
+        let ffi_acc_identity_3: FfiAccountIdentity = acc_identity_3.clone().into();
+        let ffi_acc_identity_4: FfiAccountIdentity = acc_identity_4.clone().into();
+        let ffi_acc_identity_5: FfiAccountIdentity = acc_identity_5.clone().into();
+        let ffi_acc_identity_6: FfiAccountIdentity = acc_identity_6.clone().into();
+        let ffi_acc_identity_7: FfiAccountIdentity = acc_identity_7.clone().into();
+        let ffi_acc_identity_8: FfiAccountIdentity = acc_identity_8.clone().into();
+
+        assert_eq!(ffi_acc_identity_1.kind, FfiAccountIdentityKind::Public);
+        assert_eq!(
+            ffi_acc_identity_2.kind,
+            FfiAccountIdentityKind::PublicNoSign
+        );
+        assert_eq!(
+            ffi_acc_identity_3.kind,
+            FfiAccountIdentityKind::PrivateOwned
+        );
+        assert_eq!(
+            ffi_acc_identity_4.kind,
+            FfiAccountIdentityKind::PrivateForeign
+        );
+        assert_eq!(
+            ffi_acc_identity_5.kind,
+            FfiAccountIdentityKind::PrivatePdaOwned
+        );
+        assert_eq!(
+            ffi_acc_identity_6.kind,
+            FfiAccountIdentityKind::PrivatePdaForeign
+        );
+        assert_eq!(
+            ffi_acc_identity_7.kind,
+            FfiAccountIdentityKind::PrivateShared
+        );
+        assert_eq!(
+            ffi_acc_identity_8.kind,
+            FfiAccountIdentityKind::PrivatePdaShared
+        );
+
+        let acc_identity_res_1: AccountIdentity = (&ffi_acc_identity_1).try_into().unwrap();
+        let acc_identity_res_2: AccountIdentity = (&ffi_acc_identity_2).try_into().unwrap();
+        let acc_identity_res_3: AccountIdentity = (&ffi_acc_identity_3).try_into().unwrap();
+        let acc_identity_res_4: AccountIdentity = (&ffi_acc_identity_4).try_into().unwrap();
+        let acc_identity_res_5: AccountIdentity = (&ffi_acc_identity_5).try_into().unwrap();
+        let acc_identity_res_6: AccountIdentity = (&ffi_acc_identity_6).try_into().unwrap();
+        let acc_identity_res_7: AccountIdentity = (&ffi_acc_identity_7).try_into().unwrap();
+        let acc_identity_res_8: AccountIdentity = (&ffi_acc_identity_8).try_into().unwrap();
+
+        assert_eq!(acc_identity_res_1, acc_identity_1);
+        assert_eq!(acc_identity_res_2, acc_identity_2);
+        assert_eq!(acc_identity_res_3, acc_identity_3);
+        assert_eq!(acc_identity_res_4, acc_identity_4);
+        assert_eq!(acc_identity_res_5, acc_identity_5);
+        assert_eq!(acc_identity_res_6, acc_identity_6);
+        assert_eq!(acc_identity_res_7, acc_identity_7);
+        assert_eq!(acc_identity_res_8, acc_identity_8);
     }
 }

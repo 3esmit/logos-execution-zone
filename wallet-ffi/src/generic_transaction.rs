@@ -126,7 +126,7 @@ pub struct FfiTransactionResult {
     /// Whether the transaction succeeded.
     pub success: bool,
     pub secrets_data: *const FfiBytes32,
-    /// Public transaction have 0 secrets.
+    /// Public transactions have 0 secrets.
     pub secrets_size: usize,
 }
 
@@ -222,12 +222,12 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     };
 
     if account_identities.is_null() {
-        print_error("Null output pointer for account identities list");
+        print_error("Null input pointer for account identities list");
         return WalletFfiError::NullPointer;
     }
 
     if instruction_words.is_null() {
-        print_error("Null output pointer for instruction data");
+        print_error("Null input pointer for instruction data");
         return WalletFfiError::NullPointer;
     }
 
@@ -244,34 +244,19 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     };
 
+    let accounts_ffi = std::slice::from_raw_parts(account_identities, account_identities_size);
+    let instruction_data = std::slice::from_raw_parts(instruction_words, instruction_words_size);
+
     let mut accounts = Vec::with_capacity(account_identities_size);
-    let mut instruction_data = Vec::with_capacity(instruction_words_size);
 
-    // Alignment will be different, we need to read elements one-by-one
-    for i in 0..account_identities_size {
-        accounts.push(
-            match match unsafe { account_identities.add(i).as_ref() }
-                .ok_or(WalletFfiError::NullPointer)
-            {
-                Ok(v) => v,
-                Err(err) => {
-                    print_error(
-                        "account_identities_size does not match actual size of account_identities",
-                    );
-                    return err;
-                }
+    for ffi_acc in accounts_ffi {
+        match ffi_acc.try_into() {
+            Ok(v) => accounts.push(v),
+            Err(err) => {
+                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                return err;
             }
-            .try_into()
-            {
-                Ok(v) => v,
-                Err(err) => return err,
-            },
-        );
-    }
-
-    // Alignment will be different, we need to read elements one-by-one
-    for i in 0..instruction_words_size {
-        instruction_data.push(unsafe { *instruction_words.add(i) });
+        }
     }
 
     let program = match unsafe { &*program_with_dependencies }.try_into() {
@@ -279,7 +264,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         Err(err) => return err,
     };
 
-    match block_on(wallet.send_pub_tx(accounts, instruction_data, &program)) {
+    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), &program)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
@@ -334,12 +319,12 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
     };
 
     if account_identities.is_null() {
-        print_error("Null output pointer for account identities list");
+        print_error("Null input pointer for account identities list");
         return WalletFfiError::NullPointer;
     }
 
     if instruction_words.is_null() {
-        print_error("Null output pointer for instruction data");
+        print_error("Null input pointer for instruction data");
         return WalletFfiError::NullPointer;
     }
 
@@ -356,34 +341,19 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         }
     };
 
+    let accounts_ffi = std::slice::from_raw_parts(account_identities, account_identities_size);
+    let instruction_data = std::slice::from_raw_parts(instruction_words, instruction_words_size);
+
     let mut accounts = Vec::with_capacity(account_identities_size);
-    let mut instruction_data = Vec::with_capacity(instruction_words_size);
 
-    // Alignment will be different, we need to read elements one-by-one
-    for i in 0..account_identities_size {
-        accounts.push(
-            match match unsafe { account_identities.add(i).as_ref() }
-                .ok_or(WalletFfiError::NullPointer)
-            {
-                Ok(v) => v,
-                Err(err) => {
-                    print_error(
-                        "account_identities_size does not match actual size of account_identities",
-                    );
-                    return err;
-                }
+    for ffi_acc in accounts_ffi {
+        match ffi_acc.try_into() {
+            Ok(v) => accounts.push(v),
+            Err(err) => {
+                print_error("Failed to convert FfiAccountIdentity into AccountIdentity");
+                return err;
             }
-            .try_into()
-            {
-                Ok(v) => v,
-                Err(err) => return err,
-            },
-        );
-    }
-
-    // Alignment will be different, we need to read elements one-by-one
-    for i in 0..instruction_words_size {
-        instruction_data.push(unsafe { *instruction_words.add(i) });
+        }
     }
 
     let program = match unsafe { &*program_with_dependencies }.try_into() {
@@ -391,7 +361,8 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         Err(err) => return err,
     };
 
-    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data, &program)) {
+    match block_on(wallet.send_privacy_preserving_tx(accounts, instruction_data.to_vec(), &program))
+    {
         Ok((tx_hash, secrets)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
@@ -414,7 +385,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
             WalletFfiError::Success
         }
         Err(e) => {
-            print_error(format!("Public send failed: {e:?}"));
+            print_error(format!("Private send failed: {e:?}"));
             unsafe {
                 *out_result = FfiTransactionResult::default();
             }

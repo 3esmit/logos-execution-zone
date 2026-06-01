@@ -10,7 +10,7 @@ use nssa_core::{
 
 use crate::{ExecutionFailureKind, WalletCore};
 
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
