@@ -13,7 +13,7 @@ cargo install --path wallet --force
 ```
 
 # 1. Run the sequencer
-From the project’s root directory, start the sequencer by following [these instructions](https://github.com/logos-blockchain/lssa#run-the-sequencer-and-node).
+From the project’s root directory, start the sequencer by following [these instructions](https://github.com/logos-blockchain/logos-execution-zone#run-the-sequencer-and-node).
 
 ## Checking and setting up the wallet
 For sanity let's check that the wallet can connect to it.
@@ -28,7 +28,7 @@ For this tutorial, use: `program-tutorial`
 You should see `✅All looks good!` if everything went well.
 
 # 2. Compile the example programs
-In a second terminal, from the `lssa` root directory, compile the example Risc0 programs:
+In a second terminal, from the `logos-execution-zone` root directory, compile the example Risc0 programs:
 ```bash
 cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 ```

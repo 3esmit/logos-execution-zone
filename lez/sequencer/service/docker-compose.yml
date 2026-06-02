@@ -1,9 +1,9 @@
 services:
   sequencer_service:
-    image: lssa/sequencer_service
+    image: lez/sequencer_service
     build:
       context: ../..
-      dockerfile: sequencer/service/Dockerfile
+      dockerfile: lez/sequencer/service/Dockerfile
     container_name: sequencer_service
     ports:
       - "3040:3040"
