@@ -1,6 +1,6 @@
-//! NSSA Wallet FFI Library.
+//! LEE Wallet FFI Library.
 //!
-//! This crate provides C-compatible bindings for the NSSA wallet functionality.
+//! This crate provides C-compatible bindings for the LEE wallet functionality.
 //!
 //! # Usage
 //!

@@ -5,16 +5,16 @@ use borsh::BorshDeserialize;
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
-    transaction::{NSSATransaction, clock_invocation},
+    transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+use lee::{AccountId, PublicTransaction, program::Program, public_transaction::Message};
+use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
-use nssa::{AccountId, PublicTransaction, program::Program, public_transaction::Message};
-use nssa_core::GENESIS_BLOCK_ID;
 pub use storage::error::DbError;
 
 use crate::{
@@ -39,7 +39,7 @@ pub enum TransactionOrigin {
 
 #[derive(Clone, Debug, BorshDeserialize)]
 struct DepositMetadata {
-    recipient_id: nssa::AccountId,
+    recipient_id: lee::AccountId,
 }
 
 impl DepositMetadata {
@@ -49,9 +49,9 @@ impl DepositMetadata {
 }
 
 pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
-    state: nssa::V03State,
+    state: lee::V03State,
     store: SequencerStore,
-    mempool: MemPool<(TransactionOrigin, NSSATransaction)>,
+    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     chain_height: u64,
     block_publisher: BP,
@@ -65,8 +65,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// initializing its state with the accounts defined in the configuration file.
     pub async fn start_from_config(
         config: SequencerConfig,
-    ) -> (Self, MemPoolHandle<(TransactionOrigin, NSSATransaction)>) {
-        let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
+    ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
 
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
@@ -82,7 +82,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     )
                 });
             let state = store
-                .get_nssa_state()
+                .get_lee_state()
                 .expect("Failed to read state from store");
             let genesis_block = store
                 .get_block_at_id(store.genesis_id())
@@ -255,7 +255,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         // Pre-create the mandatory clock tx so its size is included in the block size check.
         let clock_tx = clock_invocation(new_block_timestamp);
-        let clock_nssa_tx = NSSATransaction::Public(clock_tx.clone());
+        let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
         while let Some((origin, tx)) = self.mempool.pop() {
             let tx_hash = tx.hash();
@@ -264,7 +264,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
-                std::slice::from_ref(&clock_nssa_tx),
+                std::slice::from_ref(&clock_lee_tx),
             ]
             .concat();
             let temp_hashable_data = HashableBlockData {
@@ -308,7 +308,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     self.state.apply_state_diff(validated_diff);
                 }
                 TransactionOrigin::Sequencer => {
-                    let NSSATransaction::Public(public_tx) = &tx else {
+                    let LeeTransaction::Public(public_tx) = &tx else {
                         panic!("Sequencer may only generate Public transactions, found {tx:#?}");
                     };
                     self.state
@@ -332,7 +332,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         self.state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
-        valid_transactions.push(clock_nssa_tx);
+        valid_transactions.push(clock_lee_tx);
 
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
@@ -358,7 +358,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         Ok(block)
     }
 
-    pub const fn state(&self) -> &nssa::V03State {
+    pub const fn state(&self) -> &lee::V03State {
         &self.state
     }
 
@@ -412,9 +412,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 }
 
 /// Builds the initial genesis state from `testnet_initial_state` plus configured genesis
-/// transactions. Returns the final state and the list of [`NSSATransaction`]s that should be
+/// transactions. Returns the final state and the list of [`LeeTransaction`]s that should be
 /// committed to the genesis block so external observers can replay them.
-fn build_genesis_state(config: &SequencerConfig) -> (nssa::V03State, Vec<NSSATransaction>) {
+fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
     #[cfg(not(feature = "testnet"))]
     let mut state = testnet_initial_state::initial_state();
 
@@ -439,7 +439,7 @@ fn build_genesis_state(config: &SequencerConfig) -> (nssa::V03State, Vec<NSSATra
                 .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
                 .expect("Failed to execute genesis transaction");
         })
-        .map(NSSATransaction::Public)
+        .map(LeeTransaction::Public)
         .collect();
 
     (state, genesis_txs)
@@ -455,7 +455,7 @@ fn build_supply_account_genesis_transaction(
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![nssa::system_faucet_account_id(), recipient_vault_id],
+        vec![lee::system_faucet_account_id(), recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
@@ -464,30 +464,30 @@ fn build_supply_account_genesis_transaction(
         },
     )
     .expect("Failed to serialize genesis transfer instruction");
-    let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
 
     PublicTransaction::new(message, witness_set)
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
     let faucet_program_id = Program::faucet().id();
-    let bridge_account_id = nssa::system_bridge_account_id();
+    let bridge_account_id = lee::system_bridge_account_id();
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![nssa::system_faucet_account_id(), bridge_account_id],
+        vec![lee::system_faucet_account_id(), bridge_account_id],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize bridge genesis transfer instruction");
-    let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
 
     PublicTransaction::new(message, witness_set)
 }
 
 fn build_bridge_deposit_tx(
     deposit: &logos_blockchain_zone_sdk::state::DepositInfo,
-) -> Result<NSSATransaction> {
+) -> Result<LeeTransaction> {
     let metadata = DepositMetadata::decode(&deposit.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
@@ -498,7 +498,7 @@ fn build_bridge_deposit_tx(
 
     let message = Message::try_new(
         bridge_program_id,
-        vec![nssa::system_bridge_account_id(), recipient_vault_id],
+        vec![lee::system_bridge_account_id(), recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
             vault_program_id,
@@ -508,8 +508,8 @@ fn build_bridge_deposit_tx(
     )
     .context("Failed to build bridge deposit message")?;
 
-    let witness_set = nssa::public_transaction::WitnessSet::from_raw_parts(vec![]);
-    Ok(NSSATransaction::Public(PublicTransaction::new(
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(LeeTransaction::Public(PublicTransaction::new(
         message,
         witness_set,
     )))
@@ -548,7 +548,7 @@ mod tests {
         HashType,
         block::HashableBlockData,
         test_utils::sequencer_sign_key_for_testing,
-        transaction::{NSSATransaction, clock_invocation},
+        transaction::{LeeTransaction, clock_invocation},
     };
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
@@ -584,17 +584,17 @@ mod tests {
         }
     }
 
-    fn create_signing_key_for_account1() -> nssa::PrivateKey {
+    fn create_signing_key_for_account1() -> lee::PrivateKey {
         initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
     }
 
-    fn create_signing_key_for_account2() -> nssa::PrivateKey {
+    fn create_signing_key_for_account2() -> lee::PrivateKey {
         initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
     }
 
     async fn common_setup() -> (
         SequencerCoreWithMockClients,
-        MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
+        MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     ) {
         let config = setup_sequencer_config();
         common_setup_with_config(config).await
@@ -604,7 +604,7 @@ mod tests {
         config: SequencerConfig,
     ) -> (
         SequencerCoreWithMockClients,
-        MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
+        MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     ) {
         let (mut sequencer, mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
@@ -646,7 +646,7 @@ mod tests {
         let mut config = config;
         config.home = temp_dir.path().to_path_buf();
 
-        let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
+        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
         let (genesis_state, genesis_txs) = build_genesis_state(&config);
         let genesis_hashable_data = HashableBlockData {
             block_id: 1,
@@ -736,7 +736,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(nssa::error::NssaError::ProgramExecutionFailed(_))
+            Err(lee::error::LeeError::ProgramExecutionFailed(_))
         ));
     }
 
@@ -763,7 +763,7 @@ mod tests {
             .execute_check_on_state(&mut sequencer.state, 0, 0);
         let is_failed_at_balance_mismatch = matches!(
             result.err().unwrap(),
-            nssa::error::NssaError::ProgramExecutionFailed(_)
+            lee::error::LeeError::ProgramExecutionFailed(_)
         );
 
         assert!(is_failed_at_balance_mismatch);
@@ -874,7 +874,7 @@ mod tests {
             block.body.transactions,
             vec![
                 tx.clone(),
-                NSSATransaction::Public(clock_invocation(block.header.timestamp))
+                LeeTransaction::Public(clock_invocation(block.header.timestamp))
             ]
         );
     }
@@ -907,7 +907,7 @@ mod tests {
             block.body.transactions,
             vec![
                 tx.clone(),
-                NSSATransaction::Public(clock_invocation(block.header.timestamp))
+                LeeTransaction::Public(clock_invocation(block.header.timestamp))
             ]
         );
 
@@ -925,7 +925,7 @@ mod tests {
         // The replay is rejected, so only the clock tx is in the block.
         assert_eq!(
             block.body.transactions,
-            vec![NSSATransaction::Public(clock_invocation(
+            vec![LeeTransaction::Public(clock_invocation(
                 block.header.timestamp
             ))]
         );
@@ -968,7 +968,7 @@ mod tests {
                 block.body.transactions,
                 vec![
                     tx.clone(),
-                    NSSATransaction::Public(clock_invocation(block.header.timestamp))
+                    LeeTransaction::Public(clock_invocation(block.header.timestamp))
                 ]
             );
         }
@@ -1088,7 +1088,7 @@ mod tests {
             new_block.body.transactions,
             vec![
                 tx,
-                NSSATransaction::Public(clock_invocation(new_block.header.timestamp))
+                LeeTransaction::Public(clock_invocation(new_block.header.timestamp))
             ],
             "New block should contain the submitted transaction and the clock invocation"
         );
@@ -1101,22 +1101,22 @@ mod tests {
         // Canonical clock invocation and a crafted variant with a different timestamp — both must
         // be dropped because their diffs touch the clock accounts.
         let crafted_clock_tx = {
-            let message = nssa::public_transaction::Message::try_new(
-                nssa::program::Program::clock().id(),
-                nssa::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+            let message = lee::public_transaction::Message::try_new(
+                lee::program::Program::clock().id(),
+                lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
                 vec![],
                 42_u64,
             )
             .unwrap();
-            NSSATransaction::Public(nssa::PublicTransaction::new(
+            LeeTransaction::Public(lee::PublicTransaction::new(
                 message,
-                nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+                lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
             ))
         };
         mempool_handle
             .push((
                 TransactionOrigin::User,
-                NSSATransaction::Public(clock_invocation(0)),
+                LeeTransaction::Public(clock_invocation(0)),
             ))
             .await
             .unwrap();
@@ -1135,7 +1135,7 @@ mod tests {
         // Both transactions were dropped. Only the system-appended clock tx remains.
         assert_eq!(
             block.body.transactions,
-            vec![NSSATransaction::Public(clock_invocation(
+            vec![LeeTransaction::Public(clock_invocation(
                 block.header.timestamp
             ))]
         );
@@ -1146,12 +1146,11 @@ mod tests {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         // Deploy the clock_chain_caller test program.
-        let deploy_tx =
-            NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
-                nssa::program_deployment_transaction::Message::new(
-                    test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
-                ),
-            ));
+        let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+            lee::program_deployment_transaction::Message::new(
+                test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
+            ),
+        ));
         mempool_handle
             .push((TransactionOrigin::User, deploy_tx))
             .await
@@ -1162,22 +1161,22 @@ mod tests {
         // clock program with the clock accounts. The sequencer should detect that the resulting
         // state diff modifies clock accounts and drop the transaction.
         let clock_chain_caller_id =
-            nssa::program::Program::new(test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec())
+            lee::program::Program::new(test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec())
                 .unwrap()
                 .id();
-        let clock_program_id = nssa::program::Program::clock().id();
+        let clock_program_id = lee::program::Program::clock().id();
         let timestamp: u64 = 0;
 
-        let message = nssa::public_transaction::Message::try_new(
+        let message = lee::public_transaction::Message::try_new(
             clock_chain_caller_id,
-            nssa::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+            lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
             vec![], // no signers
             (clock_program_id, timestamp),
         )
         .unwrap();
-        let user_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+        let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(
             message,
-            nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
         ));
 
         mempool_handle
@@ -1195,7 +1194,7 @@ mod tests {
         // The user tx must have been dropped; only the mandatory clock invocation remains.
         assert_eq!(
             block.body.transactions,
-            vec![NSSATransaction::Public(clock_invocation(
+            vec![LeeTransaction::Public(clock_invocation(
                 block.header.timestamp
             ))]
         );
@@ -1206,7 +1205,7 @@ mod tests {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         // Corrupt the clock 01 account data so the clock program panics on deserialization.
-        let clock_account_id = nssa::CLOCK_01_PROGRAM_ACCOUNT_ID;
+        let clock_account_id = lee::CLOCK_01_PROGRAM_ACCOUNT_ID;
         let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
         corrupted.data = vec![0xff; 3].try_into().unwrap();
         sequencer

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
-use nssa::{AccountId, PrivateKey};
-use nssa_core::{
+use lee::{AccountId, PrivateKey};
+use lee_core::{
     Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
@@ -134,7 +134,7 @@ impl AccountManager {
                     vpk,
                     identifier,
                 } => {
-                    let acc = nssa_core::account::Account::default();
+                    let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
                     let eph_holder = EphemeralKeyHolder::new(&npk);
                     let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
@@ -163,7 +163,7 @@ impl AccountManager {
                     vpk,
                     identifier,
                 } => {
-                    let acc = nssa_core::account::Account::default();
+                    let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
                     let eph_holder = EphemeralKeyHolder::new(&npk);
                     let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
@@ -187,7 +187,7 @@ impl AccountManager {
                     vpk,
                     identifier,
                 } => {
-                    let account_id = nssa::AccountId::from((&npk, identifier));
+                    let account_id = lee::AccountId::from((&npk, identifier));
                     let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, false,
                     )

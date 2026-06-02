@@ -2,7 +2,7 @@ use indexer_service_protocol::ProgramId;
 
 use crate::api::types::{FfiBytes32, FfiProgramId, FfiU128};
 
-/// Account data structure - C-compatible version of nssa Account.
+/// Account data structure - C-compatible version of lee Account.
 ///
 /// Note: `balance` and `nonce` are u128 values represented as little-endian
 /// byte arrays since C doesn't have native u128 support.
@@ -23,15 +23,15 @@ pub struct FfiAccount {
 
 // Helper functions to convert between Rust and FFI types
 
-impl From<&nssa::AccountId> for FfiBytes32 {
-    fn from(id: &nssa::AccountId) -> Self {
+impl From<&lee::AccountId> for FfiBytes32 {
+    fn from(id: &lee::AccountId) -> Self {
         Self::from_account_id(id)
     }
 }
 
-impl From<nssa::Account> for FfiAccount {
-    fn from(value: nssa::Account) -> Self {
-        let nssa::Account {
+impl From<lee::Account> for FfiAccount {
+    fn from(value: lee::Account) -> Self {
+        let lee::Account {
             program_owner,
             balance,
             data,

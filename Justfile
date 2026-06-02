@@ -63,7 +63,7 @@ run-explorer:
 [working-directory: 'wallet']
 run-wallet +args:
     @echo "🔑 Running wallet"
-    NSSA_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
+    LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
 
 # Clean runtime data
 clean:

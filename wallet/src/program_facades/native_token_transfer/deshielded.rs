@@ -1,5 +1,5 @@
 use common::HashType;
-use nssa::AccountId;
+use lee::AccountId;
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};
@@ -10,7 +10,7 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-    ) -> Result<(HashType, nssa_core::SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, lee_core::SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         self.0

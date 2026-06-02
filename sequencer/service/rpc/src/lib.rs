@@ -6,7 +6,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, NSSATransaction,
+    Account, AccountId, Block, BlockId, Commitment, HashType, LeeTransaction, MembershipProof,
     Nonce, ProgramId,
 };
 
@@ -20,13 +20,13 @@ compile_error!("At least one of `server` or `client` features must be enabled.")
 /// # Example
 ///
 /// ```no_run
-/// use common::transaction::NSSATransaction;
+/// use common::transaction::LeeTransaction;
 /// use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 ///
 /// let url = "http://localhost:3040".parse()?;
 /// let client = SequencerClientBuilder::default().build(url)?;
 ///
-/// let tx: NSSATransaction = unimplemented!("Construct your transaction here");
+/// let tx: LeeTransaction = unimplemented!("Construct your transaction here");
 /// let tx_hash = client.send_transaction(tx).await?;
 /// ```
 #[cfg(feature = "client")]
@@ -37,7 +37,7 @@ pub type SequencerClient = jsonrpsee::http_client::HttpClient;
 #[cfg_attr(all(feature = "server", feature = "client"), rpc(server, client))]
 pub trait Rpc {
     #[method(name = "sendTransaction")]
-    async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned>;
+    async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned>;
 
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
@@ -68,7 +68,7 @@ pub trait Rpc {
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<NSSATransaction>, ErrorObjectOwned>;
+    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(

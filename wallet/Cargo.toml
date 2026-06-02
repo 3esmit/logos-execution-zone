@@ -8,8 +8,8 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa_core.workspace = true
-nssa.workspace = true
+lee_core.workspace = true
+lee.workspace = true
 common.workspace = true
 authenticated_transfer_core.workspace = true
 key_protocol.workspace = true

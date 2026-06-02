@@ -149,7 +149,7 @@ impl WalletSubcommand for GroupSubcommand {
                     anyhow::bail!("Sealing key already exists. Each wallet has one sealing key.");
                 }
 
-                let mut secret: nssa_core::encryption::Scalar = [0_u8; 32];
+                let mut secret: lee_core::encryption::Scalar = [0_u8; 32];
                 rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut secret);
                 let public_key = SealingPublicKey::from_scalar(secret);
 

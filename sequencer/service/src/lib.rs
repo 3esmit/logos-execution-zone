@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use bytesize::ByteSize;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
 use log::{error, info};
@@ -141,7 +141,7 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
 
 async fn run_server(
     sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     port: u16,
     max_block_size: u64,
 ) -> Result<(ServerHandle, SocketAddr)> {

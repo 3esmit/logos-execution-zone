@@ -1,7 +1,7 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
-use common::{PINATA_BASE58, transaction::NSSATransaction};
-use nssa::{Account, AccountId};
+use common::{PINATA_BASE58, transaction::LeeTransaction};
+use lee::{Account, AccountId};
 
 use crate::{
     AccDecodeData::Decode,
@@ -150,7 +150,7 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
 
                 println!("Transaction data is {transfer_tx:?}");
 
-                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
                     let acc_decode_data = vec![Decode(secret_winner, winner_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(

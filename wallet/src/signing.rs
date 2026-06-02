@@ -1,6 +1,6 @@
 use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
-use nssa::{AccountId, PrivateKey, PublicKey, Signature};
+use lee::{AccountId, PrivateKey, PublicKey, Signature};
 
 use crate::{WalletCore, cli::CliAccountMention};
 

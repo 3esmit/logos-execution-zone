@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use common::block::{BedrockStatus, Block, BlockMeta, MantleMsgId};
-use nssa::V03State;
+use lee::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
 };
@@ -11,8 +11,8 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
-        LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
-        NSSAStateCellOwned, NSSAStateCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
+        LatestBlockMetaCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -25,11 +25,11 @@ pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
 
-/// Key base for storing the NSSA state.
-pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
+/// Key base for storing the LEE state.
+pub const DB_LEE_STATE_KEY: &str = "lee_state";
 
 /// Name of state column family.
-pub const CF_NSSA_STATE_NAME: &str = "cf_nssa_state";
+pub const CF_LEE_STATE_NAME: &str = "cf_lee_state";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
@@ -71,7 +71,7 @@ impl RocksDBIO {
                 hash: genesis_block.header.hash,
                 msg_id: genesis_msg_id,
             })?;
-            dbio.put_nssa_state_in_db(genesis_state)?;
+            dbio.put_lee_state_in_db(genesis_state)?;
         }
 
         Ok(dbio)
@@ -84,7 +84,7 @@ impl RocksDBIO {
         // ToDo: Add more column families for different data
         let cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
         let cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
-        let cfstate = ColumnFamilyDescriptor::new(CF_NSSA_STATE_NAME, cf_opts.clone());
+        let cfstate = ColumnFamilyDescriptor::new(CF_LEE_STATE_NAME, cf_opts.clone());
 
         let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
             db_opts,
@@ -106,7 +106,7 @@ impl RocksDBIO {
         // ToDo: Add more column families for different data
         let _cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
         let _cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
-        let _cfstate = ColumnFamilyDescriptor::new(CF_NSSA_STATE_NAME, cf_opts.clone());
+        let _cfstate = ColumnFamilyDescriptor::new(CF_LEE_STATE_NAME, cf_opts.clone());
 
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
@@ -129,9 +129,9 @@ impl RocksDBIO {
             .expect("Block column should exist")
     }
 
-    pub fn nssa_state_column(&self) -> Arc<BoundColumnFamily<'_>> {
+    pub fn lee_state_column(&self) -> Arc<BoundColumnFamily<'_>> {
         self.db
-            .cf_handle(CF_NSSA_STATE_NAME)
+            .cf_handle(CF_LEE_STATE_NAME)
             .expect("State should exist")
     }
 
@@ -149,16 +149,16 @@ impl RocksDBIO {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
-    pub fn put_nssa_state_in_db(&self, state: &V03State) -> DbResult<()> {
-        self.put(&NSSAStateCellRef(state), ())
+    pub fn put_lee_state_in_db(&self, state: &V03State) -> DbResult<()> {
+        self.put(&LEEStateCellRef(state), ())
     }
 
-    pub fn put_nssa_state_in_db_batch(
+    pub fn put_lee_state_in_db_batch(
         &self,
         state: &V03State,
         batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        self.put_batch(&NSSAStateCellRef(state), (), batch)
+        self.put_batch(&LEEStateCellRef(state), (), batch)
     }
 
     pub fn put_meta_first_block_in_db(&self, block: &Block, msg_id: MantleMsgId) -> DbResult<()> {
@@ -281,8 +281,8 @@ impl RocksDBIO {
             .map(|opt| opt.map(|val| val.0))
     }
 
-    pub fn get_nssa_state(&self) -> DbResult<V03State> {
-        self.get::<NSSAStateCellOwned>(()).map(|val| val.0)
+    pub fn get_lee_state(&self) -> DbResult<V03State> {
+        self.get::<LEEStateCellOwned>(()).map(|val| val.0)
     }
 
     pub fn delete_block(&self, block_id: u64) -> DbResult<()> {
@@ -388,7 +388,7 @@ impl RocksDBIO {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();
         self.put_block(block, msg_id, false, &mut batch)?;
-        self.put_nssa_state_in_db_batch(state, &mut batch)?;
+        self.put_lee_state_in_db_batch(state, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,

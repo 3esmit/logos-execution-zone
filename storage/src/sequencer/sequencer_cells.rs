@@ -1,40 +1,40 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::block::BlockMeta;
-use nssa::V03State;
+use lee::V03State;
 
 use crate::{
     CF_META_NAME, DbResult,
     cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
     sequencer::{
-        CF_NSSA_STATE_NAME, DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
-        DB_META_ZONE_SDK_CHECKPOINT_KEY, DB_NSSA_STATE_KEY,
+        CF_LEE_STATE_NAME, DB_LEE_STATE_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
+        DB_META_LATEST_BLOCK_META_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
 
 #[derive(BorshDeserialize)]
-pub struct NSSAStateCellOwned(pub V03State);
+pub struct LEEStateCellOwned(pub V03State);
 
-impl SimpleStorableCell for NSSAStateCellOwned {
+impl SimpleStorableCell for LEEStateCellOwned {
     type KeyParams = ();
 
-    const CELL_NAME: &'static str = DB_NSSA_STATE_KEY;
-    const CF_NAME: &'static str = CF_NSSA_STATE_NAME;
+    const CELL_NAME: &'static str = DB_LEE_STATE_KEY;
+    const CF_NAME: &'static str = CF_LEE_STATE_NAME;
 }
 
-impl SimpleReadableCell for NSSAStateCellOwned {}
+impl SimpleReadableCell for LEEStateCellOwned {}
 
 #[derive(BorshSerialize)]
-pub struct NSSAStateCellRef<'state>(pub &'state V03State);
+pub struct LEEStateCellRef<'state>(pub &'state V03State);
 
-impl SimpleStorableCell for NSSAStateCellRef<'_> {
+impl SimpleStorableCell for LEEStateCellRef<'_> {
     type KeyParams = ();
 
-    const CELL_NAME: &'static str = DB_NSSA_STATE_KEY;
-    const CF_NAME: &'static str = CF_NSSA_STATE_NAME;
+    const CELL_NAME: &'static str = DB_LEE_STATE_KEY;
+    const CF_NAME: &'static str = CF_LEE_STATE_NAME;
 }
 
-impl SimpleWritableCell for NSSAStateCellRef<'_> {
+impl SimpleWritableCell for LEEStateCellRef<'_> {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
             DbError::borsh_cast_message(err, Some("Failed to serialize last state".to_owned()))
@@ -136,17 +136,17 @@ mod uniform_tests {
     use crate::{
         cells::SimpleStorableCell as _,
         sequencer::sequencer_cells::{
-            LatestBlockMetaCellOwned, LatestBlockMetaCellRef, NSSAStateCellOwned, NSSAStateCellRef,
+            LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
         },
     };
 
     #[test]
     fn state_ref_and_owned_is_aligned() {
-        assert_eq!(NSSAStateCellRef::CELL_NAME, NSSAStateCellOwned::CELL_NAME);
-        assert_eq!(NSSAStateCellRef::CF_NAME, NSSAStateCellOwned::CF_NAME);
+        assert_eq!(LEEStateCellRef::CELL_NAME, LEEStateCellOwned::CELL_NAME);
+        assert_eq!(LEEStateCellRef::CF_NAME, LEEStateCellOwned::CF_NAME);
         assert_eq!(
-            NSSAStateCellRef::key_constructor(()).unwrap(),
-            NSSAStateCellOwned::key_constructor(()).unwrap()
+            LEEStateCellRef::key_constructor(()).unwrap(),
+            LEEStateCellOwned::key_constructor(()).unwrap()
         );
     }
 

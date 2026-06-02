@@ -8,8 +8,8 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa.workspace = true
-nssa_core.workspace = true
+lee.workspace = true
+lee_core.workspace = true
 common.workspace = true
 storage.workspace = true
 mempool.workspace = true
@@ -44,4 +44,4 @@ mock = []
 [dev-dependencies]
 futures.workspace = true
 test_program_methods.workspace = true
-nssa = { workspace = true, features = ["test-utils"] }
+lee = { workspace = true, features = ["test-utils"] }

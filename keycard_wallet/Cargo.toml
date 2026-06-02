@@ -8,7 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa.workspace = true
+lee.workspace = true
 pyo3.workspace = true
 log.workspace = true
 serde = { workspace = true, features = ["derive"] }

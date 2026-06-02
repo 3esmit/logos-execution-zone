@@ -267,7 +267,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             public_post_states: public_post_states
                 .into_iter()
-                .map(|acc_ind| -> nssa::Account {
+                .map(|acc_ind| -> lee::Account {
                     acc_ind.try_into().expect("Source is in blocks, must fit")
                 })
                 .map(Into::into)

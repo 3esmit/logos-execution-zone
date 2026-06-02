@@ -6,13 +6,13 @@ resolver = "3"
 members = [
   "integration_tests",
   "storage",
-  "key_protocol",
+  "lee/key_protocol",
   "mempool",
   "wallet",
   "wallet-ffi",
   "common",
-  "nssa",
-  "nssa/core",
+  "lee/state_machine",
+  "lee/state_machine/core",
   "programs/amm/core",
   "programs/amm",
   "programs/clock/core",
@@ -50,12 +50,12 @@ members = [
 ]
 
 [workspace.dependencies]
-nssa = { path = "nssa" }
-nssa_core = { path = "nssa/core" }
+lee = { path = "lee/state_machine" }
+lee_core = { path = "lee/state_machine/core" }
 common = { path = "common" }
 mempool = { path = "mempool" }
 storage = { path = "storage" }
-key_protocol = { path = "key_protocol" }
+key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "sequencer/core" }
 sequencer_service_protocol = { path = "sequencer/service/protocol" }
 sequencer_service_rpc = { path = "sequencer/service/rpc" }

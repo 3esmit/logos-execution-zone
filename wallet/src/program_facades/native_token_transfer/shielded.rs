@@ -1,6 +1,6 @@
 use common::HashType;
-use nssa::AccountId;
-use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use lee::AccountId;
+use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};

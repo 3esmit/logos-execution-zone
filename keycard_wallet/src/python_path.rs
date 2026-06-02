@@ -52,7 +52,7 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
         // Avoid duplicating the path
         let already_present = sys_path
             .iter()
-            .any(|p| p.extract::<&str>().map(|s| s == path_str).unwrap_or(false));
+            .any(|p| p.extract::<&str>().is_ok_and(|s| s == path_str));
 
         if !already_present {
             sys_path.insert(0, path_str)?;

@@ -1,4 +1,4 @@
-use nssa::{AccountId, program::Program};
+use lee::{AccountId, program::Program};
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world.rs` guest program with:

@@ -3,8 +3,8 @@
 use core::slice;
 use std::{ffi::c_char, ptr};
 
-use nssa::Data;
-use nssa_core::encryption::shared_key_derivation::Secp256k1Point;
+use lee::Data;
+use lee_core::encryption::shared_key_derivation::Secp256k1Point;
 
 use crate::error::WalletFfiError;
 
@@ -38,7 +38,7 @@ pub struct FfiU128 {
     pub data: [u8; 16],
 }
 
-/// Account data structure - C-compatible version of nssa Account.
+/// Account data structure - C-compatible version of lee Account.
 ///
 /// Note: `balance` and `nonce` are u128 values represented as little-endian
 /// byte arrays since C doesn't have native u128 support.
@@ -149,18 +149,18 @@ impl FfiBytes32 {
 
     /// Create from an `AccountId`.
     #[must_use]
-    pub const fn from_account_id(id: nssa::AccountId) -> Self {
+    pub const fn from_account_id(id: lee::AccountId) -> Self {
         Self { data: *id.value() }
     }
 }
 
 impl FfiPrivateAccountKeys {
     #[must_use]
-    pub const fn npk(&self) -> nssa_core::NullifierPublicKey {
-        nssa_core::NullifierPublicKey(self.nullifier_public_key.data)
+    pub const fn npk(&self) -> lee_core::NullifierPublicKey {
+        lee_core::NullifierPublicKey(self.nullifier_public_key.data)
     }
 
-    pub fn vpk(&self) -> Result<nssa_core::encryption::ViewingPublicKey, WalletFfiError> {
+    pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, WalletFfiError> {
         if self.viewing_public_key_len == 33 {
             let slice = unsafe {
                 slice::from_raw_parts(self.viewing_public_key, self.viewing_public_key_len)
@@ -186,24 +186,24 @@ impl From<FfiU128> for u128 {
     }
 }
 
-impl From<nssa::AccountId> for FfiBytes32 {
-    fn from(id: nssa::AccountId) -> Self {
+impl From<lee::AccountId> for FfiBytes32 {
+    fn from(id: lee::AccountId) -> Self {
         Self::from_account_id(id)
     }
 }
 
-impl From<FfiBytes32> for nssa::AccountId {
+impl From<FfiBytes32> for lee::AccountId {
     fn from(bytes: FfiBytes32) -> Self {
         Self::new(bytes.data)
     }
 }
 
-impl From<nssa::Account> for FfiAccount {
+impl From<lee::Account> for FfiAccount {
     #[expect(
         clippy::as_conversions,
         reason = "We need to convert to byte arrays for FFI"
     )]
-    fn from(value: nssa::Account) -> Self {
+    fn from(value: lee::Account) -> Self {
         // Convert account data to FFI type
         let data_vec: Vec<u8> = value.data.into();
         let data_len = data_vec.len();
@@ -227,7 +227,7 @@ impl From<nssa::Account> for FfiAccount {
     }
 }
 
-impl TryFrom<&FfiAccount> for nssa::Account {
+impl TryFrom<&FfiAccount> for lee::Account {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiAccount) -> Result<Self, Self::Error> {
@@ -244,20 +244,20 @@ impl TryFrom<&FfiAccount> for nssa::Account {
             program_owner: value.program_owner.data,
             balance: value.balance.into(),
             data,
-            nonce: nssa_core::account::Nonce(value.nonce.into()),
+            nonce: lee_core::account::Nonce(value.nonce.into()),
         })
     }
 }
 
-impl From<nssa::PublicKey> for FfiPublicAccountKey {
-    fn from(value: nssa::PublicKey) -> Self {
+impl From<lee::PublicKey> for FfiPublicAccountKey {
+    fn from(value: lee::PublicKey) -> Self {
         Self {
             public_key: FfiBytes32::from_bytes(*value.value()),
         }
     }
 }
 
-impl TryFrom<&FfiPublicAccountKey> for nssa::PublicKey {
+impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {

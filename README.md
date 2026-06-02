@@ -80,7 +80,7 @@ For each tag we publish docker images of our services.
 If you depend on this project you can pin your rust dependency to a git tag like this:
 
 ```toml
-nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.1.0" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.1.0" }
 ```
 
 # Install dependencies
@@ -134,7 +134,7 @@ RISC0_DEV_MODE=1 cargo test --release
 ### Integration tests
 
 ```bash
-export NSSA_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
+export LEE_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
 cd integration_tests
 # RISC0_DEV_MODE=1 skips proof generation; RUST_LOG=info enables runtime logs
 RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all

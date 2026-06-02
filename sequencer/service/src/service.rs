@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
 };
+use lee::{self, program::Program};
 use log::warn;
 use mempool::MemPoolHandle;
-use nssa::{self, program::Program};
 use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
@@ -20,14 +20,14 @@ const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
 pub struct SequencerService<BC: BlockPublisherTrait> {
     sequencer: Arc<Mutex<SequencerCore<BC>>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     max_block_size: u64,
 }
 
 impl<BC: BlockPublisherTrait> SequencerService<BC> {
     pub const fn new(
         sequencer: Arc<Mutex<SequencerCore<BC>>>,
-        mempool_handle: MemPoolHandle<(TransactionOrigin, NSSATransaction)>,
+        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
     ) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
 impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     for SequencerService<BC>
 {
-    async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned> {
+    async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
         // Reserve ~200 bytes for block header overhead
         const BLOCK_HEADER_OVERHEAD: u64 = 200;
 
@@ -130,7 +130,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<NSSATransaction>, ErrorObjectOwned> {
+    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
     }
@@ -171,7 +171,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         program_ids.insert("amm".to_owned(), Program::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),
-            nssa::PRIVACY_PRESERVING_CIRCUIT_ID,
+            lee::PRIVACY_PRESERVING_CIRCUIT_ID,
         );
         Ok(program_ids)
     }

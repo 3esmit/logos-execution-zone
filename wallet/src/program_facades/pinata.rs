@@ -1,6 +1,6 @@
 use common::HashType;
-use nssa::{AccountId, program::Program};
-use nssa_core::{MembershipProof, SharedSecretKey};
+use lee::{AccountId, program::Program};
+use lee_core::{MembershipProof, SharedSecretKey};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
@@ -60,8 +60,8 @@ impl Pinata<'_> {
                         .resolve_private_account(winner_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
-                nssa::program::Program::serialize_instruction(solution).unwrap(),
-                &nssa::program::Program::pinata().into(),
+                lee::program::Program::serialize_instruction(solution).unwrap(),
+                &lee::program::Program::pinata().into(),
             )
             .await
             .map(|(resp, secrets)| {

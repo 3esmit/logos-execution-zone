@@ -4,8 +4,8 @@ use key_protocol::key_management::{
     key_tree::chain_index::ChainIndex,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
-use nssa::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
-use nssa_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
+use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
+use lee_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -84,28 +84,28 @@ pub struct PublicAccountPublicInitialData {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
-    pub npk: nssa_core::NullifierPublicKey,
-    pub account: nssa_core::account::Account,
+    pub npk: lee_core::NullifierPublicKey,
+    pub account: lee_core::account::Account,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPrivateInitialData {
-    pub account_id: nssa::AccountId,
-    pub pub_sign_key: nssa::PrivateKey,
+    pub account_id: lee::AccountId,
+    pub pub_sign_key: lee::PrivateKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateAccountPrivateInitialData {
-    pub account: nssa_core::account::Account,
+    pub account: lee_core::account::Account,
     pub key_chain: KeyChain,
     pub chain_index: Option<ChainIndex>,
-    pub identifier: nssa_core::Identifier,
+    pub identifier: lee_core::Identifier,
 }
 
 impl PrivateAccountPrivateInitialData {
     #[must_use]
-    pub fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::for_regular_private_account(
+    pub fn account_id(&self) -> lee::AccountId {
+        lee::AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
             self.identifier,
         )
@@ -210,30 +210,30 @@ pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
 
 #[must_use]
 pub fn initial_state() -> V03State {
-    let initial_private_accounts: Vec<(nssa_core::Commitment, nssa_core::Nullifier)> =
+    let initial_private_accounts: Vec<(lee_core::Commitment, lee_core::Nullifier)> =
         initial_commitments()
             .iter()
             .map(|init_comm_data| {
                 let npk = &init_comm_data.npk;
-                let account_id = nssa::AccountId::for_regular_private_account(npk, 0);
+                let account_id = lee::AccountId::for_regular_private_account(npk, 0);
 
                 let mut acc = init_comm_data.account.clone();
 
-                acc.program_owner = nssa::program::Program::authenticated_transfer_program().id();
+                acc.program_owner = lee::program::Program::authenticated_transfer_program().id();
 
                 (
-                    nssa_core::Commitment::new(&account_id, &acc),
-                    nssa_core::Nullifier::for_account_initialization(&account_id),
+                    lee_core::Commitment::new(&account_id, &acc),
+                    lee_core::Nullifier::for_account_initialization(&account_id),
                 )
             })
             .collect();
 
-    let init_accs: Vec<(nssa::AccountId, u128)> = initial_accounts()
+    let init_accs: Vec<(lee::AccountId, u128)> = initial_accounts()
         .iter()
         .map(|acc_data| (acc_data.account_id, acc_data.balance))
         .collect();
 
-    nssa::V03State::new_with_genesis_accounts(&init_accs, initial_private_accounts, 0)
+    lee::V03State::new_with_genesis_accounts(&init_accs, initial_private_accounts, 0)
 }
 
 #[must_use]

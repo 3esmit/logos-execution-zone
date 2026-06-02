@@ -2,8 +2,8 @@
 
 use std::{ffi::CString, ptr, slice};
 
-use nssa::AccountId;
-use nssa_core::MembershipProof;
+use lee::AccountId;
+use lee_core::MembershipProof;
 use wallet::program_facades::pinata::Pinata;
 
 use crate::{

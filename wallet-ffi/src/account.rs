@@ -3,7 +3,7 @@
 use std::{ffi::c_char, ptr, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
-use nssa::AccountId;
+use lee::AccountId;
 use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
@@ -517,7 +517,7 @@ pub unsafe extern "C" fn wallet_ffi_import_public_account(
         Err(e) => return e,
     };
 
-    let private_key = match nssa::PrivateKey::from_str(&private_key_hex) {
+    let private_key = match lee::PrivateKey::from_str(&private_key_hex) {
         Ok(value) => value,
         Err(e) => {
             print_error(format!("Invalid public account private key: {e}"));
@@ -609,7 +609,7 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
         }
     };
 
-    let account = nssa::Account::from(account_state);
+    let account = lee::Account::from(account_state);
 
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,

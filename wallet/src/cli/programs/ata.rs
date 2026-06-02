@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
-use common::transaction::NSSATransaction;
-use nssa::{Account, AccountId, program::Program};
+use common::transaction::LeeTransaction;
+use lee::{Account, AccountId, program::Program};
 use token_core::TokenHolding;
 
 use crate::{
@@ -109,7 +109,7 @@ impl WalletSubcommand for AtaSubcommand {
                         println!("Transaction hash is {tx_hash}");
 
                         let tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        if let NSSATransaction::PrivacyPreserving(tx) = tx {
+                        if let LeeTransaction::PrivacyPreserving(tx) = tx {
                             wallet_core.decode_insert_privacy_preserving_transaction_results(
                                 &tx,
                                 &[Decode(secret, owner_id)],
@@ -146,7 +146,7 @@ impl WalletSubcommand for AtaSubcommand {
                         println!("Transaction hash is {tx_hash}");
 
                         let tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        if let NSSATransaction::PrivacyPreserving(tx) = tx {
+                        if let LeeTransaction::PrivacyPreserving(tx) = tx {
                             wallet_core.decode_insert_privacy_preserving_transaction_results(
                                 &tx,
                                 &[Decode(secret, from_id)],
@@ -181,7 +181,7 @@ impl WalletSubcommand for AtaSubcommand {
                         println!("Transaction hash is {tx_hash}");
 
                         let tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        if let NSSATransaction::PrivacyPreserving(tx) = tx {
+                        if let LeeTransaction::PrivacyPreserving(tx) = tx {
                             wallet_core.decode_insert_privacy_preserving_transaction_results(
                                 &tx,
                                 &[Decode(secret, holder_id)],

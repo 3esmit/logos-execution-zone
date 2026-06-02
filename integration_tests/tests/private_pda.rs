@@ -7,14 +7,13 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
-    NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
-use log::info;
-use nssa::{
+use lee::{
     AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
@@ -23,12 +22,13 @@ use nssa::{
     },
     program::Program,
 };
-use nssa_core::{
+use lee_core::{
     InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
 };
+use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -102,7 +102,7 @@ async fn fund_private_pda(
 
     wallet
         .sequencer_client
-        .send_transaction(NSSATransaction::PrivacyPreserving(tx))
+        .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
 
@@ -170,7 +170,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let proxy = {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../artifacts/test_program_methods")
-            .join(NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
+            .join(LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
         Program::new(std::fs::read(&path).with_context(|| format!("reading {path:?}"))?)
             .context("invalid pda_spend_proxy binary")?
     };

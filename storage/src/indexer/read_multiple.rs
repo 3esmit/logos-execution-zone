@@ -1,4 +1,4 @@
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 
 use super::{Block, DbError, DbResult, RocksDBIO};
 
@@ -181,7 +181,7 @@ impl RocksDBIO {
         acc_id: [u8; 32],
         offset: u64,
         limit: u64,
-    ) -> DbResult<Vec<NSSATransaction>> {
+    ) -> DbResult<Vec<LeeTransaction>> {
         let mut tx_batch = vec![];
 
         let tx_hashes = self.get_acc_transaction_hashes(acc_id, offset, limit)?;

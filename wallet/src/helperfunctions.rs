@@ -1,7 +1,7 @@
 use std::{path::PathBuf, str::FromStr as _};
 
 use anyhow::{Context as _, Result};
-use nssa_core::account::Nonce;
+use lee_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
 
 use crate::HOME_DIR_ENV_VAR;
@@ -33,21 +33,21 @@ pub fn read_mnemonic() -> anyhow::Result<zeroize::Zeroizing<String>> {
         .map_err(Into::into)
 }
 
-/// Get home dir for wallet. Env var `NSSA_WALLET_HOME_DIR` must be set before execution to succeed.
-fn get_home_nssa_var() -> Result<PathBuf> {
+/// Get home dir for wallet. Env var `LEE_WALLET_HOME_DIR` must be set before execution to succeed.
+fn get_home_lee_var() -> Result<PathBuf> {
     Ok(PathBuf::from_str(&std::env::var(HOME_DIR_ENV_VAR)?)?)
 }
 
 /// Get home dir for wallet. Env var `HOME` must be set before execution to succeed.
 fn get_home_default_path() -> Result<PathBuf> {
     std::env::home_dir()
-        .map(|path| path.join(".nssa").join("wallet"))
+        .map(|path| path.join(".lee").join("wallet"))
         .context("Failed to get HOME")
 }
 
 /// Get home dir for wallet.
 pub fn get_home() -> Result<PathBuf> {
-    get_home_nssa_var().or_else(|_| get_home_default_path())
+    get_home_lee_var().or_else(|_| get_home_default_path())
 }
 
 /// Fetch config path from default home.

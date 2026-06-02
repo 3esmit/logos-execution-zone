@@ -184,9 +184,8 @@ pub unsafe extern "C" fn query_account(
         .map_or_else(
             |_| PointerResult::from_error(OperationStatus::ClientError),
             |acc| {
-                let acc_nssa: nssa::Account =
-                    acc.try_into().expect("Source is in blocks, must fit");
-                PointerResult::from_value(acc_nssa.into())
+                let acc_lee: lee::Account = acc.try_into().expect("Source is in blocks, must fit");
+                PointerResult::from_value(acc_lee.into())
             },
         )
 }

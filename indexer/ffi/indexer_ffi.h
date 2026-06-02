@@ -194,7 +194,7 @@ typedef struct FfiPublicTransactionBody {
 } FfiPublicTransactionBody;
 
 /**
- * Account data structure - C-compatible version of nssa Account.
+ * Account data structure - C-compatible version of lee Account.
  *
  * Note: `balance` and `nonce` are u128 values represented as little-endian
  * byte arrays since C doesn't have native u128 support.

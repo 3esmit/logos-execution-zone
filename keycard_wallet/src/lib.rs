@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use nssa::{AccountId, PublicKey, Signature};
+use lee::{AccountId, PublicKey, Signature};
 use pyo3::{prelude::*, types::PyAny};
 use serde::{Deserialize, Serialize};
 
@@ -198,11 +198,11 @@ impl KeycardWallet {
 }
 
 fn pairing_file_path() -> Option<PathBuf> {
-    let home = std::env::var("NSSA_WALLET_HOME_DIR")
+    let home = std::env::var("LEE_WALLET_HOME_DIR")
         .map(PathBuf::from)
         .or_else(|_| {
             std::env::home_dir()
-                .map(|h| h.join(".nssa").join("wallet"))
+                .map(|h| h.join(".lee").join("wallet"))
                 .ok_or(())
         })
         .ok()?;

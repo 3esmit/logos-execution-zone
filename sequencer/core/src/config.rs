@@ -9,8 +9,8 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 use humantime_serde;
+use lee::AccountId;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use nssa::AccountId;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

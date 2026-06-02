@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
-use common::transaction::NSSATransaction;
-use nssa::{PublicTransaction, program::Program, public_transaction};
+use common::transaction::LeeTransaction;
+use lee::{PublicTransaction, program::Program, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::{AccountIdentity, WalletCore};
 
@@ -89,7 +89,7 @@ async fn main() {
             // Submit the transaction
             let _response = wallet_core
                 .sequencer_client
-                .send_transaction(NSSATransaction::Public(tx))
+                .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();
         }
@@ -128,7 +128,7 @@ async fn main() {
             // Submit the transaction
             let _response = wallet_core
                 .sequencer_client
-                .send_transaction(NSSATransaction::Public(tx))
+                .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .unwrap();
         }

@@ -8,9 +8,9 @@ use key_protocol::key_management::{
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
     secret_holders::SeedHolder,
 };
+use lee::{Account, AccountId};
+use lee_core::{Identifier, PrivateAccountKind};
 use log::{debug, warn};
-use nssa::{Account, AccountId};
-use nssa_core::{Identifier, PrivateAccountKind};
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
 
@@ -54,8 +54,8 @@ pub struct SharedAccountEntry {
     pub identifier: Identifier,
     /// For PDA accounts, the seed and program ID used to derive keys via `derive_keys_for_pda`.
     /// `None` for regular shared accounts (keys derived from identifier via derivation seed).
-    pub pda_seed: Option<nssa_core::program::PdaSeed>,
-    pub authority_program_id: Option<nssa_core::program::ProgramId>,
+    pub pda_seed: Option<lee_core::program::PdaSeed>,
+    pub authority_program_id: Option<lee_core::program::ProgramId>,
     pub account: Account,
 }
 
@@ -63,7 +63,7 @@ pub struct SharedAccountEntry {
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct UserKeyChain {
     /// Imported public accounts.
-    imported_public_accounts: BTreeMap<AccountId, nssa::PrivateKey>,
+    imported_public_accounts: BTreeMap<AccountId, lee::PrivateKey>,
     /// Imported private accounts.
     imported_private_accounts: BTreeMap<ImportedPrivateAccountKey, ImportedPrivateAccountData>,
     /// Tree of public account keys.
@@ -73,13 +73,13 @@ pub struct UserKeyChain {
     /// Cached plaintext state of shared private accounts (PDAs and regular shared accounts),
     /// keyed by `AccountId`. Each entry stores the group label and identifier needed
     /// to re-derive keys during sync.
-    shared_private_accounts: BTreeMap<nssa::AccountId, SharedAccountEntry>,
+    shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
     /// Group key holders for shared account management, keyed by a human-readable label.
     group_key_holders: BTreeMap<Label, GroupKeyHolder>,
     /// Dedicated sealing secret key for GMS distribution. Generated once via
     /// `wallet group new-sealing-key`. The corresponding public key is shared with
     /// group members so they can seal GMS for this wallet.
-    sealing_secret_key: Option<nssa_core::encryption::Scalar>,
+    sealing_secret_key: Option<lee_core::encryption::Scalar>,
 }
 
 impl UserKeyChain {
@@ -113,7 +113,7 @@ impl UserKeyChain {
     /// For more details see
     /// [`key_protocol::key_management::key_tree::KeyTreePublic::cleanup_tree_remove_uninit_layered()`]
     /// and [`key_protocol::key_management::key_tree::KeyTreePrivate::cleanup_tree_remove_uninit_layered()`].
-    pub async fn cleanup_trees_remove_uninit_layered<F: Future<Output = Result<nssa::Account>>>(
+    pub async fn cleanup_trees_remove_uninit_layered<F: Future<Output = Result<lee::Account>>>(
         &mut self,
         depth: u32,
         get_account: impl Fn(AccountId) -> F,
@@ -147,7 +147,7 @@ impl UserKeyChain {
 
     /// Returns the signing key for public transaction signatures.
     #[must_use]
-    pub fn pub_account_signing_key(&self, account_id: AccountId) -> Option<&nssa::PrivateKey> {
+    pub fn pub_account_signing_key(&self, account_id: AccountId) -> Option<&lee::PrivateKey> {
         self.imported_public_accounts
             .get(&account_id)
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
@@ -199,7 +199,7 @@ impl UserKeyChain {
         &mut self,
         cci: &ChainIndex,
         identifier: Identifier,
-    ) -> Option<nssa::AccountId> {
+    ) -> Option<lee::AccountId> {
         self.private_key_tree
             .register_identifier_on_node(cci, identifier)
     }
@@ -281,8 +281,8 @@ impl UserKeyChain {
             )
     }
 
-    pub fn add_imported_public_account(&mut self, private_key: nssa::PrivateKey) {
-        let account_id = AccountId::from(&nssa::PublicKey::new_from_private_key(&private_key));
+    pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
+        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
         self.imported_public_accounts
             .insert(account_id, private_key);
@@ -328,7 +328,7 @@ impl UserKeyChain {
         &mut self,
         account_id: AccountId,
         kind: PrivateAccountKind,
-        account: nssa_core::account::Account,
+        account: lee_core::account::Account,
     ) -> Result<()> {
         // Try to find in shared accounts
         if let Some(entry) = self.shared_private_accounts.get_mut(&account_id) {
@@ -379,7 +379,7 @@ impl UserKeyChain {
         // Node not yet in account_id_map — find it by checking all nodes
         for (ci, node) in &mut self.private_key_tree.key_map {
             let expected_id =
-                nssa::AccountId::for_private_account(&node.value.0.nullifier_public_key, &kind);
+                lee::AccountId::for_private_account(&node.value.0.nullifier_public_key, &kind);
             if expected_id == account_id {
                 match node.value.1.entry(kind) {
                     Entry::Occupied(mut occupied) => {
@@ -451,7 +451,7 @@ impl UserKeyChain {
     #[must_use]
     pub fn shared_private_account(
         &self,
-        account_id: nssa::AccountId,
+        account_id: lee::AccountId,
     ) -> Option<&SharedAccountEntry> {
         self.shared_private_accounts.get(&account_id)
     }
@@ -459,7 +459,7 @@ impl UserKeyChain {
     /// Inserts or replaces a shared private account entry.
     pub fn insert_shared_private_account(
         &mut self,
-        account_id: nssa::AccountId,
+        account_id: lee::AccountId,
         entry: SharedAccountEntry,
     ) {
         self.shared_private_accounts.insert(account_id, entry);
@@ -468,8 +468,8 @@ impl UserKeyChain {
     /// Updates the cached account state for a shared private account.
     pub fn update_shared_private_account_state(
         &mut self,
-        account_id: &nssa::AccountId,
-        account: nssa_core::account::Account,
+        account_id: &lee::AccountId,
+        account: lee_core::account::Account,
     ) {
         if let Some(entry) = self.shared_private_accounts.get_mut(account_id) {
             entry.account = account;
@@ -503,18 +503,18 @@ impl UserKeyChain {
     /// Iterates over all shared private accounts.
     pub fn shared_private_accounts_iter(
         &self,
-    ) -> impl Iterator<Item = (&nssa::AccountId, &SharedAccountEntry)> {
+    ) -> impl Iterator<Item = (&lee::AccountId, &SharedAccountEntry)> {
         self.shared_private_accounts.iter()
     }
 
     /// Returns the sealing secret key for GMS distribution, if it exists.
     #[must_use]
-    pub const fn sealing_secret_key(&self) -> Option<nssa_core::encryption::Scalar> {
+    pub const fn sealing_secret_key(&self) -> Option<lee_core::encryption::Scalar> {
         self.sealing_secret_key
     }
 
     /// Sets the sealing secret key for GMS distribution.
-    pub const fn set_sealing_secret_key(&mut self, key: nssa_core::encryption::Scalar) {
+    pub const fn set_sealing_secret_key(&mut self, key: lee_core::encryption::Scalar) {
         self.sealing_secret_key = Some(key);
     }
 
@@ -705,8 +705,8 @@ mod tests {
     fn add_imported_public_account() {
         let mut user_data = UserKeyChain::default();
 
-        let private_key = nssa::PrivateKey::new_os_random();
-        let account_id = AccountId::from(&nssa::PublicKey::new_from_private_key(&private_key));
+        let private_key = lee::PrivateKey::new_os_random();
+        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
         user_data.add_imported_public_account(private_key);
 
@@ -721,7 +721,7 @@ mod tests {
 
         let key_chain = KeyChain::new_os_random();
         let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
-        let account = nssa_core::account::Account::default();
+        let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account);
 
@@ -736,11 +736,11 @@ mod tests {
 
         let key_chain = KeyChain::new_os_random();
         let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
-        let account = nssa_core::account::Account::default();
+        let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account.clone());
 
-        let new_account = nssa_core::account::Account {
+        let new_account = lee_core::account::Account {
             balance: 100,
             ..account
         };
@@ -761,9 +761,9 @@ mod tests {
         let (account_id, _chain_index) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
 
-        let new_account = nssa_core::account::Account {
+        let new_account = lee_core::account::Account {
             balance: 100,
-            ..nssa_core::account::Account::default()
+            ..lee_core::account::Account::default()
         };
 
         user_data
@@ -782,9 +782,9 @@ mod tests {
         let key_chain = KeyChain::new_os_random();
         let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
 
-        let new_account = nssa_core::account::Account {
+        let new_account = lee_core::account::Account {
             balance: 100,
-            ..nssa_core::account::Account::default()
+            ..lee_core::account::Account::default()
         };
 
         let result = user_data.insert_private_account(
@@ -802,7 +802,7 @@ mod tests {
 
         let key_chain = KeyChain::new_os_random();
         let account_id1 = AccountId::from((&key_chain.nullifier_public_key, 0));
-        let account = nssa_core::account::Account::default();
+        let account = lee_core::account::Account::default();
         user_data.add_imported_private_account(key_chain, None, 0, account);
 
         let (account_id2, chain_index2) = user_data
@@ -852,14 +852,14 @@ mod tests {
 
     #[test]
     fn shared_account_entry_serde_round_trip() {
-        use nssa_core::program::PdaSeed;
+        use lee_core::program::PdaSeed;
 
         let entry = SharedAccountEntry {
             group_label: Label::new("test-group"),
             identifier: 42,
             pda_seed: None,
             authority_program_id: None,
-            account: nssa_core::account::Account::default(),
+            account: lee_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");
         let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
@@ -872,7 +872,7 @@ mod tests {
             identifier: u128::MAX,
             pda_seed: Some(PdaSeed::new([7_u8; 32])),
             authority_program_id: Some([9; 8]),
-            account: nssa_core::account::Account::default(),
+            account: lee_core::account::Account::default(),
         };
         let pda_encoded = bincode::serialize(&pda_entry).expect("serialize pda");
         let pda_decoded: SharedAccountEntry =
@@ -891,7 +891,7 @@ mod tests {
             identifier: 1,
             pda_seed: None,
             authority_program_id: None,
-            account: nssa_core::account::Account::default(),
+            account: lee_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");
         let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
@@ -902,7 +902,7 @@ mod tests {
 
     #[test]
     fn shared_account_derives_consistent_keys_from_group() {
-        use nssa_core::program::PdaSeed;
+        use lee_core::program::PdaSeed;
 
         let mut user_data = UserKeyChain::default();
         let gms_holder = GroupKeyHolder::from_gms([42_u8; 32]);
