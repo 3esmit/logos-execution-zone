@@ -2,8 +2,8 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::block::Block;
-use log::warn;
-use logos_blockchain_core::mantle::{Note, ledger::Outputs};
+use log::{info, warn};
+use logos_blockchain_core::mantle::{Note, ledger::Outputs, ops::channel::inscribe::Inscription};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
@@ -138,19 +138,23 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         bridge_withdrawals: Vec<BridgeWithdrawData>,
     ) -> Result<()> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
-        let data_bounded = data
+        let data_bounded: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
+        let data_byte_size = data_bounded.len();
 
         if bridge_withdrawals.is_empty() {
             self.handle
                 .publish_message(data_bounded)
                 .await
                 .context("Failed to publish block")?;
+
+            info!("Published block with the size of {data_byte_size} bytes");
+
             return Ok(());
         }
 
-        let withdraws = bridge_withdrawals
+        let withdraws: Vec<_> = bridge_withdrawals
             .into_iter()
             .map(|withdrawal| {
                 let recipient_pk =
@@ -164,10 +168,16 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             })
             .collect();
 
+        let withdraw_count = withdraws.len();
         self.handle
             .publish_atomic_withdraw(data_bounded, withdraws)
             .await
             .context("Failed to publish block with withdrawals")?;
+
+        info!(
+            "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+        );
+
         Ok(())
     }
 }
