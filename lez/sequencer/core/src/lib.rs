@@ -744,6 +744,20 @@ mod tests {
         test_utils::sequencer_sign_key_for_testing,
         transaction::{LeeTransaction, clock_invocation},
     };
+    use key_protocol::key_management::KeyChain;
+    use lee::{
+        Account, AccountId, Data, EphemeralPublicKey, PrivacyPreservingTransaction,
+        SharedSecretKey, V03State,
+        error::LeeError,
+        execute_and_prove,
+        privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
+        program::Program,
+        system_bridge_account_id,
+    };
+    use lee_core::{
+        Commitment, InputAccountIdentity, Nullifier,
+        account::{AccountWithMetadata, Nonce},
+    };
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
     use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
@@ -1512,6 +1526,101 @@ mod tests {
         assert!(
             result.is_err(),
             "Block production should abort when clock account data is corrupted"
+        );
+    }
+
+    #[test]
+    fn private_bridge_withdraw_invocation_is_dropped() {
+        let sender_keys = KeyChain::new_os_random();
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.nullifier_public_key, 0);
+        let sender_private_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            balance: 100,
+            nonce: Nonce(0xdead_beef),
+            data: Data::default(),
+        };
+
+        let mut state = V03State::new_with_genesis_accounts(
+            &[],
+            vec![(
+                Commitment::new(&sender_account_id, &sender_private_account),
+                Nullifier::for_account_initialization(&sender_account_id),
+            )],
+            0,
+        );
+
+        let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
+        let bridge_account_id = system_bridge_account_id();
+
+        let sender_pre = AccountWithMetadata::new(
+            sender_private_account,
+            true,
+            (&sender_keys.nullifier_public_key, 0),
+        );
+        let bridge_pre = AccountWithMetadata::new(
+            state.get_account_by_id(bridge_account_id),
+            false,
+            bridge_account_id,
+        );
+
+        let shared_secret = SharedSecretKey::encapsulate(&sender_keys.viewing_public_key).0;
+
+        let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
+            amount: 1,
+            bedrock_account_pk: [0; 32],
+        })
+        .unwrap();
+
+        let program_with_deps = ProgramWithDependencies::new(
+            Program::bridge(),
+            [(
+                Program::authenticated_transfer_program().id(),
+                Program::authenticated_transfer_program(),
+            )]
+            .into(),
+        );
+
+        let (output, proof) = execute_and_prove(
+            vec![sender_pre, bridge_pre],
+            instruction,
+            vec![
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret,
+                    nsk: sender_keys.private_key_holder.nullifier_secret_key,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender commitment must be in state"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
+            &program_with_deps,
+        )
+        .expect("Execution should succeed");
+
+        let message = Message::try_from_circuit_output(
+            vec![bridge_account_id],
+            vec![],
+            vec![(
+                sender_keys.nullifier_public_key,
+                sender_keys.viewing_public_key,
+                EphemeralPublicKey(vec![12_u8; 1088]),
+            )],
+            output,
+        )
+        .expect("Message construction should succeed");
+        let witness_set =
+            lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
+        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            witness_set,
+        ));
+        let res = tx.execute_check_on_state(&mut state, 1, 0);
+
+        assert!(
+            matches!(res, Err(LeeError::InvalidInput(_))),
+            "Bridge withdraw invocation should be rejected in private execution"
         );
     }
 }

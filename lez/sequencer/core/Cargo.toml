@@ -47,3 +47,4 @@ mock = []
 futures.workspace = true
 test_program_methods.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
+key_protocol.workspace = true
