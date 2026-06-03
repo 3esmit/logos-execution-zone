@@ -80,11 +80,11 @@ impl LeeTransaction {
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
 
-        let system_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS
+        let restricted_modification_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS
             .iter()
             .copied()
             .chain(std::iter::once(lee::system_faucet_account_id()));
-        for account_id in system_accounts {
+        for account_id in restricted_modification_accounts {
             validate_doesnt_modify_account(state, &diff, account_id)?;
         }
 

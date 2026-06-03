@@ -3,12 +3,12 @@ use std::time::Duration;
 use anyhow::Result;
 use common::block::Block;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
 
 use crate::{
-    BridgeWithdrawData,
     block_publisher::{
         BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink,
-        SequencerCheckpoint,
+        OnWithdrawEventSink, SequencerCheckpoint,
     },
     config::BedrockConfig,
 };
@@ -27,6 +27,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _on_checkpoint: CheckpointSink,
         _on_finalized_block: FinalizedBlockSink,
         _on_deposit_event: OnDepositEventSink,
+        _on_withdraw_event: OnWithdrawEventSink,
     ) -> Result<Self> {
         Ok(Self)
     }
@@ -34,7 +35,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
     async fn publish_block(
         &self,
         _block: &Block,
-        _bridge_withdrawals: Vec<BridgeWithdrawData>,
+        _bridge_withdrawals: Vec<WithdrawArg>,
     ) -> Result<()> {
         Ok(())
     }

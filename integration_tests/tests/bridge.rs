@@ -495,7 +495,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     let sender_id = recipient_id;
 
     let observer = create_zone_indexer_observer(ctx.bedrock_addr())?;
-    let observe_fut = wait_for_finalized_withdraw_op(&observer, amount);
+    let observe_fut = wait_for_finalized_withdraw_op(&observer, amount, bedrock_account_pk);
 
     let withdraw_fut = execute_subcommand(
         ctx.wallet_mut(),
@@ -512,6 +512,9 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
 
     observe_result
         .context("Failed while waiting for finalized withdraw event from zone indexer")?;
+
+    // Sleep to observe sequencer log about validated withdraw event
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     Ok(())
 }
@@ -563,11 +566,16 @@ async fn wait_for_finalized_withdraw_op(
                     continue;
                 };
 
-                let amount = withdraw.outputs.amount().context(
-                    "Failed to compute finalized withdraw amount from zone indexer message",
-                )?;
+                let mut iter = withdraw.outputs.iter();
+                let Some(note) = iter.next() else {
+                    continue;
+                };
+                if iter.next().is_some() {
+                    // Withdraw op should only have one output
+                    continue;
+                }
 
-                if amount == expected_amount {
+                if note.value == expected_amount && note.pk == expected_receiver_pk {
                     return Ok(());
                 }
             }

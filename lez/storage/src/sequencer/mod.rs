@@ -11,12 +11,16 @@ use rocksdb::{
 
 use crate::{
     CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
-    cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
+    cells::{
+        SimpleStorableCell,
+        shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
+    },
     error::DbError,
     sequencer::sequencer_cells::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
         LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
-        PendingDepositEventsCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        PendingDepositEventsCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
+        ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -31,6 +35,8 @@ pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
 /// Key base for storing queued deposit events that were not yet
 /// fulfilled on L2.
 pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
+/// Key base for counting unseen L2 withdraw intents.
+pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
 
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
@@ -250,6 +256,14 @@ impl RocksDBIO {
         self.put(&PendingDepositEventsCellRef(records), ())
     }
 
+    fn put_pending_deposit_events_batch(
+        &self,
+        records: &[PendingDepositEventRecord],
+        batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&PendingDepositEventsCellRef(records), (), batch)
+    }
+
     pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
         let mut records = self.get_pending_deposit_events()?;
         if records
@@ -263,10 +277,11 @@ impl RocksDBIO {
         Ok(true)
     }
 
-    pub fn mark_pending_deposit_events_submitted(
+    fn mark_pending_deposit_events_submitted(
         &self,
         deposit_op_ids: &[HashType],
         submitted_block_id: u64,
+        batch: &mut WriteBatch,
     ) -> DbResult<usize> {
         let mut records = self.get_pending_deposit_events()?;
         let mut updated: usize = 0;
@@ -280,7 +295,7 @@ impl RocksDBIO {
         }
 
         if updated > 0 {
-            self.put_pending_deposit_events(&records)?;
+            self.put_pending_deposit_events_batch(&records, batch)?;
         }
 
         Ok(updated)
@@ -304,6 +319,53 @@ impl RocksDBIO {
         }
 
         Ok(removed)
+    }
+
+    fn increment_unseen_withdraw_count(
+        &self,
+        withdrawal: WithdrawalReconciliationKey,
+        batch: &mut WriteBatch,
+    ) -> DbResult<u64> {
+        let current = self
+            .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
+            .map_or(0, |cell| cell.0);
+
+        let next = current.checked_add(1).ok_or_else(|| {
+            DbError::db_interaction_error("Unseen withdraw counter overflow".to_owned())
+        })?;
+
+        self.put_batch(&UnseenWithdrawCountCell(next), withdrawal, batch)?;
+
+        Ok(next)
+    }
+
+    pub fn consume_unseen_withdraw_count(
+        &self,
+        withdrawal: WithdrawalReconciliationKey,
+    ) -> DbResult<bool> {
+        let Some(current) = self
+            .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
+            .map(|cell| cell.0)
+        else {
+            return Ok(false);
+        };
+
+        if let Some(next) = current.checked_sub(1) {
+            self.put(&UnseenWithdrawCountCell(next), withdrawal)?;
+        } else {
+            let cf_meta = self.meta_column();
+            let db_key =
+                <UnseenWithdrawCountCell as SimpleStorableCell>::key_constructor(withdrawal)?;
+
+            self.db.delete_cf(&cf_meta, db_key).map_err(|rerr| {
+                DbError::rocksdb_cast_message(
+                    rerr,
+                    Some("Failed to delete unseen withdraw count".to_owned()),
+                )
+            })?;
+        }
+
+        Ok(true)
     }
 
     pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
@@ -439,11 +501,26 @@ impl RocksDBIO {
             })
     }
 
-    pub fn atomic_update(&self, block: &Block, state: &V03State) -> DbResult<()> {
+    pub fn atomic_update(
+        &self,
+        block: &Block,
+        deposit_op_ids: &[HashType],
+        withdrawals: Vec<WithdrawalReconciliationKey>,
+        state: &V03State,
+    ) -> DbResult<()> {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();
+
         self.put_block(block, false, &mut batch)?;
+
+        self.mark_pending_deposit_events_submitted(deposit_op_ids, block_id, &mut batch)?;
+
+        for withdrawal in withdrawals {
+            self.increment_unseen_withdraw_count(withdrawal, &mut batch)?;
+        }
+
         self.put_lee_state_in_db_batch(state, &mut batch)?;
+
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
