@@ -4,7 +4,6 @@ use core::slice;
 use std::{ffi::c_char, ptr};
 
 use lee::Data;
-use lee_core::encryption::shared_key_derivation::Secp256k1Point;
 
 use crate::error::WalletFfiError;
 
@@ -72,9 +71,9 @@ impl Default for FfiAccount {
 pub struct FfiPrivateAccountKeys {
     /// Nullifier public key (32 bytes).
     pub nullifier_public_key: FfiBytes32,
-    /// viewing public key (compressed secp256k1 point).
+    /// Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
     pub viewing_public_key: *const u8,
-    /// Length of viewing public key (typically 33 bytes).
+    /// Length of viewing public key (always 1184 bytes for ML-KEM-768).
     pub viewing_public_key_len: usize,
 }
 
@@ -161,11 +160,14 @@ impl FfiPrivateAccountKeys {
     }
 
     pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, WalletFfiError> {
-        if self.viewing_public_key_len == 33 {
+        if self.viewing_public_key_len == 1184 {
             let slice = unsafe {
                 slice::from_raw_parts(self.viewing_public_key, self.viewing_public_key_len)
             };
-            Ok(Secp256k1Point(slice.to_vec()))
+            Ok(
+                lee_core::encryption::ViewingPublicKey::from_bytes(slice.to_vec())
+                    .expect("wallet_ffi: length already validated to 1184 bytes"),
+            )
         } else {
             Err(WalletFfiError::InvalidKeyValue)
         }
