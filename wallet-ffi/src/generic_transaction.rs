@@ -14,13 +14,13 @@ use crate::{
 };
 
 #[repr(C)]
-pub struct SerializationHelperResult {
+pub struct FfiInstructionWords {
     pub instruction_words: *mut u32,
     pub instruction_words_size: usize,
     pub error: WalletFfiError,
 }
 
-impl SerializationHelperResult {
+impl FfiInstructionWords {
     const fn from_err(error: WalletFfiError) -> Self {
         Self {
             instruction_words: std::ptr::null_mut(),
@@ -57,8 +57,9 @@ impl TryFrom<&FfiProgram> for Program {
 
 impl From<Program> for FfiProgram {
     fn from(value: Program) -> Self {
-        let elf_size = value.elf.len();
-        let elf_data = Box::into_raw(value.elf.into_boxed_slice()) as *const u8;
+        let elf_clone = value.elf().to_vec();
+        let elf_size = elf_clone.len();
+        let elf_data = Box::into_raw(elf_clone.into_boxed_slice()) as *const u8;
 
         Self { elf_data, elf_size }
     }
@@ -157,10 +158,10 @@ impl Default for FfiTransactionResult {
 pub unsafe extern "C" fn wallet_ffi_serialization_helper(
     input_instruction_data: *const u8,
     input_instruction_data_size: usize,
-) -> SerializationHelperResult {
+) -> FfiInstructionWords {
     if input_instruction_data.is_null() {
         print_error("Null input pointer for instruction_data");
-        return SerializationHelperResult::from_err(WalletFfiError::NullPointer);
+        return FfiInstructionWords::from_err(WalletFfiError::NullPointer);
     }
 
     let input_slice =
@@ -172,7 +173,7 @@ pub unsafe extern "C" fn wallet_ffi_serialization_helper(
         WalletFfiError::SerializationError
     }) {
         Ok(res) => res,
-        Err(err) => return SerializationHelperResult::from_err(err),
+        Err(err) => return FfiInstructionWords::from_err(err),
     };
 
     // The resulting vec contains len as prefix
@@ -182,7 +183,7 @@ pub unsafe extern "C" fn wallet_ffi_serialization_helper(
     let res_boxed = res_vec_u32.into_boxed_slice();
     let res_ptr = Box::into_raw(res_boxed).cast::<u32>();
 
-    SerializationHelperResult {
+    FfiInstructionWords {
         instruction_words: res_ptr,
         instruction_words_size: res_len,
         error: WalletFfiError::Success,
@@ -416,5 +417,53 @@ pub unsafe extern "C" fn wallet_ffi_free_transaction_result(result: *mut FfiTran
                 std::slice::from_raw_parts_mut(result.secrets_data.cast_mut(), result.secrets_size);
             drop(Box::from_raw(std::ptr::from_mut::<[FfiBytes32]>(secrets)));
         }
+    }
+}
+
+/// Free a instruction words returned by `wallet_ffi_serialization_helper`.
+///
+/// # Safety
+/// The result must be either null or a valid result from a serialization helper function.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_instruction_words(words: *mut FfiInstructionWords) {
+    if words.is_null() {
+        return;
+    }
+
+    unsafe {
+        let words = &*words;
+
+        if !words.instruction_words.is_null() {
+            let words = std::slice::from_raw_parts_mut(
+                words.instruction_words,
+                words.instruction_words_size,
+            );
+            drop(Box::from_raw(std::ptr::from_mut::<[u32]>(words)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nssa::program::Program;
+
+    use crate::generic_transaction::FfiProgram;
+
+    #[test]
+    fn program_cast_consistency() {
+        let prog = Program::amm();
+
+        let first_5_bytes = prog.elf()[..5].to_vec();
+
+        let ffi_prog: FfiProgram = prog.into();
+
+        assert!(!ffi_prog.elf_data.is_null());
+
+        let mut ffi_first_5_bytes = vec![];
+        for i in 0..5 {
+            ffi_first_5_bytes.push(unsafe { *ffi_prog.elf_data.add(i) });
+        }
+
+        assert_eq!(ffi_first_5_bytes, first_5_bytes);
     }
 }

@@ -218,11 +218,11 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
-typedef struct SerializationHelperResult {
+typedef struct FfiInstructionWords {
   uint32_t *instruction_words;
   uintptr_t instruction_words_size;
   enum WalletFfiError error;
-} SerializationHelperResult;
+} FfiInstructionWords;
 
 /**
  * Struct representing an account identity, given to `AccountManager` at intialization.
@@ -541,8 +541,8 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
  * # Safety
  * - `input_instruction_data` must be a valid pointer
  */
-struct SerializationHelperResult wallet_ffi_serialization_helper(const uint8_t *input_instruction_data,
-                                                                 uintptr_t input_instruction_data_size);
+struct FfiInstructionWords wallet_ffi_serialization_helper(const uint8_t *input_instruction_data,
+                                                           uintptr_t input_instruction_data_size);
 
 /**
  * Send generic public transaction.
@@ -606,6 +606,14 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
  * The result must be either null or a valid result from a transaction function.
  */
 void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
+
+/**
+ * Free a instruction words returned by `wallet_ffi_serialization_helper`.
+ *
+ * # Safety
+ * The result must be either null or a valid result from a serialization helper function.
+ */
+void wallet_ffi_free_instruction_words(struct FfiInstructionWords *words);
 
 /**
  * Get the public key for a public account.

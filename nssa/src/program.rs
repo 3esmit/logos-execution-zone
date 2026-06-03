@@ -22,8 +22,8 @@ const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Program {
-    pub id: ProgramId,
-    pub elf: Vec<u8>,
+    id: ProgramId,
+    elf: Vec<u8>,
 }
 
 impl Program {

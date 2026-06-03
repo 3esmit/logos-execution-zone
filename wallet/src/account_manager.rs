@@ -1,3 +1,5 @@
+use core::fmt;
+
 use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
@@ -10,7 +12,7 @@ use nssa_core::{
 
 use crate::{ExecutionFailureKind, WalletCore};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
@@ -50,6 +52,65 @@ pub enum AccountIdentity {
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
+}
+
+impl fmt::Debug for AccountIdentity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Public(id) => f.debug_tuple("Public").field(id).finish(),
+            Self::PublicNoSign(id) => f.debug_tuple("PublicNoSign").field(id).finish(),
+            Self::PrivateOwned(id) => f.debug_tuple("PrivateOwned").field(id).finish(),
+            Self::PrivateForeign {
+                npk,
+                vpk,
+                identifier,
+            } => f
+                .debug_struct("PrivateForeign")
+                .field("npk", npk)
+                .field("vpk", vpk)
+                .field("identifier", identifier)
+                .finish(),
+            Self::PrivatePdaOwned(id) => f.debug_tuple("PrivatePdaOwned").field(id).finish(),
+            Self::PrivatePdaForeign {
+                account_id,
+                npk,
+                vpk,
+                identifier,
+            } => f
+                .debug_struct("PrivatePdaForeign")
+                .field("account_id", account_id)
+                .field("npk", npk)
+                .field("vpk", vpk)
+                .field("identifier", identifier)
+                .finish(),
+            Self::PrivateShared {
+                npk,
+                vpk,
+                identifier,
+                ..
+            } => f
+                .debug_struct("PrivateShared")
+                .field("nsk", &"<redacted>")
+                .field("npk", npk)
+                .field("vpk", vpk)
+                .field("identifier", identifier)
+                .finish(),
+            Self::PrivatePdaShared {
+                account_id,
+                npk,
+                vpk,
+                identifier,
+                ..
+            } => f
+                .debug_struct("PrivatePdaShared")
+                .field("account_id", account_id)
+                .field("nsk", &"<redacted>")
+                .field("npk", npk)
+                .field("vpk", vpk)
+                .field("identifier", identifier)
+                .finish(),
+        }
+    }
 }
 
 impl AccountIdentity {

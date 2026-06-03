@@ -376,3 +376,23 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use nssa::AccountId;
+    use wallet::AccountIdentity;
+
+    use crate::{keys::wallet_ffi_free_account_identity, FfiAccountIdentity};
+
+    #[test]
+    fn acc_identity_correct_free() {
+        let acc_identity = AccountIdentity::Public(AccountId::new([42; 32]));
+        let mut ffi_acc_identity: FfiAccountIdentity = acc_identity.into();
+
+        unsafe {
+            wallet_ffi_free_account_identity(&raw mut ffi_acc_identity);
+        }
+
+        assert!(ffi_acc_identity.viewing_public_key.is_null());
+    }
+}
