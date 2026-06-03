@@ -21,12 +21,12 @@ use std::{
 
 use anyhow::Result;
 use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
-use log::info;
-use nssa::{
+use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use nssa_core::program::DEFAULT_PROGRAM_ID;
+use lee_core::program::DEFAULT_PROGRAM_ID;
+use log::info;
 use tempfile::tempdir;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
@@ -906,7 +906,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = nssa::AccountId::for_regular_private_account(&out_keys.npk(), 0_u128);
+        let account_id = lee::AccountId::for_regular_private_account(&out_keys.npk(), 0_u128);
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
     };
@@ -1042,7 +1042,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
-        let account_id = nssa::AccountId::for_regular_private_account(&out_keys.npk(), 0_u128);
+        let account_id = lee::AccountId::for_regular_private_account(&out_keys.npk(), 0_u128);
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
     };

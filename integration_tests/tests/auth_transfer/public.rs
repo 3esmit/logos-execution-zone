@@ -1,10 +1,10 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention};
+use lee::{program::Program, public_transaction, system_faucet_account_id};
 use log::info;
-use nssa::{program::Program, public_transaction, system_faucet_account_id};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -368,13 +368,13 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
     )?;
-    let tx = nssa::PublicTransaction::new(
+    let tx = lee::PublicTransaction::new(
         message,
-        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     );
     let tx_hash = ctx
         .sequencer_client()
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await?;
 
     info!("Waiting for next block creation");
@@ -426,13 +426,13 @@ async fn cannot_execute_faucet_program() -> Result<()> {
             amount,
         },
     )?;
-    let tx = nssa::PublicTransaction::new(
+    let tx = lee::PublicTransaction::new(
         message,
-        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     );
     let tx_hash = ctx
         .sequencer_client()
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await?;
 
     info!("Waiting for next block creation");
@@ -464,8 +464,8 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
             .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
     )?;
     let faucet_chain_caller_id = Program::new(binary.clone())?.id();
-    let deploy_tx = NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
-        nssa::program_deployment_transaction::Message::new(binary),
+    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+        lee::program_deployment_transaction::Message::new(binary),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
@@ -485,9 +485,9 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         vec![],
         (faucet_program_id, vault_program_id, attacker, amount),
     )?;
-    let attack_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+    let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,
-        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
     let faucet_balance_before = ctx

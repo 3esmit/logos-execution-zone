@@ -1,10 +1,10 @@
 use bridge_core::Instruction;
-use nssa_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 fn unchanged_post_states(
-    pre_states: &[nssa_core::account::AccountWithMetadata],
+    pre_states: &[lee_core::account::AccountWithMetadata],
 ) -> Vec<AccountPostState> {
     pre_states
         .iter()
@@ -21,7 +21,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     assert!(
         caller_program_id.is_none(),

@@ -10,8 +10,8 @@ workspace = true
 [dependencies]
 test_fixtures.workspace = true
 
-nssa_core = { workspace = true, features = ["host"] }
-nssa.workspace = true
+lee_core = { workspace = true, features = ["host"] }
+lee.workspace = true
 authenticated_transfer_core.workspace = true
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
 wallet.workspace = true

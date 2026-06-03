@@ -12,8 +12,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+use lee::program::Program;
 use log::info;
-use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;

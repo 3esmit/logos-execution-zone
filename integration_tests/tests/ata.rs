@@ -12,8 +12,8 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
+use lee::program::Program;
 use log::info;
-use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
@@ -24,7 +24,7 @@ use wallet::cli::{
 };
 
 /// Create a public account and return its ID.
-async fn new_public_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
+async fn new_public_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Account(AccountSubcommand::New(NewSubcommand::Public {
@@ -40,7 +40,7 @@ async fn new_public_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
 }
 
 /// Create a private account and return its ID.
-async fn new_private_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
+async fn new_private_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Account(AccountSubcommand::New(NewSubcommand::Private {
