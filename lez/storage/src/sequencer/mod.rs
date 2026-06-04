@@ -1,6 +1,9 @@
 use std::{path::Path, sync::Arc};
 
-use common::block::{BedrockStatus, Block, BlockMeta, MantleMsgId};
+use common::{
+    HashType,
+    block::{BedrockStatus, Block, BlockMeta, MantleMsgId},
+};
 use lee::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
@@ -12,7 +15,8 @@ use crate::{
     error::DbError,
     sequencer::sequencer_cells::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
-        LatestBlockMetaCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
+        PendingDepositEventsCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -24,6 +28,9 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing queued deposit events that were not yet
+/// fulfilled on L2.
+pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
 
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
@@ -237,6 +244,72 @@ impl RocksDBIO {
 
     pub fn put_zone_sdk_checkpoint_bytes(&self, bytes: &[u8]) -> DbResult<()> {
         self.put(&ZoneSdkCheckpointCellRef(bytes), ())
+    }
+
+    pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
+        Ok(self
+            .get_opt::<PendingDepositEventsCellOwned>(())?
+            .map_or_else(Vec::new, |cell| cell.0))
+    }
+
+    fn put_pending_deposit_events(&self, records: &[PendingDepositEventRecord]) -> DbResult<()> {
+        self.put(&PendingDepositEventsCellRef(records), ())
+    }
+
+    pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
+        let mut records = self.get_pending_deposit_events()?;
+        if records
+            .iter()
+            .any(|record| record.deposit_op_id == event.deposit_op_id)
+        {
+            return Ok(false);
+        }
+        records.push(event);
+        self.put_pending_deposit_events(&records)?;
+        Ok(true)
+    }
+
+    pub fn mark_pending_deposit_events_submitted(
+        &self,
+        deposit_op_ids: &[HashType],
+        submitted_block_id: u64,
+    ) -> DbResult<usize> {
+        let mut records = self.get_pending_deposit_events()?;
+        let mut updated: usize = 0;
+
+        for record in records
+            .iter_mut()
+            .filter(|record| deposit_op_ids.contains(&record.deposit_op_id))
+        {
+            record.submitted_in_block_id = Some(submitted_block_id);
+            updated = updated.saturating_add(1);
+        }
+
+        if updated > 0 {
+            self.put_pending_deposit_events(&records)?;
+        }
+
+        Ok(updated)
+    }
+
+    pub fn remove_fulfilled_pending_deposit_events_up_to_block(
+        &self,
+        finalized_block_id: u64,
+    ) -> DbResult<usize> {
+        let mut records = self.get_pending_deposit_events()?;
+        let before = records.len();
+        records.retain(|record| {
+            record
+                .submitted_in_block_id
+                .is_none_or(|submitted_id| submitted_id > finalized_block_id)
+        });
+
+        let removed = before.saturating_sub(records.len());
+        if removed > 0 {
+            self.put_pending_deposit_events(&records)?;
+        }
+
+        Ok(removed)
     }
 
     pub fn put_block(

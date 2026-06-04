@@ -10,7 +10,7 @@ use lee::V03State;
 use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 pub use storage::DbResult;
-use storage::sequencer::RocksDBIO;
+use storage::sequencer::{RocksDBIO, sequencer_cells::PendingDepositEventRecord};
 
 pub struct SequencerStore {
     dbio: Arc<RocksDBIO>,
@@ -164,6 +164,27 @@ impl SequencerStore {
             serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")?;
         self.dbio.put_zone_sdk_checkpoint_bytes(&bytes)?;
         Ok(())
+    }
+
+    pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
+        self.dbio.get_pending_deposit_events()
+    }
+
+    pub fn mark_unfulfilled_deposit_events_submitted(
+        &self,
+        deposit_op_ids: &[HashType],
+        submitted_block_id: u64,
+    ) -> DbResult<usize> {
+        self.dbio
+            .mark_pending_deposit_events_submitted(deposit_op_ids, submitted_block_id)
+    }
+
+    pub fn remove_fulfilled_unfulfilled_deposit_events_up_to_block(
+        &self,
+        finalized_block_id: u64,
+    ) -> DbResult<usize> {
+        self.dbio
+            .remove_fulfilled_pending_deposit_events_up_to_block(finalized_block_id)
     }
 }
 

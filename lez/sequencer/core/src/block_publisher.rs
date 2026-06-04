@@ -94,7 +94,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                     continue;
                 };
                 match event {
-                    Event::Published { checkpoint, .. } => on_checkpoint(checkpoint),
+                    Event::Checkpoint { checkpoint } => on_checkpoint(checkpoint),
                     Event::TxsFinalized { items } => {
                         for op in items.into_iter().flat_map(|item| item.ops) {
                             match op {
@@ -111,7 +111,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                             }
                         }
                     }
-                    Event::ChannelUpdate { .. } | Event::Ready => {}
+                    Event::ChannelUpdate { .. }
+                    | Event::Published { .. }
+                    | Event::Readiness { .. }
+                    | Event::TurnNotification { .. } => {}
                 }
             }
         });

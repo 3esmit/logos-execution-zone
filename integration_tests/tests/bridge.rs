@@ -43,6 +43,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         vec![bridge_account_id, recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: [0_u8; 32],
             vault_program_id,
             recipient_id,
             amount: 1,
@@ -129,6 +130,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
+        l1_deposit_op_id: [0_u8; 32],
         vault_program_id,
         recipient_id,
         amount: 1,
@@ -204,7 +206,9 @@ async fn submit_bedrock_deposit(
 
     // Encode deposit metadata
     let metadata = borsh::to_vec(&DepositMetadata { recipient_id })
-        .context("Failed to encode deposit metadata")?;
+        .context("Failed to encode deposit metadata")?
+        .try_into()
+        .context("Encoded metadata is too big")?;
 
     let funding_key = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 
@@ -307,7 +311,7 @@ async fn submit_bedrock_deposit(
         tip: None,
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![selected_note_id]),
+            inputs: Inputs::new(selected_note_id),
             metadata,
         },
         change_public_key: balance.address,
