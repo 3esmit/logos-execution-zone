@@ -101,7 +101,7 @@ pub unsafe extern "C" fn wallet_ffi_program_deployment(
 /// - Error code on other failures
 ///
 /// # Memory
-/// - freeing this data is a responsibility of a user
+/// - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
 ///
 /// # Safety
 /// - `ffi_program` must be a non-null pointer
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_elf(ffi_program: *mut FfiProgram) -
 /// - Error code on other failures
 ///
 /// # Memory
-/// - freeing this data is a responsibility of a user
+/// - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
 ///
 /// # Safety
 /// - `ffi_program` must be a non-null pointer
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn wallet_ffi_token_elf(ffi_program: *mut FfiProgram) -> W
 /// - Error code on other failures
 ///
 /// # Memory
-/// - freeing this data is a responsibility of a user
+/// - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
 ///
 /// # Safety
 /// - `ffi_program` must be a non-null pointer
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn wallet_ffi_amm_elf(ffi_program: *mut FfiProgram) -> Wal
 /// - Error code on other failures
 ///
 /// # Memory
-/// - freeing this data is a responsibility of a user
+/// - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
 ///
 /// # Safety
 /// - `ffi_program` must be a non-null pointer
@@ -227,4 +227,27 @@ pub unsafe extern "C" fn wallet_ffi_ata_elf(ffi_program: *mut FfiProgram) -> Wal
     };
 
     WalletFfiError::Success
+}
+
+/// Free a ffi program returned by functions `wallet_ffi_*_elf`.
+///
+/// # Safety
+/// The result must be either null or a valid result from a elf getter function.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_ffi_program(ffi_program: *mut FfiProgram) {
+    if ffi_program.is_null() {
+        return;
+    }
+
+    unsafe {
+        let ffi_program = &*ffi_program;
+
+        if !ffi_program.elf_data.is_null() {
+            let elf = std::slice::from_raw_parts_mut(
+                ffi_program.elf_data.cast_mut(),
+                ffi_program.elf_size,
+            );
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(elf)));
+        }
+    }
 }

@@ -909,7 +909,7 @@ enum WalletFfiError wallet_ffi_program_deployment(struct WalletHandle *handle,
  * - Error code on other failures
  *
  * # Memory
- * - freeing this data is a responsibility of a user
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
  *
  * # Safety
  * - `ffi_program` must be a non-null pointer
@@ -929,7 +929,7 @@ enum WalletFfiError wallet_ffi_transfer_elf(struct FfiProgram *ffi_program);
  * - Error code on other failures
  *
  * # Memory
- * - freeing this data is a responsibility of a user
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
  *
  * # Safety
  * - `ffi_program` must be a non-null pointer
@@ -949,7 +949,7 @@ enum WalletFfiError wallet_ffi_token_elf(struct FfiProgram *ffi_program);
  * - Error code on other failures
  *
  * # Memory
- * - freeing this data is a responsibility of a user
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
  *
  * # Safety
  * - `ffi_program` must be a non-null pointer
@@ -969,12 +969,20 @@ enum WalletFfiError wallet_ffi_amm_elf(struct FfiProgram *ffi_program);
  * - Error code on other failures
  *
  * # Memory
- * - freeing this data is a responsibility of a user
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
  *
  * # Safety
  * - `ffi_program` must be a non-null pointer
  */
 enum WalletFfiError wallet_ffi_ata_elf(struct FfiProgram *ffi_program);
+
+/**
+ * Free a ffi program returned by functions `wallet_ffi_*_elf`.
+ *
+ * # Safety
+ * The result must be either null or a valid result from a elf getter function.
+ */
+void wallet_ffi_free_ffi_program(struct FfiProgram *ffi_program);
 
 /**
  * Synchronize private accounts to a specific block.
