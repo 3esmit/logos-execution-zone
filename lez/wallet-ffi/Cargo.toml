@@ -15,6 +15,7 @@ wallet.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+common.workspace = true
 
 tokio.workspace = true
 key_protocol.workspace = true
