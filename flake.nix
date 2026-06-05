@@ -126,7 +126,7 @@
               cargoExtraArgs = "-p wallet-ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp wallet-ffi/wallet_ffi.h $out/include/
+                cp lez/wallet-ffi/wallet_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libwallet_ffi.dylib $out/lib/libwallet_ffi.dylib
