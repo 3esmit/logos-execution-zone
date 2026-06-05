@@ -1,5 +1,6 @@
 #![expect(
     clippy::print_stdout,
+    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -76,6 +77,8 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] lee::error::LeeError),
+    #[error("Failed to sign transaction: {0}")]
+    SignError(anyhow::Error),
     #[error(transparent)]
     KeycardError(#[from] pyo3::PyErr),
 }
@@ -564,6 +567,7 @@ impl WalletCore {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
+
         tx_pre_check(
             &pre_states
                 .iter()
@@ -577,26 +581,30 @@ impl WalletCore {
             instruction_data,
             acc_manager.account_identities(),
             &program.to_owned(),
-        )
-        .unwrap();
+        )?;
 
         let message =
             lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(
                 acc_manager.public_account_ids(),
-                Vec::from_iter(acc_manager.public_account_nonces()),
+                acc_manager.public_account_nonces(),
                 private_account_keys
                     .iter()
                     .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
                     .collect(),
                 output,
-            )
-            .unwrap();
+            )?;
 
-        let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-            &message,
-            proof,
-            &acc_manager.public_account_auth(),
-        );
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::SignError)?;
+
+        let witness_set =
+            lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                signatures_public_keys,
+                proof,
+            );
+
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -651,7 +659,6 @@ impl WalletCore {
         let account_ids = acc_manager.public_account_ids();
         let program_id = program.program.id();
         let nonces = acc_manager.public_account_nonces();
-        let private_keys = acc_manager.public_account_auth();
 
         let message = lee::public_transaction::Message::new_preserialized(
             program_id,
@@ -660,7 +667,13 @@ impl WalletCore {
             instruction_data,
         );
 
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &private_keys);
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::SignError)?;
+
+        let witness_set =
+            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 

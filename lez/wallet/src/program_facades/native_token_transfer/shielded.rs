@@ -8,16 +8,15 @@ use crate::{AccountIdentity, ExecutionFailureKind};
 impl NativeTokenTransfer<'_> {
     pub async fn send_shielded_transfer(
         &self,
-        from: AccountId,
+        from: AccountIdentity,
         to: AccountId,
         balance_to_move: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
-
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    AccountIdentity::Public(from),
+                    from,
                     self.0
                         .resolve_private_account(to)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -38,18 +37,17 @@ impl NativeTokenTransfer<'_> {
 
     pub async fn send_shielded_transfer_to_outer_account(
         &self,
-        from: AccountId,
+        from: AccountIdentity,
         to_npk: NullifierPublicKey,
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
         balance_to_move: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
-
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    AccountIdentity::Public(from),
+                    from,
                     AccountIdentity::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,

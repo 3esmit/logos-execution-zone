@@ -91,14 +91,18 @@ impl WalletSubcommand for AtaSubcommand {
                 owner,
                 token_definition,
             } => {
-                let owner = owner.resolve(wallet_core.storage())?;
+                let owner_resolved = owner.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
 
-                match owner {
+                match owner_resolved {
                     AccountIdWithPrivacy::Public(owner_id) => {
-                        Ata(wallet_core)
-                            .send_create(owner_id, definition_id)
+                        let tx_hash = Ata(wallet_core)
+                            .send_create(owner.into_public_identity(owner_id), definition_id)
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(owner_id) => {
@@ -127,15 +131,24 @@ impl WalletSubcommand for AtaSubcommand {
                 to,
                 amount,
             } => {
-                let from = from.resolve(wallet_core.storage())?;
+                let from_resolved = from.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
                 let to_id = to;
 
-                match from {
+                match from_resolved {
                     AccountIdWithPrivacy::Public(from_id) => {
-                        Ata(wallet_core)
-                            .send_transfer(from_id, definition_id, to_id, amount)
+                        let tx_hash = Ata(wallet_core)
+                            .send_transfer(
+                                from.into_public_identity(from_id),
+                                definition_id,
+                                to_id,
+                                amount,
+                            )
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(from_id) => {
@@ -163,14 +176,22 @@ impl WalletSubcommand for AtaSubcommand {
                 token_definition,
                 amount,
             } => {
-                let holder = holder.resolve(wallet_core.storage())?;
+                let holder_resolved = holder.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
 
-                match holder {
+                match holder_resolved {
                     AccountIdWithPrivacy::Public(holder_id) => {
-                        Ata(wallet_core)
-                            .send_burn(holder_id, definition_id, amount)
+                        let tx_hash = Ata(wallet_core)
+                            .send_burn(
+                                holder.into_public_identity(holder_id),
+                                definition_id,
+                                amount,
+                            )
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(holder_id) => {

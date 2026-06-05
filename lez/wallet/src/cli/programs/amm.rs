@@ -131,25 +131,28 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 balance_a,
                 balance_b,
             } => {
-                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
-                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
-                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
-                match (user_holding_a, user_holding_b, user_holding_lp) {
+                let a_id = user_holding_a.resolve(wallet_core.storage())?;
+                let b_id = user_holding_b.resolve(wallet_core.storage())?;
+                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+                match (a_id, b_id, lp_id) {
                     (
-                        AccountIdWithPrivacy::Public(user_holding_a),
-                        AccountIdWithPrivacy::Public(user_holding_b),
-                        AccountIdWithPrivacy::Public(user_holding_lp),
+                        AccountIdWithPrivacy::Public(a),
+                        AccountIdWithPrivacy::Public(b),
+                        AccountIdWithPrivacy::Public(lp),
                     ) => {
-                        Amm(wallet_core)
+                        let tx_hash = Amm(wallet_core)
                             .send_new_definition(
-                                user_holding_a,
-                                user_holding_b,
-                                user_holding_lp,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
+                                user_holding_lp.into_public_identity(lp),
                                 balance_a,
                                 balance_b,
                             )
                             .await?;
-
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     _ => {
@@ -165,23 +168,23 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 min_amount_out,
                 token_definition,
             } => {
-                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
-                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
-                match (user_holding_a, user_holding_b) {
-                    (
-                        AccountIdWithPrivacy::Public(user_holding_a),
-                        AccountIdWithPrivacy::Public(user_holding_b),
-                    ) => {
-                        Amm(wallet_core)
+                let a_id = user_holding_a.resolve(wallet_core.storage())?;
+                let b_id = user_holding_b.resolve(wallet_core.storage())?;
+                match (a_id, b_id) {
+                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
+                        let tx_hash = Amm(wallet_core)
                             .send_swap_exact_input(
-                                user_holding_a,
-                                user_holding_b,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
                                 amount_in,
                                 min_amount_out,
                                 token_definition,
                             )
                             .await?;
-
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     _ => {
@@ -197,23 +200,23 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 max_amount_in,
                 token_definition,
             } => {
-                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
-                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
-                match (user_holding_a, user_holding_b) {
-                    (
-                        AccountIdWithPrivacy::Public(user_holding_a),
-                        AccountIdWithPrivacy::Public(user_holding_b),
-                    ) => {
-                        Amm(wallet_core)
+                let a_id = user_holding_a.resolve(wallet_core.storage())?;
+                let b_id = user_holding_b.resolve(wallet_core.storage())?;
+                match (a_id, b_id) {
+                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
+                        let tx_hash = Amm(wallet_core)
                             .send_swap_exact_output(
-                                user_holding_a,
-                                user_holding_b,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
                                 exact_amount_out,
                                 max_amount_in,
                                 token_definition,
                             )
                             .await?;
-
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     _ => {
@@ -230,26 +233,29 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 max_amount_a,
                 max_amount_b,
             } => {
-                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
-                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
-                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
-                match (user_holding_a, user_holding_b, user_holding_lp) {
+                let a_id = user_holding_a.resolve(wallet_core.storage())?;
+                let b_id = user_holding_b.resolve(wallet_core.storage())?;
+                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+                match (a_id, b_id, lp_id) {
                     (
-                        AccountIdWithPrivacy::Public(user_holding_a),
-                        AccountIdWithPrivacy::Public(user_holding_b),
-                        AccountIdWithPrivacy::Public(user_holding_lp),
+                        AccountIdWithPrivacy::Public(a),
+                        AccountIdWithPrivacy::Public(b),
+                        AccountIdWithPrivacy::Public(lp),
                     ) => {
-                        Amm(wallet_core)
+                        let tx_hash = Amm(wallet_core)
                             .send_add_liquidity(
-                                user_holding_a,
-                                user_holding_b,
-                                user_holding_lp,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
+                                user_holding_lp.into_public_identity(lp),
                                 min_amount_lp,
                                 max_amount_a,
                                 max_amount_b,
                             )
                             .await?;
-
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     _ => {
@@ -266,26 +272,29 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 min_amount_a,
                 min_amount_b,
             } => {
-                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
-                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
-                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
-                match (user_holding_a, user_holding_b, user_holding_lp) {
+                let a_id = user_holding_a.resolve(wallet_core.storage())?;
+                let b_id = user_holding_b.resolve(wallet_core.storage())?;
+                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+                match (a_id, b_id, lp_id) {
                     (
-                        AccountIdWithPrivacy::Public(user_holding_a),
-                        AccountIdWithPrivacy::Public(user_holding_b),
-                        AccountIdWithPrivacy::Public(user_holding_lp),
+                        AccountIdWithPrivacy::Public(a),
+                        AccountIdWithPrivacy::Public(b),
+                        AccountIdWithPrivacy::Public(lp),
                     ) => {
-                        Amm(wallet_core)
+                        let tx_hash = Amm(wallet_core)
                             .send_remove_liquidity(
-                                user_holding_a,
-                                user_holding_b,
-                                user_holding_lp,
+                                a,
+                                b,
+                                user_holding_lp.into_public_identity(lp),
                                 balance_lp,
                                 min_amount_a,
                                 min_amount_b,
                             )
                             .await?;
-
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     _ => {

@@ -138,11 +138,32 @@ impl CliAccountMention {
             Self::KeyPath(path) => {
                 let pin = read_pin()?;
                 let id_str =
-                    keycard_wallet::KeycardWallet::get_account_id_for_path_with_connect(&pin, path)
-                        .map_err(anyhow::Error::from)?;
+                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
+                        &pin, path,
+                    )
+                    .map_err(anyhow::Error::from)?;
                 AccountIdWithPrivacy::from_str(&id_str)
                     .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
             }
+        }
+    }
+
+    #[must_use]
+    pub fn key_path(&self) -> Option<&str> {
+        match self {
+            Self::KeyPath(path) => Some(path),
+            Self::Id(_) | Self::Label(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn into_public_identity(self, account_id: lee::AccountId) -> crate::AccountIdentity {
+        match self {
+            Self::KeyPath(key_path) => crate::AccountIdentity::PublicKeycard {
+                account_id,
+                key_path,
+            },
+            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::Public(account_id),
         }
     }
 }

@@ -787,6 +787,7 @@ enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
                                                  const struct FfiPrivateAccountKeys *to_keys,
                                                  const struct FfiU128 *to_identifier,
                                                  const uint8_t (*amount)[16],
+                                                 const char *key_path,
                                                  struct FfiTransferResult *out_result);
 
 /**
@@ -894,6 +895,7 @@ enum WalletFfiError wallet_ffi_transfer_shielded_owned(struct WalletHandle *hand
                                                        const struct FfiBytes32 *from,
                                                        const struct FfiBytes32 *to,
                                                        const uint8_t (*amount)[16],
+                                                       const char *key_path,
                                                        struct FfiTransferResult *out_result);
 
 /**

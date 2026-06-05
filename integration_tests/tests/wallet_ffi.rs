@@ -137,6 +137,7 @@ unsafe extern "C" {
         to_keys: *const FfiPrivateAccountKeys,
         to_identifier: *const FfiU128,
         amount: *const [u8; 16],
+        key_path: *const c_char,
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
@@ -882,6 +883,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
             &raw const to_keys,
             &raw const to_identifier,
             &raw const amount,
+            std::ptr::null(),
             &raw mut transfer_result,
         )
         .unwrap();
