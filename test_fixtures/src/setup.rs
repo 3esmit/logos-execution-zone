@@ -1,19 +1,22 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use common::transaction::LeeTransaction;
 use indexer_service::IndexerHandle;
-use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, program::Program};
+use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use sequencer_service::{GenesisAction, SequencerHandle};
-use sequencer_service_rpc::RpcClient as _;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{AccDecodeData::Decode, AccountIdentity, WalletCore, config::WalletConfigOverrides};
+use wallet::{
+    WalletCore,
+    cli::{Command, SubcommandReturnValue, programs::vault::VaultSubcommand},
+    config::WalletConfigOverrides,
+};
 
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
     config::{self, InitialPrivateAccountForWallet},
+    private_mention, public_mention,
 };
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
@@ -185,7 +188,7 @@ pub fn setup_wallet(
 }
 
 pub async fn setup_public_accounts_with_initial_supply(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<()> {
     for (private_key, amount) in initial_public_accounts {
@@ -219,45 +222,23 @@ pub async fn setup_private_accounts_with_initial_supply(
 }
 
 async fn claim_funds_from_vault(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     owner_id: AccountId,
     amount: u128,
 ) -> Result<()> {
-    let vault_program_id = Program::vault().id();
-    let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
-
-    let nonces = wallet
-        .get_accounts_nonces(vec![owner_id])
-        .await
-        .context("Failed to fetch owner nonce")?;
-
-    let signing_key = wallet
-        .storage()
-        .key_chain()
-        .pub_account_signing_key(owner_id)
-        .with_context(|| format!("Missing signing key for public account {owner_id}"))?;
-
-    let message = lee::public_transaction::Message::try_new(
-        vault_program_id,
-        vec![owner_id, owner_vault_id],
-        nonces,
-        vault_core::Instruction::Claim { amount },
+    let result = wallet::cli::execute_subcommand(
+        wallet,
+        Command::Vault(VaultSubcommand::Claim {
+            account_id: public_mention(owner_id),
+            amount,
+        }),
     )
-    .context("Failed to build vault claim message")?;
+    .await
+    .context("Failed to execute public vault claim command")?;
 
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-    let tx = PublicTransaction::new(message, witness_set);
-
-    let tx_hash = wallet
-        .sequencer_client
-        .send_transaction(LeeTransaction::Public(tx))
-        .await
-        .context("Failed to submit vault claim transaction")?;
-
-    wallet
-        .poll_native_token_transfer(tx_hash)
-        .await
-        .context("Failed to confirm vault claim transaction")?;
+    let SubcommandReturnValue::Empty = result else {
+        bail!("Expected Empty return value for public vault claim");
+    };
 
     Ok(())
 }
@@ -271,55 +252,19 @@ async fn claim_funds_from_vault_to_private(
         bail!("Missing private account in wallet key chain for account {owner_id}");
     };
 
-    let vault_program = Program::vault();
-    let vault_program_id = vault_program.id();
-    let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+    let result = wallet::cli::execute_subcommand(
+        wallet,
+        Command::Vault(VaultSubcommand::Claim {
+            account_id: private_mention(owner_id),
+            amount,
+        }),
+    )
+    .await
+    .context("Failed to execute private vault claim command")?;
 
-    let instruction_data =
-        Program::serialize_instruction(vault_core::Instruction::Claim { amount })
-            .context("Failed to serialize vault private claim instruction")?;
-
-    let program_with_dependencies =
-        lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
-            vault_program,
-            HashMap::from([(
-                Program::authenticated_transfer_program().id(),
-                Program::authenticated_transfer_program(),
-            )]),
-        );
-
-    let (tx_hash, mut secrets) = wallet
-        .send_privacy_preserving_tx(
-            vec![
-                AccountIdentity::PrivateOwned(owner_id),
-                AccountIdentity::Public(owner_vault_id),
-            ],
-            instruction_data,
-            &program_with_dependencies,
-        )
-        .await
-        .context("Failed to submit private vault claim transaction")?;
-
-    let secret = secrets
-        .pop()
-        .context("Expected one private output secret for vault claim")?;
-
-    let transfer_tx = wallet
-        .poll_native_token_transfer(tx_hash)
-        .await
-        .context("Failed to confirm private vault claim transaction")?;
-
-    let LeeTransaction::PrivacyPreserving(tx) = transfer_tx else {
-        bail!("Expected privacy preserving transaction result for private vault claim");
+    let SubcommandReturnValue::PrivacyPreservingTransfer { .. } = result else {
+        bail!("Expected PrivacyPreservingTransfer return value for private vault claim");
     };
-
-    wallet
-        .decode_insert_privacy_preserving_transaction_results(&tx, &[Decode(secret, owner_id)])
-        .context("Failed to decode private vault claim transaction")?;
-
-    wallet
-        .store_persistent_data()
-        .context("Failed to store wallet data after private vault claim")?;
 
     Ok(())
 }

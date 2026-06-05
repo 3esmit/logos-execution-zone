@@ -25,6 +25,7 @@ _wallet() {
                 'token:Token program interaction subcommand'
                 'amm:AMM program interaction subcommand'
                 'ata:Associated Token Account program interaction subcommand'
+                'vault:Vault program interaction subcommand'
                 'check-health:Check the wallet can connect to the node and builtin local programs match the remote versions'
                 'config:Command to setup config, get and set config fields'
                 'restore-keys:Restoring keys from given password at given depth'
@@ -55,6 +56,9 @@ _wallet() {
                     ;;
                 ata)
                     _wallet_ata
+                    ;;
+                vault)
+                    _wallet_vault
                     ;;
                 config)
                     _wallet_config
@@ -442,6 +446,41 @@ _wallet_ata() {
     esac
 }
 
+# vault subcommand
+_wallet_vault() {
+    local -a subcommands
+
+    _arguments -C \
+        '1: :->subcommand' \
+        '*:: :->args'
+
+    case $state in
+        subcommand)
+            subcommands=(
+                'transfer:Transfer native tokens from sender to recipient vault account'
+                'claim:Claim native tokens from account vault account'
+                'help:Print this message or the help of the given subcommand(s)'
+            )
+            _describe -t subcommands 'vault subcommands' subcommands
+            ;;
+        args)
+            case $line[1] in
+                transfer)
+                    _arguments \
+                        '--from[Source account with privacy prefix or label]:from:_wallet_account_ids' \
+                        '--to[Recipient account with privacy prefix or label]:to:_wallet_account_ids' \
+                        '--amount[Amount of native tokens to transfer]:amount:'
+                    ;;
+                claim)
+                    _arguments \
+                        '--account-id[Account with privacy prefix or label; vault id is derived automatically]:account:_wallet_account_ids' \
+                        '--amount[Amount of native tokens to claim]:amount:'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
 # config subcommand
 _wallet_config() {
     local -a subcommands
@@ -515,6 +554,7 @@ _wallet_help() {
         'token:Token program interaction subcommand'
         'amm:AMM program interaction subcommand'
         'ata:Associated Token Account program interaction subcommand'
+        'vault:Vault program interaction subcommand'
         'check-health:Check the wallet can connect to the node'
         'config:Command to setup config, get and set config fields'
         'restore-keys:Restoring keys from given password at given depth'
