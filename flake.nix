@@ -99,6 +99,7 @@
               pkgs.clang
               pkgs.llvmPackages.libclang.lib
               pkgs.gnutar  # Required for crane's archive operations (macOS tar lacks --sort)
+              pkgs.python3  # Required for correct builds now, as python is sandboxed in nix builds
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             # Point the risc0-circuit-recursion build script to the pre-fetched zip
