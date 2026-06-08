@@ -932,17 +932,9 @@ mod tests {
     }
 
     /// Regression test: a `PrivacyPreservingTransaction` carrying a structurally invalid
-    /// proof must be rejected with a clean `Err`, never a panic.
-    ///
-    /// `Proof` is a plain `Vec<u8>` at the borsh level, so `from_bytes` accepts arbitrary
-    /// proof content. A validly-signed message with garbage proof bytes passes every
-    /// upstream check (commitments non-empty, no duplicates, nonces, signatures, validity
-    /// window) and reaches `Proof::is_valid_for`, which used to `unwrap()` the borsh
-    /// deserialization and panic — unwinding the sequencer's block-production loop. The fix
-    /// maps the deserialization failure to `false`, surfacing as
-    /// `InvalidPrivacyPreservingProof`. Before the fix this test panicked instead of failing.
+    /// proof must be rejected with a clean `Err`.
     #[test]
-    fn privacy_garbage_proof_is_rejected_not_panic() {
+    fn privacy_garbage_proof_is_rejected() {
         use lee_core::{
             Commitment,
             account::Account,
@@ -962,7 +954,10 @@ mod tests {
         // commitment satisfies the non-empty requirement, no signers makes the
         // nonce/signature checks vacuously true, and unbounded validity windows are valid
         // for any block/timestamp.
-        let commitment = Commitment::new(&AccountId::new([1_u8; 32]), &Account::default());
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(
+            &PrivateKey::try_new([1_u8; 32]).unwrap(),
+        ));
+        let commitment = Commitment::new(&account_id, &Account::default());
         let message = Message {
             public_account_ids: vec![],
             nonces: vec![],

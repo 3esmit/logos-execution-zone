@@ -31,10 +31,6 @@ impl Proof {
     }
 
     pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
-        // A malformed proof must be rejected as invalid, not panic: these bytes are
-        // attacker-controlled (`Proof` is a plain `Vec<u8>` at the borsh level, so
-        // `from_bytes` accepts any content), and a panic here would unwind the
-        // sequencer's block-production loop.
         let Ok(inner) = borsh::from_slice::<InnerReceipt>(&self.0) else {
             return false;
         };
