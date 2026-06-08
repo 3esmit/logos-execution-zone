@@ -930,4 +930,61 @@ mod tests {
             "recipient should receive nothing"
         );
     }
+
+    /// Regression test: a `PrivacyPreservingTransaction` carrying a structurally invalid
+    /// proof must be rejected with a clean `Err`, never a panic.
+    ///
+    /// `Proof` is a plain `Vec<u8>` at the borsh level, so `from_bytes` accepts arbitrary
+    /// proof content. A validly-signed message with garbage proof bytes passes every
+    /// upstream check (commitments non-empty, no duplicates, nonces, signatures, validity
+    /// window) and reaches `Proof::is_valid_for`, which used to `unwrap()` the borsh
+    /// deserialization and panic — unwinding the sequencer's block-production loop. The fix
+    /// maps the deserialization failure to `false`, surfacing as
+    /// `InvalidPrivacyPreservingProof`. Before the fix this test panicked instead of failing.
+    #[test]
+    fn privacy_garbage_proof_is_rejected_not_panic() {
+        use lee_core::{
+            Commitment,
+            account::Account,
+            program::{BlockValidityWindow, TimestampValidityWindow},
+        };
+
+        use crate::{
+            PrivacyPreservingTransaction,
+            privacy_preserving_transaction::{
+                circuit::Proof, message::Message, witness_set::WitnessSet,
+            },
+        };
+
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        // Minimal message that passes every check up to proof verification: a single
+        // commitment satisfies the non-empty requirement, no signers makes the
+        // nonce/signature checks vacuously true, and unbounded validity windows are valid
+        // for any block/timestamp.
+        let commitment = Commitment::new(&AccountId::new([1_u8; 32]), &Account::default());
+        let message = Message {
+            public_account_ids: vec![],
+            nonces: vec![],
+            public_post_states: vec![],
+            encrypted_private_post_states: vec![],
+            new_commitments: vec![commitment],
+            new_nullifiers: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        };
+
+        // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
+        let garbage_proof = Proof::from_inner(vec![0xff_u8; 64]);
+        let witness_set = WitnessSet::for_message(&message, garbage_proof, &[]);
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+        match result {
+            Err(LeeError::InvalidPrivacyPreservingProof) => {}
+            Err(other) => panic!("expected InvalidPrivacyPreservingProof, got {other:?}"),
+            Ok(_) => panic!("garbage proof was accepted instead of rejected"),
+        }
+    }
 }
