@@ -12,7 +12,6 @@ pub type BlockHash = HashType;
 pub struct BlockMeta {
     pub id: BlockId,
     pub hash: BlockHash,
-    pub msg_id: MantleMsgId,
 }
 
 #[derive(Debug, Clone)]
