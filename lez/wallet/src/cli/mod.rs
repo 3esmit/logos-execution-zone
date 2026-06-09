@@ -264,7 +264,7 @@ pub async fn execute_subcommand(
         Command::RestoreKeys { depth } => {
             let mnemonic = read_mnemonic_from_stdin()?;
             let password = read_password_from_stdin()?;
-            wallet_core.restore_storage(&mnemonic, &password)?;
+            wallet_core.restore_storage(&mnemonic.to_string(), &password)?;
             execute_keys_restoration(wallet_core, depth).await?;
 
             SubcommandReturnValue::Empty

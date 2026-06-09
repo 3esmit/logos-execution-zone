@@ -199,8 +199,8 @@ impl WalletCore {
     }
 
     /// Restore storage from an existing mnemonic phrase.
-    pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
-        self.storage.restore(mnemonic, password)
+    pub fn restore_storage(&mut self, mnemonic: &str, password: &str) -> Result<()> {
+        self.storage.restore(&Mnemonic::parse(mnemonic)?, password)
     }
 
     /// Store persistent data at home.
