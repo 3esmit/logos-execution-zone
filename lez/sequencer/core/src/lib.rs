@@ -8,7 +8,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
-use lee::{AccountId, PublicTransaction, program::Program, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -616,13 +616,13 @@ fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
     balance: u128,
 ) -> PublicTransaction {
-    let faucet_program_id = Program::faucet().id();
-    let vault_program_id = Program::vault().id();
+    let faucet_program_id = programs::faucet().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![lee::system_faucet_account_id(), recipient_vault_id],
+        vec![system_accounts::faucet_account_id(), recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
@@ -637,12 +637,12 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
-    let faucet_program_id = Program::faucet().id();
-    let bridge_account_id = lee::system_bridge_account_id();
+    let faucet_program_id = programs::faucet().id();
+    let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![lee::system_faucet_account_id(), bridge_account_id],
+        vec![system_accounts::faucet_account_id(), bridge_account_id],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
@@ -666,14 +666,14 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::decode(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = Program::bridge().id();
-    let vault_program_id = Program::vault().id();
+    let bridge_program_id = programs::bridge().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
 
     let message = Message::try_new(
         bridge_program_id,
-        vec![lee::system_bridge_account_id(), recipient_vault_id],
+        vec![system_accounts::bridge_account_id(), recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
@@ -698,7 +698,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != lee::program::Program::bridge().id() {
+    if message.program_id != programs::bridge().id() {
         return None;
     }
 
@@ -721,7 +721,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != lee::program::Program::bridge().id() {
+    if message.program_id != programs::bridge().id() {
         return None;
     }
 
@@ -819,23 +819,23 @@ mod tests {
     };
     use key_protocol::key_management::KeyChain;
     use lee::{
-        Account, AccountId, Data, EphemeralPublicKey, PrivacyPreservingTransaction,
-        SharedSecretKey, V03State,
+        Account, AccountId, Data, EphemeralPublicKey, PrivacyPreservingTransaction, PrivateKey,
+        PublicKey, PublicTransaction, SharedSecretKey, V03State,
         error::LeeError,
         execute_and_prove,
         privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
         program::Program,
-        system_bridge_account_id,
     };
     use lee_core::{
         Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
         account::{AccountWithMetadata, Nonce},
+        program::PdaSeed,
     };
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
     use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
     use tempfile::tempdir;
-    use testnet_initial_state::{initial_accounts, initial_pub_accounts_private_keys};
+    use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
     use crate::{
         TransactionOrigin,
@@ -916,7 +916,7 @@ mod tests {
             return false;
         };
 
-        if public_tx.message.program_id != lee::program::Program::bridge().id() {
+        if public_tx.message.program_id != programs::bridge().id() {
             return false;
         }
 
@@ -945,8 +945,8 @@ mod tests {
         assert_eq!(sequencer.chain_height, 1);
         assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
 
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
+        let acc1_account_id = initial_public_user_accounts()[0].account_id;
+        let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
         let balance_acc_1 = sequencer.state.get_account_by_id(acc1_account_id).balance;
         let balance_acc_2 = sequencer.state.get_account_by_id(acc2_account_id).balance;
@@ -1007,7 +1007,7 @@ mod tests {
         let config = setup_sequencer_config();
         let deposit_op_id = [13_u8; 32];
         let expected_amount = 1_u64;
-        let recipient_id = initial_accounts()[0].account_id;
+        let recipient_id = initial_public_user_accounts()[0].account_id;
 
         {
             let (_sequencer, _mempool_handle) =
@@ -1077,8 +1077,8 @@ mod tests {
     async fn transaction_pre_check_native_transfer_valid() {
         let (_sequencer, _mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key1 = create_signing_key_for_account1();
 
@@ -1094,8 +1094,8 @@ mod tests {
     async fn transaction_pre_check_native_transfer_other_signature() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key2 = create_signing_key_for_account2();
 
@@ -1119,8 +1119,8 @@ mod tests {
     async fn transaction_pre_check_native_transfer_sent_too_much() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key1 = create_signing_key_for_account1();
 
@@ -1148,8 +1148,8 @@ mod tests {
     async fn transaction_execute_native_transfer() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key1 = create_signing_key_for_account1();
 
@@ -1215,8 +1215,8 @@ mod tests {
     async fn replay_transactions_are_rejected_in_the_same_block() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key1 = create_signing_key_for_account1();
 
@@ -1258,8 +1258,8 @@ mod tests {
     async fn replay_transactions_are_rejected_in_different_blocks() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
 
         let sign_key1 = create_signing_key_for_account1();
 
@@ -1309,8 +1309,8 @@ mod tests {
     #[tokio::test]
     async fn restart_from_storage() {
         let config = setup_sequencer_config();
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
+        let acc1_account_id = initial_public_user_accounts()[0].account_id;
+        let acc2_account_id = initial_public_user_accounts()[1].account_id;
         let balance_to_move = 13;
 
         // In the following code block a transaction will be processed that moves `balance_to_move`
@@ -1358,11 +1358,11 @@ mod tests {
         // Balances should be consistent with the stored block
         assert_eq!(
             balance_acc_1,
-            initial_accounts()[0].balance - balance_to_move
+            initial_public_user_accounts()[0].balance - balance_to_move
         );
         assert_eq!(
             balance_acc_2,
-            initial_accounts()[1].balance + balance_to_move
+            initial_public_user_accounts()[1].balance + balance_to_move
         );
     }
 
@@ -1397,8 +1397,8 @@ mod tests {
     #[tokio::test]
     async fn produce_block_with_correct_prev_meta_after_restart() {
         let config = setup_sequencer_config();
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
+        let acc1_account_id = initial_public_user_accounts()[0].account_id;
+        let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
         // Step 1: Create initial database with some block metadata
         let expected_prev_meta = {
@@ -1477,8 +1477,8 @@ mod tests {
         // be dropped because their diffs touch the clock accounts.
         let crafted_clock_tx = {
             let message = lee::public_transaction::Message::try_new(
-                lee::program::Program::clock().id(),
-                lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+                programs::clock().id(),
+                system_accounts::clock_account_ids().to_vec(),
                 vec![],
                 42_u64,
             )
@@ -1520,11 +1520,10 @@ mod tests {
     async fn user_tx_that_chain_calls_clock_is_dropped() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
+        let clock_chain_caller = test_programs::clock_chain_caller();
         // Deploy the clock_chain_caller test program.
         let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(
-                test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
-            ),
+            lee::program_deployment_transaction::Message::new(clock_chain_caller.elf().to_owned()),
         ));
         mempool_handle
             .push((TransactionOrigin::User, deploy_tx))
@@ -1535,16 +1534,13 @@ mod tests {
         // Build a user transaction that invokes clock_chain_caller, which in turn chain-calls the
         // clock program with the clock accounts. The sequencer should detect that the resulting
         // state diff modifies clock accounts and drop the transaction.
-        let clock_chain_caller_id =
-            lee::program::Program::new(test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec())
-                .unwrap()
-                .id();
-        let clock_program_id = lee::program::Program::clock().id();
+        let clock_chain_caller_id = test_programs::clock_chain_caller().id();
+        let clock_program_id = programs::clock().id();
         let timestamp: u64 = 0;
 
         let message = lee::public_transaction::Message::try_new(
             clock_chain_caller_id,
-            lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+            system_accounts::clock_account_ids().to_vec(),
             vec![], // no signers
             (clock_program_id, timestamp),
         )
@@ -1580,7 +1576,7 @@ mod tests {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         // Corrupt the clock 01 account data so the clock program panics on deserialization.
-        let clock_account_id = lee::CLOCK_01_PROGRAM_ACCOUNT_ID;
+        let clock_account_id = system_accounts::clock_account_ids()[0];
         let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
         corrupted.data = vec![0xff; 3].try_into().unwrap();
         sequencer
@@ -1608,23 +1604,21 @@ mod tests {
         let sender_account_id =
             AccountId::for_regular_private_account(&sender_keys.nullifier_public_key, 0);
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: programs::authenticated_transfer().id(),
             balance: 100,
             nonce: Nonce(0xdead_beef),
             data: Data::default(),
         };
 
-        let mut state = V03State::new_with_genesis_accounts(
-            &[],
-            vec![(
+        let mut state = V03State::new()
+            .with_public_accounts([(bridge_account_id, system_accounts::bridge_account())])
+            .with_private_accounts([(
                 Commitment::new(&sender_account_id, &sender_private_account),
                 Nullifier::for_account_initialization(&sender_account_id),
-            )],
-            0,
-        );
+            )]);
 
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
-        let bridge_account_id = system_bridge_account_id();
+        let bridge_account_id = system_accounts::bridge_account_id();
 
         let sender_pre = AccountWithMetadata::new(
             sender_private_account,
@@ -1646,10 +1640,10 @@ mod tests {
         .unwrap();
 
         let program_with_deps = ProgramWithDependencies::new(
-            Program::bridge(),
+            programs::bridge(),
             [(
-                Program::authenticated_transfer_program().id(),
-                Program::authenticated_transfer_program(),
+                programs::authenticated_transfer().id(),
+                programs::authenticated_transfer(),
             )]
             .into(),
         );
@@ -1690,6 +1684,370 @@ mod tests {
         assert!(
             matches!(res, Err(LeeError::InvalidInput(_))),
             "Bridge withdraw invocation should be rejected in private execution"
+        );
+    }
+
+    /// Builds a [`V03State`] with the clock program and `program` registered, the three clock
+    /// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
+    /// `CLOCK_01` account observe it.
+    fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
+        let mut state = V03State::new().with_programs([programs::clock(), program]);
+        for clock_id in system_accounts::clock_account_ids() {
+            state.force_insert_account(clock_id, system_accounts::clock_account());
+        }
+        state
+            .transition_from_public_transaction(
+                &clock_invocation(clock_timestamp),
+                1,
+                clock_timestamp,
+            )
+            .expect("Clock invocation should advance the clock");
+        state
+    }
+
+    fn time_locked_transfer_transaction(
+        from: AccountId,
+        from_key: &PrivateKey,
+        from_nonce: u128,
+        to: AccountId,
+        clock_account_id: AccountId,
+        amount: u128,
+        deadline: u64,
+    ) -> PublicTransaction {
+        let program_id = test_programs::time_locked_transfer().id();
+        let message = lee::public_transaction::Message::try_new(
+            program_id,
+            vec![from, to, clock_account_id],
+            vec![Nonce(from_nonce)],
+            (amount, deadline),
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[from_key]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn time_locked_transfer_succeeds_when_deadline_has_passed() {
+        let clock_timestamp = 600;
+        let mut state =
+            state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
+
+        // The recipient must be a non-default account so the program may credit it without
+        // claiming it.
+        let recipient_id = AccountId::new([42; 32]);
+        state.force_insert_account(
+            recipient_id,
+            Account {
+                program_owner: programs::authenticated_transfer().id(),
+                ..Account::default()
+            },
+        );
+
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: test_programs::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100;
+        // Deadline is in the past relative to the clock, so the transfer is unlocked.
+        let deadline = 0;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            system_accounts::clock_account_ids()[0],
+            amount,
+            deadline,
+        );
+
+        state
+            .transition_from_public_transaction(&tx, 2, clock_timestamp)
+            .unwrap();
+
+        // Balances changed.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 0);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 100);
+    }
+
+    #[test]
+    fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
+        let clock_timestamp = 600;
+        let mut state =
+            state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
+
+        let recipient_id = AccountId::new([42; 32]);
+        state.force_insert_account(
+            recipient_id,
+            Account {
+                program_owner: programs::authenticated_transfer().id(),
+                ..Account::default()
+            },
+        );
+
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: test_programs::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100;
+        // Far-future deadline: the program panics because the clock has not reached it.
+        let deadline = u64::MAX;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            system_accounts::clock_account_ids()[0],
+            amount,
+            deadline,
+        );
+
+        let result = state.transition_from_public_transaction(&tx, 2, clock_timestamp);
+
+        assert!(
+            result.is_err(),
+            "Transfer should fail when deadline is in the future"
+        );
+        // Balances unchanged.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 100);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    }
+
+    fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32);
+        buf.extend_from_slice(&prize.to_le_bytes());
+        buf.extend_from_slice(&cooldown_ms.to_le_bytes());
+        buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
+        buf
+    }
+
+    fn pinata_cooldown_transaction(
+        pinata_id: AccountId,
+        winner_id: AccountId,
+        clock_account_id: AccountId,
+    ) -> PublicTransaction {
+        let program_id = test_programs::pinata_cooldown().id();
+        let message = lee::public_transaction::Message::try_new(
+            program_id,
+            vec![pinata_id, winner_id, clock_account_id],
+            vec![],
+            (),
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_succeeds_after_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000;
+        let prize = 50;
+        let cooldown_ms = 500;
+        // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
+        let last_claim_timestamp = genesis_timestamp;
+
+        // Advance the clock so the cooldown check reads an updated timestamp.
+        let block_timestamp = genesis_timestamp + cooldown_ms;
+        let mut state =
+            state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+
+        // The winner must be a non-default account so the program may credit it without claiming.
+        state.force_insert_account(
+            winner_id,
+            Account {
+                program_owner: programs::authenticated_transfer().id(),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                program_owner: test_programs::pinata_cooldown().id(),
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(
+            pinata_id,
+            winner_id,
+            system_accounts::clock_account_ids()[0],
+        );
+
+        state
+            .transition_from_public_transaction(&tx, 2, block_timestamp)
+            .unwrap();
+
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
+        assert_eq!(state.get_account_by_id(winner_id).balance, prize);
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_fails_during_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000;
+        let prize = 50;
+        let cooldown_ms = 500;
+        let last_claim_timestamp = genesis_timestamp;
+
+        // Timestamp is only 100ms after the last claim, well within the 500ms cooldown.
+        let block_timestamp = genesis_timestamp + 100;
+        let mut state =
+            state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+
+        state.force_insert_account(
+            winner_id,
+            Account {
+                program_owner: programs::authenticated_transfer().id(),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                program_owner: test_programs::pinata_cooldown().id(),
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(
+            pinata_id,
+            winner_id,
+            system_accounts::clock_account_ids()[0],
+        );
+
+        let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
+
+        assert!(result.is_err(), "Claim should fail during cooldown period");
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
+        assert_eq!(state.get_account_by_id(winner_id).balance, 0);
+    }
+
+    #[test]
+    fn pda_mechanism_with_pinata_token_program() {
+        let pinata_token = programs::pinata_token();
+        let token = programs::token();
+
+        let pinata_definition_id = AccountId::new([1; 32]);
+        let pinata_token_definition_id = AccountId::new([2; 32]);
+        // Total supply of pinata token will be in an account under a PDA.
+        let pinata_token_holding_id =
+            AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
+        let winner_token_holding_id = AccountId::new([3; 32]);
+
+        let expected_winner_account_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: 150,
+        };
+        let expected_winner_token_holding_post = Account {
+            program_owner: token.id(),
+            data: Data::from(&expected_winner_account_holding),
+            ..Account::default()
+        };
+
+        // Register the pinata-token and token programs and create the pinata definition account.
+        // This replaces the removed `add_pinata_token_program` helper.
+        let mut state = V03State::new().with_programs([pinata_token.clone(), token.clone()]);
+        state.force_insert_account(
+            pinata_definition_id,
+            Account {
+                program_owner: pinata_token.id(),
+                // Difficulty: 3
+                data: vec![3; 33].try_into().unwrap(),
+                ..Account::default()
+            },
+        );
+
+        // Set up the token accounts directly (bypassing public transactions which
+        // would require signers for Claim::Authorized). The focus of this test is
+        // the PDA mechanism in the pinata program's chained call, not token creation.
+        let total_supply: u128 = 10_000_000;
+        let token_definition = token_core::TokenDefinition::Fungible {
+            name: String::from("PINATA"),
+            total_supply,
+            metadata_id: None,
+        };
+        let token_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: total_supply,
+        };
+        let winner_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: 0,
+        };
+        state.force_insert_account(
+            pinata_token_definition_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_definition),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            pinata_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_holding),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            winner_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&winner_holding),
+                ..Account::default()
+            },
+        );
+
+        // Submit a solution to the pinata program to claim the prize
+        let solution: u128 = 989_106;
+        let message = lee::public_transaction::Message::try_new(
+            pinata_token.id(),
+            vec![
+                pinata_definition_id,
+                pinata_token_holding_id,
+                winner_token_holding_id,
+            ],
+            vec![],
+            solution,
+        )
+        .unwrap();
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+        let winner_token_holding_post = state.get_account_by_id(winner_token_holding_id);
+        assert_eq!(
+            winner_token_holding_post,
+            expected_winner_token_holding_post
         );
     }
 }

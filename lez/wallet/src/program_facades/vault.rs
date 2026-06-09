@@ -17,7 +17,7 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::vault();
+        let program = programs::vault();
         let vault_program_id = program.id();
         let recipient_vault_id =
             vault_core::compute_vault_account_id(vault_program_id, recipient_id);
@@ -47,7 +47,7 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = Program::vault().id();
+        let vault_program_id = programs::vault().id();
         let recipient_vault_id =
             vault_core::compute_vault_account_id(vault_program_id, recipient_id);
         let instruction = vault_core::Instruction::Transfer {
@@ -80,7 +80,7 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::vault();
+        let program = programs::vault();
         let vault_program_id = program.id();
         let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
 
@@ -105,7 +105,7 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let vault_program_id = Program::vault().id();
+        let vault_program_id = programs::vault().id();
         let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
@@ -132,8 +132,8 @@ impl Vault<'_> {
 }
 
 fn vault_with_auth_dependency() -> ProgramWithDependencies {
-    let auth_transfer = Program::authenticated_transfer_program();
+    let auth_transfer = programs::authenticated_transfer();
     let mut deps = HashMap::new();
     deps.insert(auth_transfer.id(), auth_transfer);
-    ProgramWithDependencies::new(Program::vault(), deps)
+    ProgramWithDependencies::new(programs::vault(), deps)
 }

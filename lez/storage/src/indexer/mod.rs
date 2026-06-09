@@ -263,7 +263,7 @@ fn closest_breakpoint_id(block_id: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use common::test_utils::produce_dummy_block;
-    use lee::{AccountId, PublicKey};
+    use lee::{Account, AccountId, PublicKey};
     use tempfile::tempdir;
 
     use super::*;
@@ -288,20 +288,34 @@ mod tests {
         AccountId::from(&PublicKey::new_from_private_key(&acc2_sign_key()))
     }
 
+    fn initial_state() -> lee::V03State {
+        let mut public_accounts = [(acc1(), 10000), (acc2(), 20000)]
+            .into_iter()
+            .map(|(id, balance)| {
+                (
+                    id,
+                    Account {
+                        balance,
+                        ..Account::default()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        for clock_id in system_accounts::clock_account_ids() {
+            public_accounts.push((clock_id, system_accounts::clock_account()));
+        }
+
+        lee::V03State::new()
+            .with_public_accounts(public_accounts)
+            .with_programs([programs::authenticated_transfer(), programs::clock()])
+    }
+
     #[test]
     fn start_db() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_id_in_db().unwrap();
         let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
@@ -333,15 +347,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let genesis_block = genesis_block();
         dbio.put_block(&genesis_block, [0; 32]).unwrap();
@@ -392,15 +398,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let from = acc1();
         let to = acc2();
@@ -464,15 +462,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let from = acc1();
         let to = acc2();
@@ -546,15 +536,7 @@ mod tests {
 
         let mut block_res = vec![];
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let from = acc1();
         let to = acc2();
@@ -641,15 +623,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(
-            temdir_path,
-            &lee::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
         let from = acc1();
         let to = acc2();

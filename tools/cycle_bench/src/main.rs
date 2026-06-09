@@ -24,18 +24,14 @@ use std::{path::PathBuf, time::Instant};
 
 use amm_core::{PoolDefinition, compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
 use anyhow::Result;
-use ata_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use clap::Parser;
 use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
 use cycle_bench::{ppe, stats::Stats};
-use lee::program_methods::{
-    AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-    AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, TOKEN_ELF,
-    TOKEN_ID,
-};
+use lee::program::Program;
 use lee_core::{
     Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Data},
@@ -66,7 +62,7 @@ struct Cli {
 
 #[derive(Debug, Serialize)]
 struct BenchResult {
-    program: &'static str,
+    program_name: &'static str,
     instruction: &'static str,
     user_cycles: u64,
     segments: usize,
@@ -175,28 +171,25 @@ impl Calibration {
 }
 
 struct Case {
-    program: &'static str,
+    program_name: &'static str,
     instruction_label: &'static str,
-    elf: &'static [u8],
-    self_program_id: ProgramId,
+    program: Program,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: InstructionData,
 }
 
 impl Case {
     fn new<I: Serialize>(
-        program: &'static str,
+        program_name: &'static str,
         instruction_label: &'static str,
-        elf: &'static [u8],
-        self_program_id: ProgramId,
+        program: Program,
         pre_states: Vec<AccountWithMetadata>,
         instruction: &I,
     ) -> Result<Self> {
         Ok(Self {
-            program,
+            program_name,
             instruction_label,
-            elf,
-            self_program_id,
+            program,
             pre_states,
             instruction_words: risc0_zkvm::serde::to_vec(instruction)?,
         })
@@ -204,10 +197,9 @@ impl Case {
 
     fn run(self, prove: bool, exec_iters: usize) -> Result<BenchResult> {
         let Self {
-            program,
+            program_name,
             instruction_label,
-            elf,
-            self_program_id,
+            program,
             pre_states,
             instruction_words,
         } = self;
@@ -222,14 +214,14 @@ impl Case {
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
             env_builder
-                .write(&self_program_id)?
+                .write(&program.id())?
                 .write(&caller_program_id)?
                 .write(&pre_states)?
                 .write(&instruction_words)?;
             let env = env_builder.build()?;
 
             let started = Instant::now();
-            let info = default_executor().execute(env, elf)?;
+            let info = default_executor().execute(env, program.elf())?;
             let elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
             if iter > 0 {
@@ -248,7 +240,7 @@ impl Case {
         if prove {
             let mut env_builder = ExecutorEnv::builder();
             env_builder
-                .write(&self_program_id)?
+                .write(&program.id())?
                 .write(&caller_program_id)?
                 .write(&pre_states)?
                 .write(&instruction_words)?;
@@ -256,7 +248,7 @@ impl Case {
 
             let started = Instant::now();
             let prove_info = default_prover()
-                .prove(env, elf)
+                .prove(env, program.elf())
                 .map_err(|e| anyhow::anyhow!("prove failed: {e}"))?;
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             prove_stats = Some(Stats::from_samples(&[prove_ms]));
@@ -265,7 +257,7 @@ impl Case {
             prove_paging_cycles = Some(prove_info.stats.paging_cycles);
             prove_segments = Some(prove_info.stats.segments);
             eprintln!(
-                "  prove({program}/{instruction_label}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
+                "  prove({program_name}/{instruction_label}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
                 prove_ms / 1_000.0,
                 prove_info.stats.total_cycles,
                 prove_info.stats.segments,
@@ -273,7 +265,7 @@ impl Case {
         }
 
         Ok(BenchResult {
-            program,
+            program_name,
             instruction: instruction_label,
             user_cycles: info.cycles(),
             segments: info.segments.len(),
@@ -322,7 +314,7 @@ fn token_holding(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: TOKEN_ID,
+            program_owner: programs::token().id(),
             balance: 0,
             data: Data::from(&TokenHolding::Fungible {
                 definition_id,
@@ -342,7 +334,7 @@ fn token_definition(
 ) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: TOKEN_ID,
+            program_owner: programs::token().id(),
             balance: 0,
             data: Data::from(&TokenDefinition::Fungible {
                 name: String::from("test"),
@@ -380,7 +372,7 @@ fn token_burn_pre_states() -> Vec<AccountWithMetadata> {
 fn clock_account(account_id: AccountId, block_id: u64) -> AccountWithMetadata {
     AccountWithMetadata {
         account: Account {
-            program_owner: CLOCK_ID,
+            program_owner: programs::clock().id(),
             balance: 0,
             data: ClockAccountData {
                 block_id,
@@ -411,16 +403,20 @@ fn amm_token_b_def_id() -> AccountId {
     AccountId::new([43; 32])
 }
 fn amm_pool_id() -> AccountId {
-    compute_pool_pda(AMM_ID, amm_token_a_def_id(), amm_token_b_def_id())
+    compute_pool_pda(
+        programs::amm().id(),
+        amm_token_a_def_id(),
+        amm_token_b_def_id(),
+    )
 }
 fn amm_vault_a_id() -> AccountId {
-    compute_vault_pda(AMM_ID, amm_pool_id(), amm_token_a_def_id())
+    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_a_def_id())
 }
 fn amm_vault_b_id() -> AccountId {
-    compute_vault_pda(AMM_ID, amm_pool_id(), amm_token_b_def_id())
+    compute_vault_pda(programs::amm().id(), amm_pool_id(), amm_token_b_def_id())
 }
 fn amm_lp_def_id() -> AccountId {
-    compute_liquidity_token_pda(AMM_ID, amm_pool_id())
+    compute_liquidity_token_pda(programs::amm().id(), amm_pool_id())
 }
 
 /// Pool seeded with reserves `1_000` / `500`, lp supply `sqrt(1000*500) = 707`.
@@ -430,7 +426,7 @@ fn amm_pool_account() -> AccountWithMetadata {
     let lp_supply = (reserve_a * reserve_b).isqrt();
     AccountWithMetadata {
         account: Account {
-            program_owner: AMM_ID,
+            program_owner: programs::amm().id(),
             balance: 0,
             data: Data::from(&PoolDefinition {
                 definition_token_a_id: amm_token_a_def_id(),
@@ -482,7 +478,7 @@ fn ata_create_pre_states() -> Vec<AccountWithMetadata> {
     };
     let token_def = token_definition(definition_id, 100_000, false);
     let seed = compute_ata_seed(owner_id, definition_id);
-    let ata_id = get_associated_token_account_id(&ASSOCIATED_TOKEN_ACCOUNT_ID, &seed);
+    let ata_id = get_associated_token_account_id(&programs::ata().id(), &seed);
     let ata_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: false,
@@ -503,24 +499,21 @@ fn main() -> Result<()> {
         Case::new(
             "authenticated_transfer",
             "Transfer",
-            AUTHENTICATED_TRANSFER_ELF,
-            AUTHENTICATED_TRANSFER_ID,
+            programs::authenticated_transfer(),
             authenticated_transfer_transfer(),
             &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
         )?,
         Case::new(
             "authenticated_transfer",
             "Initialize",
-            AUTHENTICATED_TRANSFER_ELF,
-            AUTHENTICATED_TRANSFER_ID,
+            programs::authenticated_transfer(),
             authenticated_transfer_init(),
             &authenticated_transfer_core::Instruction::Initialize,
         )?,
         Case::new(
             "token",
             "Transfer",
-            TOKEN_ELF,
-            TOKEN_ID,
+            programs::token(),
             token_transfer_pre_states(),
             &token_core::Instruction::Transfer {
                 amount_to_transfer: 5_000,
@@ -529,8 +522,7 @@ fn main() -> Result<()> {
         Case::new(
             "token",
             "Mint",
-            TOKEN_ELF,
-            TOKEN_ID,
+            programs::token(),
             token_mint_pre_states(),
             &token_core::Instruction::Mint {
                 amount_to_mint: 5_000,
@@ -539,8 +531,7 @@ fn main() -> Result<()> {
         Case::new(
             "token",
             "Burn",
-            TOKEN_ELF,
-            TOKEN_ID,
+            programs::token(),
             token_burn_pre_states(),
             &token_core::Instruction::Burn {
                 amount_to_burn: 500,
@@ -549,16 +540,14 @@ fn main() -> Result<()> {
         Case::new(
             "clock",
             "Tick (block_id+1, no multiples)",
-            CLOCK_ELF,
-            CLOCK_ID,
+            programs::clock(),
             clock_pre_states_tick_at(0),
             &Timestamp::from(1_700_000_000_u64),
         )?,
         Case::new(
             "amm",
             "SwapExactInput",
-            AMM_ELF,
-            AMM_ID,
+            programs::amm(),
             amm_swap_pre_states(),
             &amm_core::Instruction::SwapExactInput {
                 swap_amount_in: 200,
@@ -569,8 +558,7 @@ fn main() -> Result<()> {
         Case::new(
             "amm",
             "AddLiquidity",
-            AMM_ELF,
-            AMM_ID,
+            programs::amm(),
             amm_add_liquidity_pre_states(),
             &amm_core::Instruction::AddLiquidity {
                 min_amount_liquidity: 1,
@@ -581,11 +569,10 @@ fn main() -> Result<()> {
         Case::new(
             "ata",
             "Create",
-            ASSOCIATED_TOKEN_ACCOUNT_ELF,
-            ASSOCIATED_TOKEN_ACCOUNT_ID,
+            programs::ata(),
             ata_create_pre_states(),
-            &ata_core::Instruction::Create {
-                ata_program_id: ASSOCIATED_TOKEN_ACCOUNT_ID,
+            &associated_token_account_core::Instruction::Create {
+                ata_program_id: programs::ata().id(),
             },
         )?,
     ];
@@ -661,7 +648,7 @@ fn print_calibration(cal: &Calibration) {
 fn print_table(results: &[BenchResult], prove: bool) {
     let pw = results
         .iter()
-        .map(|r| r.program.len())
+        .map(|r| r.program_name.len())
         .max()
         .unwrap_or(0)
         .max("program".len());
@@ -701,7 +688,7 @@ fn print_table(results: &[BenchResult], prove: bool) {
             .map_or_else(|| "-".to_owned(), |v| format!("{v:.2}"));
         println!(
             "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
-            r.program, r.instruction, r.user_cycles, r.segments, r.exec_stats, calib, net,
+            r.program_name, r.instruction, r.user_cycles, r.segments, r.exec_stats, calib, net,
         );
     }
 
@@ -728,7 +715,7 @@ fn print_table(results: &[BenchResult], prove: bool) {
                 .map_or_else(|| "-".to_owned(), |s| s.to_string());
             println!(
                 "{:<pw$}  {:<iw$}  {:>pcw$}  {:>pwallw$}  {:>psw$}",
-                r.program, r.instruction, total, pms, psegs,
+                r.program_name, r.instruction, total, pms, psegs,
             );
         }
     }
@@ -744,7 +731,7 @@ mod tests {
     /// `user_cycles` (x) and `exec_stats.best_ms` (y).
     fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
         BenchResult {
-            program: "test",
+            program_name: "test",
             instruction: "test",
             user_cycles,
             segments: 1,

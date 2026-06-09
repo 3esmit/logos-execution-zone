@@ -3,14 +3,13 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use lee::{
@@ -165,14 +164,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         (kc.nullifier_public_key, kc.viewing_public_key.clone())
     };
 
-    let proxy = {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../artifacts/test_program_methods")
-            .join(LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
-        Program::new(std::fs::read(&path).with_context(|| format!("reading {path:?}"))?)
-            .context("invalid pda_spend_proxy binary")?
-    };
-    let auth_transfer = Program::authenticated_transfer_program();
+    let proxy = test_programs::pda_spend_proxy();
+    let auth_transfer = programs::authenticated_transfer();
     let proxy_id = proxy.id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);

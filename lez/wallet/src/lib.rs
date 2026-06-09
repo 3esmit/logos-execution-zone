@@ -1,6 +1,5 @@
 #![expect(
     clippy::print_stdout,
-    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(

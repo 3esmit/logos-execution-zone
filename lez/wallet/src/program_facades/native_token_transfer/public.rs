@@ -31,7 +31,7 @@ impl NativeTokenTransfer<'_> {
         &self,
         account: AccountIdentity,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::authenticated_transfer_program();
+        let program = programs::authenticated_transfer();
         let instruction_data = Program::serialize_instruction(AuthTransferInstruction::Initialize)?;
 
         self.0

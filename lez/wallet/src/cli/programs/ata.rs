@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use common::transaction::LeeTransaction;
-use lee::{Account, AccountId, program::Program};
+use lee::{Account, AccountId};
 use token_core::TokenHolding;
 
 use crate::{
@@ -79,10 +79,10 @@ impl WalletSubcommand for AtaSubcommand {
                 owner,
                 token_definition,
             } => {
-                let ata_program_id = Program::ata().id();
-                let ata_id = ata_core::get_associated_token_account_id(
+                let ata_program_id = programs::ata().id();
+                let ata_id = associated_token_account_core::get_associated_token_account_id(
                     &ata_program_id,
-                    &ata_core::compute_ata_seed(owner, token_definition),
+                    &associated_token_account_core::compute_ata_seed(owner, token_definition),
                 );
                 println!("{ata_id}");
                 Ok(SubcommandReturnValue::Empty)
@@ -218,12 +218,12 @@ impl WalletSubcommand for AtaSubcommand {
                 owner,
                 token_definition,
             } => {
-                let ata_program_id = Program::ata().id();
+                let ata_program_id = programs::ata().id();
 
                 for def in &token_definition {
-                    let ata_id = ata_core::get_associated_token_account_id(
+                    let ata_id = associated_token_account_core::get_associated_token_account_id(
                         &ata_program_id,
-                        &ata_core::compute_ata_seed(owner, *def),
+                        &associated_token_account_core::compute_ata_seed(owner, *def),
                     );
                     let account = wallet_core.get_account_public(ata_id).await?;
 

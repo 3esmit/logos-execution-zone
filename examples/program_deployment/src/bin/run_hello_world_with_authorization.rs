@@ -45,7 +45,7 @@ async fn main() {
 
     // Load the program
     let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-    let program = Program::new(bytecode).unwrap();
+    let program = Program::new(bytecode.into()).unwrap();
 
     // Load signing keys to provide authorization
     let signing_key = wallet_core

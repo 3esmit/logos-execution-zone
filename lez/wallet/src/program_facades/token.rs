@@ -15,7 +15,7 @@ impl Token<'_> {
         name: String,
         total_supply: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::token();
+        let program = programs::token();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -45,7 +45,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -77,7 +77,7 @@ impl Token<'_> {
                     AccountIdentity::Public(supply_account_id),
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -111,7 +111,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -128,7 +128,7 @@ impl Token<'_> {
         recipient: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::token();
+        let program = programs::token();
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -163,7 +163,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -201,7 +201,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -233,7 +233,7 @@ impl Token<'_> {
                     AccountIdentity::Public(recipient_account_id),
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -265,7 +265,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -301,7 +301,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -319,7 +319,7 @@ impl Token<'_> {
         holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::token();
+        let program = programs::token();
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
@@ -358,7 +358,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -390,7 +390,7 @@ impl Token<'_> {
                     AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -423,7 +423,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -441,7 +441,7 @@ impl Token<'_> {
         holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::token();
+        let program = programs::token();
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -476,7 +476,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -514,7 +514,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -546,7 +546,7 @@ impl Token<'_> {
                     AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -579,7 +579,7 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {
@@ -616,7 +616,7 @@ impl Token<'_> {
                     },
                 ],
                 instruction_data,
-                &Program::token().into(),
+                &programs::token().into(),
             )
             .await
             .map(|(resp, secrets)| {

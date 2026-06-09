@@ -5,7 +5,7 @@ use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
 };
-use lee::{self, program::Program};
+use lee;
 use log::warn;
 use mempool::MemPoolHandle;
 use sequencer_core::{
@@ -161,14 +161,15 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
+        // TODO: Get programs from state
         let mut program_ids = BTreeMap::new();
         program_ids.insert(
             "authenticated_transfer".to_owned(),
-            Program::authenticated_transfer_program().id(),
+            programs::authenticated_transfer().id(),
         );
-        program_ids.insert("token".to_owned(), Program::token().id());
-        program_ids.insert("pinata".to_owned(), Program::pinata().id());
-        program_ids.insert("amm".to_owned(), Program::amm().id());
+        program_ids.insert("token".to_owned(), programs::token().id());
+        program_ids.insert("pinata".to_owned(), programs::pinata().id());
+        program_ids.insert("amm".to_owned(), programs::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),
             lee::PRIVACY_PRESERVING_CIRCUIT_ID,

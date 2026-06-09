@@ -12,7 +12,6 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee::program::Program;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
@@ -99,7 +98,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         .await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
 
-    assert_eq!(definition_acc.program_owner, Program::token().id());
+    assert_eq!(definition_acc.program_owner, programs::token().id());
     assert_eq!(
         token_definition,
         TokenDefinition::Fungible {
@@ -116,7 +115,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         .await?;
 
     // The account must be owned by the token program
-    assert_eq!(supply_acc.program_owner, Program::token().id());
+    assert_eq!(supply_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&supply_acc.data)?;
     assert_eq!(
         token_holding,
@@ -148,7 +147,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         .sequencer_client()
         .get_account(supply_account_id)
         .await?;
-    assert_eq!(supply_acc.program_owner, Program::token().id());
+    assert_eq!(supply_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&supply_acc.data)?;
     assert_eq!(
         token_holding,
@@ -163,7 +162,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         .sequencer_client()
         .get_account(recipient_account_id)
         .await?;
-    assert_eq!(recipient_acc.program_owner, Program::token().id());
+    assert_eq!(recipient_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&recipient_acc.data)?;
     assert_eq!(
         token_holding,
@@ -344,7 +343,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         .await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
 
-    assert_eq!(definition_acc.program_owner, Program::token().id());
+    assert_eq!(definition_acc.program_owner, programs::token().id());
     assert_eq!(
         token_definition,
         TokenDefinition::Fungible {
@@ -508,7 +507,7 @@ async fn create_token_with_private_definition() -> Result<()> {
         .get_account(supply_account_id)
         .await?;
 
-    assert_eq!(supply_acc.program_owner, Program::token().id());
+    assert_eq!(supply_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&supply_acc.data)?;
     assert_eq!(
         token_holding,
@@ -1231,7 +1230,7 @@ async fn create_token_using_labels() -> Result<()> {
         .await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
 
-    assert_eq!(definition_acc.program_owner, Program::token().id());
+    assert_eq!(definition_acc.program_owner, programs::token().id());
     assert_eq!(
         token_definition,
         TokenDefinition::Fungible {

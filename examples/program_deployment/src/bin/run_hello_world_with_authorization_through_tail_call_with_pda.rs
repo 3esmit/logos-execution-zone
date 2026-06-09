@@ -43,7 +43,7 @@ async fn main() {
 
     // Load the program
     let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-    let program = Program::new(bytecode).unwrap();
+    let program = Program::new(bytecode.into()).unwrap();
 
     // Compute the PDA to pass it as input account to the public execution
     let pda = AccountId::for_public_pda(&program.id(), &PDA_SEED);

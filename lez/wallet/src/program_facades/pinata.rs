@@ -13,7 +13,7 @@ impl Pinata<'_> {
         winner_account_id: AccountId,
         solution: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::pinata();
+        let program = programs::pinata();
         let instruction = solution;
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -61,7 +61,7 @@ impl Pinata<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 lee::program::Program::serialize_instruction(solution).unwrap(),
-                &lee::program::Program::pinata().into(),
+                &programs::pinata().into(),
             )
             .await
             .map(|(resp, secrets)| {

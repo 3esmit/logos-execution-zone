@@ -1,6 +1,6 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
-use common::{PINATA_BASE58, transaction::LeeTransaction};
+use common::transaction::LeeTransaction;
 use lee::{Account, AccountId};
 
 use crate::{
@@ -33,13 +33,13 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
                 match to {
                     AccountIdWithPrivacy::Public(to) => {
                         PinataProgramSubcommand::Public(PinataProgramSubcommandPublic::Claim {
-                            pinata_account_id: PINATA_BASE58.parse()?,
+                            pinata_account_id: system_accounts::pinata_account_id(),
                             winner_account_id: to,
                         })
                     }
                     AccountIdWithPrivacy::Private(to) => PinataProgramSubcommand::Private(
                         PinataProgramSubcommandPrivate::ClaimPrivateOwned {
-                            pinata_account_id: PINATA_BASE58.parse()?,
+                            pinata_account_id: system_accounts::pinata_account_id(),
                             winner_account_id: to,
                         },
                     ),

@@ -48,7 +48,7 @@ impl TryFrom<&FfiProgram> for Program {
             elf.push(unsafe { *value.elf_data.add(i) });
         }
 
-        Self::new(elf).map_err(|err| {
+        Self::new(elf.into()).map_err(|err| {
             print_error(format!("Invalid program bytecode, err: {err}"));
             WalletFfiError::InvalidBytecode
         })
@@ -445,13 +445,11 @@ pub unsafe extern "C" fn wallet_ffi_free_instruction_words(words: *mut FfiInstru
 
 #[cfg(test)]
 mod tests {
-    use lee::program::Program;
-
     use crate::generic_transaction::FfiProgram;
 
     #[test]
     fn program_cast_consistency() {
-        let prog = Program::amm();
+        let prog = programs::amm();
 
         let first_5_bytes = prog.elf()[..5].to_vec();
 

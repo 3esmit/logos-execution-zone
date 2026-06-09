@@ -26,7 +26,7 @@ fn auth_transfer_preparation(
             amount: balance_to_move,
         })
         .unwrap();
-    let program = Program::authenticated_transfer_program();
+    let program = programs::authenticated_transfer();
 
     // TODO: handle large Err-variant properly
     let tx_pre_check = move |accounts: &[&Account]| {

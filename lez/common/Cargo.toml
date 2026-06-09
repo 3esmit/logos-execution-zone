@@ -12,6 +12,8 @@ lee.workspace = true
 lee_core.workspace = true
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
+programs.workspace = true
+system_accounts.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

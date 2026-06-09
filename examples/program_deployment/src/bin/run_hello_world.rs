@@ -43,7 +43,7 @@ async fn main() {
 
     // Load the program
     let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-    let program = Program::new(bytecode).unwrap();
+    let program = Program::new(bytecode.into()).unwrap();
 
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];

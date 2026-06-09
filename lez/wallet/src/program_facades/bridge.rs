@@ -12,8 +12,8 @@ impl Bridge<'_> {
         amount: u64,
         bedrock_account_pk: [u8; 32],
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::bridge();
-        let bridge_account_id = lee::system_bridge_account_id();
+        let program = programs::bridge();
+        let bridge_account_id = system_accounts::bridge_account_id();
         let instruction = bridge_core::Instruction::Withdraw {
             amount,
             bedrock_account_pk,
