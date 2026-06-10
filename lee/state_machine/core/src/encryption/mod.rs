@@ -6,7 +6,7 @@ use chacha20::{
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
-pub use shared_key_derivation::{EphemeralPublicKey, MlKem768EncapsulationKey, ViewingPublicKey};
+pub use shared_key_derivation::{MlKem768EncapsulationKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account, program::PrivateAccountKind};
 #[cfg(feature = "host")]
@@ -16,6 +16,11 @@ pub type Scalar = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
+
+/// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
+/// former ECDH ephemeral public key. Always 1088 bytes for ML-KEM-768.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EphemeralPublicKey(pub Vec<u8>);
 
 pub struct EncryptionScheme;
 
@@ -33,6 +38,45 @@ impl std::fmt::Debug for Ciphertext {
             acc
         });
         write!(f, "Ciphertext({hex})")
+    }
+}
+
+pub type ViewTag = u8;
+
+/// Encrypted private-account note for one output
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct EncryptedAccountData {
+    pub ciphertext: Ciphertext,
+    pub epk: EphemeralPublicKey,
+    pub view_tag: ViewTag,
+}
+
+#[cfg(feature = "host")]
+impl EncryptedAccountData {
+    #[must_use]
+    pub fn new(
+        ciphertext: Ciphertext,
+        npk: &crate::NullifierPublicKey,
+        vpk: &ViewingPublicKey,
+        epk: EphemeralPublicKey,
+    ) -> Self {
+        let view_tag = Self::compute_view_tag(npk, vpk);
+        Self {
+            ciphertext,
+            epk,
+            view_tag,
+        }
+    }
+
+    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || npk || vpk).
+    #[must_use]
+    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"/LEE/v0.3/ViewTag/");
+        bytes.extend_from_slice(&npk.to_byte_array());
+        bytes.extend_from_slice(vpk.to_bytes());
+        Impl::hash_bytes(&bytes).as_bytes()[0]
     }
 }
 
