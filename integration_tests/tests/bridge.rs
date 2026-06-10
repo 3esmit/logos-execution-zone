@@ -4,7 +4,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{ops::Deref, time::Duration};
+use std::{ops::Deref as _, time::Duration};
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
