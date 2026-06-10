@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, MantleMsgId},
+    block::{BedrockStatus, Block, BlockMeta},
 };
 use lee::V03State;
 use rocksdb::{
@@ -54,12 +54,7 @@ impl RocksDBIO {
         Self::open_inner(path, &db_opts)
     }
 
-    pub fn create(
-        path: &Path,
-        genesis_block: &Block,
-        genesis_msg_id: MantleMsgId,
-        genesis_state: &V03State,
-    ) -> DbResult<Self> {
+    pub fn create(path: &Path, genesis_block: &Block, genesis_state: &V03State) -> DbResult<Self> {
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
@@ -69,14 +64,13 @@ impl RocksDBIO {
         if !is_start_set {
             let block_id = genesis_block.header.block_id;
             // TODO: Shouldn't this be atomic (batched)?
-            dbio.put_meta_first_block_in_db(genesis_block, genesis_msg_id)?;
+            dbio.put_meta_first_block_in_db(genesis_block)?;
             dbio.put_meta_is_first_block_set()?;
             dbio.put_meta_last_block_in_db(block_id)?;
             dbio.put_meta_last_finalized_block_id(None)?;
             dbio.put_meta_latest_block_meta(&BlockMeta {
                 id: genesis_block.header.block_id,
                 hash: genesis_block.header.hash,
-                msg_id: genesis_msg_id,
             })?;
             dbio.put_lee_state_in_db(genesis_state)?;
         }
@@ -168,7 +162,7 @@ impl RocksDBIO {
         self.put_batch(&LEEStateCellRef(state), (), batch)
     }
 
-    pub fn put_meta_first_block_in_db(&self, block: &Block, msg_id: MantleMsgId) -> DbResult<()> {
+    pub fn put_meta_first_block_in_db(&self, block: &Block) -> DbResult<()> {
         let cf_meta = self.meta_column();
         self.db
             .put_cf(
@@ -189,7 +183,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         let mut batch = WriteBatch::default();
-        self.put_block(block, msg_id, true, &mut batch)?;
+        self.put_block(block, true, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
@@ -312,13 +306,7 @@ impl RocksDBIO {
         Ok(removed)
     }
 
-    pub fn put_block(
-        &self,
-        block: &Block,
-        msg_id: MantleMsgId,
-        first: bool,
-        batch: &mut WriteBatch,
-    ) -> DbResult<()> {
+    pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
         let cf_block = self.block_column();
 
         if !first {
@@ -330,7 +318,6 @@ impl RocksDBIO {
                     &BlockMeta {
                         id: block.header.block_id,
                         hash: block.header.hash,
-                        msg_id,
                     },
                     batch,
                 )?;
@@ -452,15 +439,10 @@ impl RocksDBIO {
             })
     }
 
-    pub fn atomic_update(
-        &self,
-        block: &Block,
-        msg_id: MantleMsgId,
-        state: &V03State,
-    ) -> DbResult<()> {
+    pub fn atomic_update(&self, block: &Block, state: &V03State) -> DbResult<()> {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();
-        self.put_block(block, msg_id, false, &mut batch)?;
+        self.put_block(block, false, &mut batch)?;
         self.put_lee_state_in_db_batch(state, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(

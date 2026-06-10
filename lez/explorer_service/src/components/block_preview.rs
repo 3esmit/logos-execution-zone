@@ -27,7 +27,6 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
             },
         body: BlockBody { transactions },
         bedrock_status,
-        bedrock_parent_id: _,
     } = block;
 
     let tx_count = transactions.len();

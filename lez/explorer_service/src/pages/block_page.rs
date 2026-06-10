@@ -64,7 +64,6 @@ pub fn BlockPage() -> impl IntoView {
                                         transactions,
                                     },
                                     bedrock_status,
-                                    bedrock_parent_id: _,
                                 } = blk;
 
                                 let hash_str = hash.to_string();

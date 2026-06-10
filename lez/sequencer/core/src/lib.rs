@@ -96,10 +96,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 db_path.display()
             );
 
-            // TODO: Remove msg_id from BlockMeta — it is no longer needed now that
-            // zone-sdk manages L1 settlement state via its own checkpoint.
-            let genesis_msg_id = [0; 32];
-            let genesis_parent_msg_id = [0; 32];
             let (genesis_state, genesis_txs) = build_genesis_state(&config);
 
             let hashable_data = HashableBlockData {
@@ -108,13 +104,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 prev_block_hash: HashType([0; 32]),
                 timestamp: 0,
             };
-            let genesis_block =
-                hashable_data.into_pending_block(&signing_key, genesis_parent_msg_id);
+            let genesis_block = hashable_data.into_pending_block(&signing_key);
 
             let store = SequencerStore::create_db_with_genesis(
                 &db_path,
                 &genesis_block,
-                genesis_msg_id,
                 &genesis_state,
                 signing_key,
             )
@@ -275,16 +269,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             deposit_event_ids,
         } = block_with_meta;
 
-        // TODO: Remove msg_id from store.update — it is no longer needed now that
-        // zone-sdk manages L1 settlement state via its own checkpoint.
-        let placeholder_msg_id = [0_u8; 32];
-
         self.block_publisher
             .publish_block(&block)
             .await
             .context("Failed to publish block to Bedrock")?;
 
-        self.store.update(&block, placeholder_msg_id, &self.state)?;
+        self.store.update(&block, &self.state)?;
 
         let updated_deposits = self
             .store
@@ -422,12 +412,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             timestamp: new_block_timestamp,
         };
 
-        // TODO: Remove bedrock_parent_id from Block — it is no longer needed now
-        // that zone-sdk manages the inscription parent chain internally.
-        let placeholder_parent_id = [0_u8; 32];
         let block = hashable_data
             .clone()
-            .into_pending_block(self.store.signing_key(), placeholder_parent_id);
+            .into_pending_block(self.store.signing_key());
 
         self.chain_height = new_block_height;
 
@@ -839,13 +826,11 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
         };
-        let genesis_block = genesis_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
-        let expected_msg_id = [7; 32];
         SequencerStore::create_db_with_genesis(
             &config.home.join("rocksdb"),
             &genesis_block,
-            expected_msg_id,
             &genesis_state,
             signing_key,
         )
@@ -853,10 +838,8 @@ mod tests {
 
         let (sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
-        let latest_meta = sequencer.store.latest_block_meta().unwrap();
-
-        assert_eq!(latest_meta.msg_id, expected_msg_id);
         assert_eq!(sequencer.chain_height, 1);
+        assert!(sequencer.store.latest_block_meta().is_ok());
     }
 
     #[should_panic(expected = "Failed to open database")]
