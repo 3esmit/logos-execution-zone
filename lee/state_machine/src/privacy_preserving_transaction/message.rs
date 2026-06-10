@@ -1,8 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Nullifier, NullifierPublicKey, PrivacyPreservingCircuitOutput,
+    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
     account::{Account, Nonce},
-    encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 use sha2::{Digest as _, Sha256};
@@ -11,41 +10,7 @@ use crate::{AccountId, error::LeeError};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-pub type ViewTag = u8;
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct EncryptedAccountData {
-    pub ciphertext: Ciphertext,
-    pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
-}
-
-impl EncryptedAccountData {
-    fn new(
-        ciphertext: Ciphertext,
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        epk: EphemeralPublicKey,
-    ) -> Self {
-        let view_tag = Self::compute_view_tag(npk, vpk);
-        Self {
-            ciphertext,
-            epk,
-            view_tag,
-        }
-    }
-
-    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || Npk || vpk).
-    #[must_use]
-    pub fn compute_view_tag(npk: &NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        let mut hasher = Sha256::new();
-        hasher.update(b"/LEE/v0.3/ViewTag/");
-        hasher.update(npk.to_byte_array());
-        hasher.update(vpk.to_bytes());
-        let digest: [u8; 32] = hasher.finalize().into();
-        digest[0]
-    }
-}
+pub use lee_core::{EncryptedAccountData, ViewTag};
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
@@ -92,28 +57,13 @@ impl Message {
     pub fn try_from_circuit_output(
         public_account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
-        public_keys: Vec<(NullifierPublicKey, ViewingPublicKey, EphemeralPublicKey)>,
         output: PrivacyPreservingCircuitOutput,
     ) -> Result<Self, LeeError> {
-        if public_keys.len() != output.ciphertexts.len() {
-            return Err(LeeError::InvalidInput(
-                "Ephemeral public keys and ciphertexts length mismatch".into(),
-            ));
-        }
-
-        let encrypted_private_post_states = output
-            .ciphertexts
-            .into_iter()
-            .zip(public_keys)
-            .map(|(ciphertext, (npk, vpk, epk))| {
-                EncryptedAccountData::new(ciphertext, &npk, &vpk, epk)
-            })
-            .collect();
         Ok(Self {
             public_account_ids,
             nonces,
             public_post_states: output.public_post_states,
-            encrypted_private_post_states,
+            encrypted_private_post_states: output.encrypted_private_post_states,
             new_commitments: output.new_commitments,
             new_nullifiers: output.new_nullifiers,
             block_validity_window: output.block_validity_window,
