@@ -39,7 +39,7 @@ pub fn produce_dummy_block(
         transactions,
     };
 
-    block_data.into_pending_block(&sequencer_sign_key_for_testing(), [0; 32])
+    block_data.into_pending_block(&sequencer_sign_key_for_testing())
 }
 
 #[must_use]

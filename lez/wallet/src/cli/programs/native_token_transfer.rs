@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use common::transaction::LeeTransaction;
 use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    WalletCore,
+    AccountIdentity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::native_token_transfer::NativeTokenTransfer,
@@ -34,13 +34,17 @@ pub enum AuthTransferSubcommand {
         #[arg(long)]
         to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
+        to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
-        /// private account via `--to-npk`/`--to-vpk`).
+        /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
         to_identifier: Option<u128>,
         /// amount - amount of balance to move.
@@ -60,7 +64,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 match resolved {
                     AccountIdWithPrivacy::Public(pub_account_id) => {
                         let tx_hash = NativeTokenTransfer(wallet_core)
-                            .register_account(pub_account_id, &account_id)
+                            .register_account(account_id.into_public_identity(pub_account_id))
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -100,9 +104,18 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to: to_account,
                 to_npk,
                 to_vpk,
+                to_keys,
                 to_identifier,
                 amount,
             } => {
+                // Resolve --to-keys into --to-npk / --to-vpk equivalents.
+                let (to_npk, to_vpk) = if let Some(path) = to_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (to_npk, to_vpk)
+                };
+
                 let from = from_account.resolve(wallet_core.storage())?;
                 let to = to_account
                     .as_ref()
@@ -124,12 +137,11 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     }
                     (Some(to), None, None) => match (from, to) {
                         (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
+                            let to_mention = to_account.expect("matched Some branch");
                             NativeTokenTransferProgramSubcommand::Public {
-                                from,
-                                to,
+                                from: Some(from_account.into_public_identity(from)),
+                                to: Some(to_mention.into_public_identity(to)),
                                 amount,
-                                from_mention: from_account,
-                                to_mention: to_account.expect("matched Some branch"),
                             }
                         }
                         (
@@ -148,7 +160,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
                             NativeTokenTransferProgramSubcommand::Shielded(
                                 NativeTokenTransferProgramSubcommandShielded::ShieldedOwned {
-                                    from,
+                                    from: Some(from_account.into_public_identity(from)),
                                     to,
                                     amount,
                                 },
@@ -170,7 +182,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         AccountIdWithPrivacy::Public(from) => {
                             NativeTokenTransferProgramSubcommand::Shielded(
                                 NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
-                                    from,
+                                    from: Some(from_account.into_public_identity(from)),
                                     to_npk,
                                     to_vpk,
                                     to_identifier,
@@ -194,19 +206,13 @@ pub enum NativeTokenTransferProgramSubcommand {
     ///
     /// Public operation.
     Public {
-        /// from - valid 32 byte hex string.
-        #[arg(long)]
-        from: AccountId,
-        /// to - valid 32 byte hex string.
-        #[arg(long)]
-        to: AccountId,
+        #[arg(skip)]
+        from: Option<AccountIdentity>,
+        #[arg(skip)]
+        to: Option<AccountIdentity>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(skip)]
-        from_mention: CliAccountMention,
-        #[arg(skip)]
-        to_mention: CliAccountMention,
     },
     /// Private execution.
     #[command(subcommand)]
@@ -239,8 +245,8 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     /// Shielded operation.
     ShieldedOwned {
         /// from - valid 32 byte hex string.
-        #[arg(long)]
-        from: AccountId,
+        #[arg(skip)]
+        from: Option<AccountIdentity>,
         /// to - valid 32 byte hex string.
         #[arg(long)]
         to: AccountId,
@@ -252,13 +258,12 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     ///
     /// Shielded operation.
     ShieldedForeign {
-        /// from - valid 32 byte hex string.
-        #[arg(long)]
-        from: AccountId,
+        #[arg(skip)]
+        from: Option<AccountIdentity>,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string.
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
@@ -298,7 +303,7 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string.
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
@@ -350,11 +355,10 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 to_npk.copy_from_slice(&to_npk_res);
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
-                let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0_u8; 33];
-                to_vpk.copy_from_slice(&to_vpk_res);
-                let to_vpk =
-                    lee_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
+                let to_vpk_res = hex::decode(&to_vpk)
+                    .context("wallet::cli::programs::native_token_transfer: to_vpk must be a valid hex string")?;
+                let to_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(to_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
                     .send_private_transfer_to_outer_account(
@@ -395,7 +399,11 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         match self {
             Self::ShieldedOwned { from, to, amount } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer(from, to, amount)
+                    .send_shielded_transfer(
+                        from.expect("from set during Send dispatch"),
+                        to,
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -427,15 +435,14 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_npk.copy_from_slice(&to_npk_res);
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
-                let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0_u8; 33];
-                to_vpk.copy_from_slice(&to_vpk_res);
-                let to_vpk =
-                    lee_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
+                let to_vpk_res = hex::decode(&to_vpk)
+                    .context("wallet::cli::programs::native_token_transfer: to_vpk must be a valid hex string")?;
+                let to_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(to_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer_to_outer_account(
-                        from,
+                        from.expect("from set during Send dispatch"),
                         to_npk,
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
@@ -487,15 +494,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            Self::Public {
-                from,
-                to,
-                amount,
-                from_mention,
-                to_mention,
-            } => {
+            Self::Public { from, to, amount } => {
                 let tx_hash = NativeTokenTransfer(wallet_core)
-                    .send_public_transfer(from, to, amount, &from_mention, &to_mention)
+                    .send_public_transfer(
+                        from.expect("from is set during Send dispatch"),
+                        to.expect("to is set during Send dispatch"),
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");

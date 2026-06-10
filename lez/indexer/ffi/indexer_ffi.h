@@ -320,13 +320,10 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
-typedef struct FfiBytes32 FfiMsgId;
-
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
   enum FfiBedrockStatus bedrock_status;
-  FfiMsgId bedrock_parent_id;
 } FfiBlock;
 
 typedef struct FfiOption_FfiBlock {

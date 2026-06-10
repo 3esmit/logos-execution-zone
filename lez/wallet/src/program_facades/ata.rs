@@ -14,9 +14,13 @@ pub struct Ata<'wallet>(pub &'wallet WalletCore);
 impl Ata<'_> {
     pub async fn send_create(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let ata_id = get_associated_token_account_id(
@@ -30,7 +34,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner,
                     AccountIdentity::PublicNoSign(definition_id),
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
@@ -42,11 +46,15 @@ impl Ata<'_> {
 
     pub async fn send_transfer(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let sender_ata_id = get_associated_token_account_id(
@@ -63,7 +71,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner,
                     AccountIdentity::PublicNoSign(sender_ata_id),
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
@@ -75,10 +83,14 @@ impl Ata<'_> {
 
     pub async fn send_burn(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let holder_ata_id = get_associated_token_account_id(
@@ -95,7 +107,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner,
                     AccountIdentity::PublicNoSign(holder_ata_id),
                     AccountIdentity::PublicNoSign(definition_id),
                 ],

@@ -7,7 +7,7 @@ use std::io::Read as _;
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::encryption::shared_key_derivation::Secp256k1Point;
+use crate::encryption::EphemeralPublicKey;
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
@@ -158,16 +158,17 @@ impl Ciphertext {
 }
 
 #[cfg(feature = "host")]
-impl Secp256k1Point {
-    /// Converts the point to bytes.
+impl EphemeralPublicKey {
+    /// Serializes the ML-KEM-768 ciphertext to bytes (always 1088 bytes).
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; 33] {
-        self.0.clone().try_into().unwrap()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.clone()
     }
 
-    /// Deserializes a secp256k1 point from a cursor.
+    /// Deserializes an ML-KEM-768 ciphertext from a cursor.
+    /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut value = vec![0; 33];
+        let mut value = vec![0_u8; 1088];
         cursor.read_exact(&mut value)?;
         Ok(Self(value))
     }

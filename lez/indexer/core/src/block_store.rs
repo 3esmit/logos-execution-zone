@@ -238,10 +238,8 @@ mod tests {
             timestamp: 0,
             transactions: vec![clock_tx],
         };
-        let genesis_block = genesis_block_data.into_pending_block(
-            &common::test_utils::sequencer_sign_key_for_testing(),
-            [0; 32],
-        );
+        let genesis_block = genesis_block_data
+            .into_pending_block(&common::test_utils::sequencer_sign_key_for_testing());
         let mut prev_hash = Some(genesis_block.header.hash);
         storage
             .put_block(genesis_block, HeaderId::from([0_u8; 32]))

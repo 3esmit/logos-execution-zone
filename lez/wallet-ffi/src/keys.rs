@@ -1,6 +1,6 @@
 //! Key retrieval functions.
 
-use std::ptr;
+use std::{ffi::CString, ptr};
 
 use lee::{AccountId, PublicKey};
 use wallet::AccountIdentity;
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     // NPK is a 32-byte array
     let npk_bytes = key_chain.nullifier_public_key.0;
 
-    // VPK is a compressed secp256k1 point (33 bytes)
+    // VPK is an ML-KEM-768 encapsulation key (1184 bytes)
     let vpk_bytes = key_chain.viewing_public_key.to_bytes();
     let vpk_len = vpk_bytes.len();
     let vpk_vec = vpk_bytes.to_vec();
@@ -360,6 +360,7 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
         let FfiAccountIdentity {
             kind: _,
             account_id: _,
+            key_path,
             nullifier_secret_key: _,
             nullifier_public_key: _,
             viewing_public_key,
@@ -373,6 +374,11 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
                 viewing_public_key_len,
             );
             drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        }
+
+        if !key_path.is_null() {
+            let key_path_cstring = CString::from_raw(key_path);
+            drop(key_path_cstring);
         }
     }
 }
