@@ -459,7 +459,8 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
     let bridge_account_id = lee::system_bridge_account_id();
     for account_id in [recipient_id, recipient_vault_id, bridge_account_id] {
         let indexer_account = indexer_service_rpc::RpcClient::get_account(
-            // `deref` is needed for correct trait resolution of the async `get_account` method on `RpcClient`
+            // `deref` is needed for correct trait resolution
+            // of the async `get_account` method on `RpcClient`
             ctx.indexer_client().deref(),
             account_id.into(),
         )
