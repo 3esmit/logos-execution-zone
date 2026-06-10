@@ -137,7 +137,7 @@ impl LeeTransaction {
     /// tag that lets the sequencer bypass the guard is not carried in the block,
     /// so the indexer cannot yet distinguish deposit txs from user txs.
     ///
-    /// REMOVE ME when the indexer can authenticate deposit transactions
+    /// REMOVE ME when the indexer can authenticate deposit transactions.
     pub fn execute_unchecked_on_state(
         self,
         state: &mut V03State,
