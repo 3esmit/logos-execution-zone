@@ -150,7 +150,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = privacy_preserving_transaction::Message::try_from_circuit_output(
         vec![bridge_account_id, recipient_vault_id],
         vec![bridge_pre.account.nonce, vault_pre.account.nonce],
-        vec![],
         output,
     )
     .context("Failed to build privacy-preserving bridge deposit message")?;
