@@ -6,7 +6,7 @@ use lee_core::{
     Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    encryption::{EncryptedAccountData, EphemeralPublicKey, ViewingPublicKey},
 };
 
 use crate::{ExecutionFailureKind, WalletCore};
@@ -100,10 +100,7 @@ impl AccountIdentity {
 }
 
 pub struct PrivateAccountKeys {
-    pub npk: NullifierPublicKey,
     pub ssk: SharedSecretKey,
-    pub vpk: ViewingPublicKey,
-    pub epk: EphemeralPublicKey,
 }
 
 enum State {
@@ -307,12 +304,7 @@ impl AccountManager {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Private(pre) => Some(PrivateAccountKeys {
-                    npk: pre.npk,
-                    ssk: pre.ssk,
-                    vpk: pre.vpk.clone(),
-                    epk: pre.epk.clone(),
-                }),
+                State::Private(pre) => Some(PrivateAccountKeys { ssk: pre.ssk }),
                 State::Public { .. } | State::PublicKeycard { .. } => None,
             })
             .collect()
@@ -329,6 +321,8 @@ impl AccountManager {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
+                        epk: pre.epk.clone(),
+                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
                         ssk: pre.ssk,
                         nsk,
                         membership_proof,
@@ -336,6 +330,8 @@ impl AccountManager {
                         seed: None,
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
+                        epk: pre.epk.clone(),
+                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
@@ -345,6 +341,8 @@ impl AccountManager {
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
+                            epk: pre.epk.clone(),
+                            view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
                             ssk: pre.ssk,
                             nsk,
                             membership_proof,
@@ -352,11 +350,15 @@ impl AccountManager {
                         }
                     }
                     (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
+                        epk: pre.epk.clone(),
+                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
                         ssk: pre.ssk,
                         nsk,
                         identifier: pre.identifier,
                     },
                     (None, _) => InputAccountIdentity::PrivateUnauthorized {
+                        epk: pre.epk.clone(),
+                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
