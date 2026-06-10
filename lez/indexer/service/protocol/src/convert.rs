@@ -4,8 +4,8 @@ use lee_core::account::Nonce;
 
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, MantleMsgId,
-    Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
+    CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, Nullifier,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction,
     Signature, Transaction, ValidityWindow, WitnessSet,
 };
@@ -630,14 +630,12 @@ impl From<common::block::Block> for Block {
             header,
             body,
             bedrock_status,
-            bedrock_parent_id,
         } = value;
 
         Self {
             header: header.into(),
             body: body.into(),
             bedrock_status: bedrock_status.into(),
-            bedrock_parent_id: MantleMsgId(bedrock_parent_id),
         }
     }
 }
@@ -650,14 +648,12 @@ impl TryFrom<Block> for common::block::Block {
             header,
             body,
             bedrock_status,
-            bedrock_parent_id,
         } = value;
 
         Ok(Self {
             header: header.try_into()?,
             body: body.try_into()?,
             bedrock_status: bedrock_status.into(),
-            bedrock_parent_id: bedrock_parent_id.0,
         })
     }
 }

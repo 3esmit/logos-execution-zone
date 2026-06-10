@@ -1,9 +1,7 @@
-use indexer_service_protocol::{
-    BedrockStatus, Block, BlockHeader, HashType, MantleMsgId, Signature,
-};
+use indexer_service_protocol::{BedrockStatus, Block, BlockHeader, HashType, Signature};
 
 use crate::api::types::{
-    FfiBlockId, FfiHashType, FfiMsgId, FfiOption, FfiSignature, FfiTimestamp, FfiVec,
+    FfiBlockId, FfiHashType, FfiOption, FfiSignature, FfiTimestamp, FfiVec,
     transaction::free_ffi_transaction_vec, vectors::FfiBlockBody,
 };
 
@@ -12,7 +10,6 @@ pub struct FfiBlock {
     pub header: FfiBlockHeader,
     pub body: FfiBlockBody,
     pub bedrock_status: FfiBedrockStatus,
-    pub bedrock_parent_id: FfiMsgId,
 }
 
 impl From<Block> for FfiBlock {
@@ -21,7 +18,6 @@ impl From<Block> for FfiBlock {
             header,
             body,
             bedrock_status,
-            bedrock_parent_id,
         } = value;
 
         Self {
@@ -33,7 +29,6 @@ impl From<Block> for FfiBlock {
                 .collect::<Vec<_>>()
                 .into(),
             bedrock_status: bedrock_status.into(),
-            bedrock_parent_id: bedrock_parent_id.into(),
         }
     }
 }
@@ -126,8 +121,6 @@ pub unsafe extern "C" fn free_ffi_block(val: FfiBlock) {
     #[expect(clippy::let_underscore_must_use, reason = "No use for this Copy type")]
     let _: BedrockStatus = val.bedrock_status.into();
 
-    let _ = MantleMsgId(val.bedrock_parent_id.data);
-
     unsafe {
         free_ffi_transaction_vec(ffi_tx_ffi_vec);
     };
@@ -165,8 +158,6 @@ pub unsafe extern "C" fn free_ffi_block_opt(val: FfiBlockOpt) {
 
         #[expect(clippy::let_underscore_must_use, reason = "No use for this Copy type")]
         let _: BedrockStatus = value.bedrock_status.into();
-
-        let _ = MantleMsgId(value.bedrock_parent_id.data);
 
         unsafe {
             free_ffi_transaction_vec(ffi_tx_ffi_vec);

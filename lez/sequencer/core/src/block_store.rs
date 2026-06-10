@@ -209,7 +209,7 @@ mod tests {
             transactions: vec![],
         };
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         // Start an empty node store
         let mut node_store = SequencerStore::create_db_with_genesis(
             path,
@@ -247,7 +247,7 @@ mod tests {
             transactions: vec![],
         };
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         let genesis_hash = genesis_block.header.hash;
 
         let node_store = SequencerStore::create_db_with_genesis(
@@ -277,7 +277,7 @@ mod tests {
             transactions: vec![],
         };
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         let mut node_store = SequencerStore::create_db_with_genesis(
             path,
             &genesis_block,
@@ -313,7 +313,7 @@ mod tests {
             transactions: vec![],
         };
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         let mut node_store = SequencerStore::create_db_with_genesis(
             path,
             &genesis_block,
@@ -362,7 +362,7 @@ mod tests {
             transactions: vec![],
         };
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         let tx = common::test_utils::produce_dummy_empty_transaction();
         {
             // Create a scope to drop the first store after creating the db

@@ -96,7 +96,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 db_path.display()
             );
 
-            let genesis_parent_msg_id = [0; 32];
             let (genesis_state, genesis_txs) = build_genesis_state(&config);
 
             let hashable_data = HashableBlockData {
@@ -105,8 +104,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 prev_block_hash: HashType([0; 32]),
                 timestamp: 0,
             };
-            let genesis_block =
-                hashable_data.into_pending_block(&signing_key, genesis_parent_msg_id);
+            let genesis_block = hashable_data.into_pending_block(&signing_key);
 
             let store = SequencerStore::create_db_with_genesis(
                 &db_path,
@@ -414,12 +412,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             timestamp: new_block_timestamp,
         };
 
-        // TODO: Remove bedrock_parent_id from Block — it is no longer needed now
-        // that zone-sdk manages the inscription parent chain internally.
-        let placeholder_parent_id = [0_u8; 32];
         let block = hashable_data
             .clone()
-            .into_pending_block(self.store.signing_key(), placeholder_parent_id);
+            .into_pending_block(self.store.signing_key());
 
         self.chain_height = new_block_height;
 
@@ -831,7 +826,7 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
         };
-        let genesis_block = genesis_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
         SequencerStore::create_db_with_genesis(
             &config.home.join("rocksdb"),
