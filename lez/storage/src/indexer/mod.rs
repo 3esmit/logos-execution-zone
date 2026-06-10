@@ -208,7 +208,10 @@ impl RocksDBIO {
                                 "transaction pre check failed with err {err:?}"
                             ))
                         })?
-                        .execute_check_on_state(
+                        // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
+                        // sequencer-generated deposit tx'es;
+                        // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
+                        .execute_unchecked_on_state(
                             &mut breakpoint,
                             block.header.block_id,
                             block.header.timestamp,

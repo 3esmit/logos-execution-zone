@@ -78,18 +78,9 @@ impl LeeTransaction {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
-        let diff = match self {
-            Self::Public(tx) => {
-                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
-            }
-            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
-                tx, state, block_id, timestamp,
-            ),
-            Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
-            }
-        }?;
+        let diff = self.compute_state_diff(state, block_id, timestamp)?;
 
+        // system accounts guard
         let system_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS.iter().copied().chain([
             lee::system_faucet_account_id(),
             lee::system_bridge_account_id(),
@@ -99,6 +90,28 @@ impl LeeTransaction {
         }
 
         Ok(diff)
+    }
+
+    /// Computes the validated state diff without enforcing the system-account
+    /// restriction. Shared by [`Self::validate_on_state`] and
+    /// [`Self::execute_unchecked_on_state`].
+    fn compute_state_diff(
+        &self,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+        match self {
+            Self::Public(tx) => {
+                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
+            }
+            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
+                tx, state, block_id, timestamp,
+            ),
+            Self::ProgramDeployment(tx) => {
+                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+            }
+        }
     }
 
     /// Validates the transaction against the current state, rejects modifications to clock
@@ -111,6 +124,28 @@ impl LeeTransaction {
     ) -> Result<Self, lee::error::LeeError> {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
+            .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
+        state.apply_state_diff(diff);
+        Ok(self)
+    }
+
+    /// Similar to [`Self::execute_check_on_state`], but skips the system-account guard.
+    ///
+    /// FIXME: HOT FIX (testnet v0.2): the indexer replays blocks the sequencer already
+    /// accepted, including sequencer-generated deposit transactions that
+    /// legitimately modify the bridge account. The `TransactionOrigin::Sequencer`
+    /// tag that lets the sequencer bypass the guard is not carried in the block,
+    /// so the indexer cannot yet distinguish deposit txs from user txs.
+    ///
+    /// REMOVE ME when the indexer can authenticate deposit transactions
+    pub fn execute_unchecked_on_state(
+        self,
+        state: &mut V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<Self, lee::error::LeeError> {
+        let diff = self
+            .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
         Ok(self)
