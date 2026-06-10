@@ -876,3 +876,27 @@ impl WalletCore {
         &self.config_overrides
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::{CStr, CString}, str::FromStr};
+
+use bip39::Mnemonic;
+
+    #[test]
+    fn mnemonic_roundtrip() {
+        let mnemonic = Mnemonic::from_entropy(&[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]).unwrap();
+
+        let c_mnemonic_string = CString::new(mnemonic.to_string()).unwrap();
+
+        let boxed_mnemonic_string = Box::new(c_mnemonic_string.as_ptr());
+        let raw_mnemonic_string_pointer = Box::into_raw(boxed_mnemonic_string);
+
+        let c_str = unsafe { CStr::from_ptr(*raw_mnemonic_string_pointer) };
+        let mn_string = c_str.to_str().unwrap();
+
+        let mn_ret = Mnemonic::from_str(mn_string).unwrap();
+
+        assert_eq!(mnemonic, mn_ret);
+    }
+}

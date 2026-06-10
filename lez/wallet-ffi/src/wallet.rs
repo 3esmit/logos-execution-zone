@@ -121,7 +121,8 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
                 return FfiCreateWalletResult::default();
             };
 
-            let boxed_mnemonic_string = Box::new(c_mnemonic_string.as_ptr());
+            let raw_pointer = CString::into_raw(c_mnemonic_string);
+            let boxed_mnemonic_string = Box::new(raw_pointer.cast_const());
             let raw_mnemonic_string_pointer = Box::into_raw(boxed_mnemonic_string);
 
             FfiCreateWalletResult {
