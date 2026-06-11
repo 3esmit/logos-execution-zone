@@ -1635,6 +1635,79 @@ pub mod tests {
         assert!(state.private_state.1.contains(&expected_new_nullifier));
     }
 
+    fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
+        let sender_keys = test_private_account_keys_1();
+        let sender_private_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            balance: 100,
+            nonce: Nonce(0xdead_beef),
+            ..Account::default()
+        };
+        let recipient_keys = test_private_account_keys_2();
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0)
+            .with_private_account(&sender_keys, &sender_private_account);
+        let tx = private_balance_transfer_for_tests(
+            &sender_keys,
+            &sender_private_account,
+            &recipient_keys,
+            37,
+            &state,
+        );
+        (state, tx)
+    }
+
+    /// After a valid fully-private tx is proven, tampering with a note's epk should
+    /// make the shielding proof invalid
+    #[test]
+    fn privacy_tampered_epk_is_rejected() {
+        use crate::validated_state_diff::ValidatedStateDiff;
+
+        let (state, mut tx) = valid_private_transfer_tx_and_state();
+
+        // Baseline: the untampered tx verifies
+        assert!(
+            ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0).is_ok(),
+            "the unmodified private transfer must verify"
+        );
+
+        // Flip a byte of the first note's epk
+        tx.message.encrypted_private_post_states[0].epk.0[0] ^= 0xFF;
+
+        assert!(
+            matches!(
+                ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+                Err(LeeError::InvalidPrivacyPreservingProof)
+            ),
+            "a tampered epk must be rejected by proof verification"
+        );
+    }
+
+    /// After a valid fully-private tx is proven, tampering with a note's view tag should
+    /// make the shielding proof invalid
+    #[test]
+    fn privacy_tampered_view_tag_is_rejected() {
+        use crate::validated_state_diff::ValidatedStateDiff;
+
+        let (state, mut tx) = valid_private_transfer_tx_and_state();
+
+        // Baseline: the untampered tx verifies.
+        assert!(
+            ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0).is_ok(),
+            "the unmodified private transfer must verify"
+        );
+
+        // Flip the first note's view_tag
+        tx.message.encrypted_private_post_states[0].view_tag ^= 0xFF;
+
+        assert!(
+            matches!(
+                ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+                Err(LeeError::InvalidPrivacyPreservingProof)
+            ),
+            "a tampered view_tag must be rejected by proof verification"
+        );
+    }
+
     #[test]
     fn transition_from_privacy_preserving_transaction_deshielded() {
         let sender_keys = test_private_account_keys_1();
