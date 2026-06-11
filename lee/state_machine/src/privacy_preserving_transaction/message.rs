@@ -4,10 +4,10 @@ use lee_core::{
     account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
+pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError};
-pub use lee_core::{EncryptedAccountData, ViewTag};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
