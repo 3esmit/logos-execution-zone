@@ -526,6 +526,44 @@ mod tests {
         validated_state_diff::ValidatedStateDiff,
     };
 
+    #[test]
+    fn public_diff_reflects_a_successful_transfer() {
+        // A successful native transfer must record the debited sender in
+        // `public_diff()`.  Catches the mutation that replaces `public_diff` with
+        // `HashMap::new()` (which would hide every account change).
+        use authenticated_transfer_core::Instruction as AtInstruction;
+
+        let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+        let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+
+        let state = V03State::new_with_genesis_accounts(&[(from, 100)], vec![], 0);
+        let program_id = Program::authenticated_transfer_program().id();
+        let message = Message::try_new(
+            program_id,
+            vec![from, to],
+            vec![Nonce(0), Nonce(0)],
+            AtInstruction::Transfer { amount: 5 },
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
+        let tx = crate::PublicTransaction::new(message, witness_set);
+
+        let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+            .expect("a valid native transfer must validate");
+        let public_diff = diff.public_diff();
+
+        assert!(
+            public_diff.contains_key(&from),
+            "public_diff must contain the debited sender",
+        );
+        assert_eq!(
+            public_diff[&from].balance, 95,
+            "sender balance in the diff must reflect the debit",
+        );
+    }
+
     /// Privacy-path version of the authorization-injection attack. The test passes when the
     /// attack is rejected and the victim's balance is left untouched.
     ///

@@ -499,6 +499,20 @@ mod tests {
     }
 
     #[test]
+    fn elf_returns_the_program_bytecode_constant() {
+        // `Program::elf` must return exactly the compile-time ELF, never an empty
+        // or placeholder slice. Catches mutations returning `Vec::leak(Vec::new())`,
+        // `Vec::leak(vec![0])`, or `Vec::leak(vec![1])`.
+        let at = Program::authenticated_transfer_program();
+        assert!(!at.elf().is_empty());
+        assert_eq!(at.elf(), AUTHENTICATED_TRANSFER_ELF);
+
+        let token = Program::token();
+        assert!(!token.elf().is_empty());
+        assert_eq!(token.elf(), TOKEN_ELF);
+    }
+
+    #[test]
     fn program_execution() {
         let program = Program::simple_balance_transfer();
         let balance_to_move: u128 = 11_223_344_556_677;

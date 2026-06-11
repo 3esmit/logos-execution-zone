@@ -93,4 +93,16 @@ mod tests {
         let deserialized = HashType::from_str(&serialized).unwrap();
         assert_eq!(original, deserialized);
     }
+
+    #[test]
+    fn as_ref_returns_exact_inner_bytes() {
+        // `HashType::as_ref` must return exactly the inner `[u8; 32]` — not an
+        // empty slice or a placeholder. Catches mutations of `as_ref` that return
+        // `Vec::leak(Vec::new())`, `vec![0]`, or `vec![1]`.
+        let known = [0x42_u8; 32];
+        let hash = HashType(known);
+        assert_eq!(hash.as_ref(), &known);
+        assert_eq!(hash.as_ref().len(), 32);
+        assert_eq!(HashType([0_u8; 32]).as_ref().len(), 32);
+    }
 }

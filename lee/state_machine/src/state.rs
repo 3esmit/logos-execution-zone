@@ -614,6 +614,62 @@ pub mod tests {
     }
 
     #[test]
+    fn genesis_system_accounts_have_expected_contents() {
+        // System-account IDs must be distinct and non-default, and the genesis
+        // faucet/bridge accounts must carry their expected field values.  Catches
+        // mutations that replace `system_faucet_account`/`system_bridge_account`
+        // with `Default::default()`, delete their `balance`/`program_owner`
+        // fields, or replace `system_bridge_account_id` with `Default::default()`.
+        let faucet_id = system_faucet_account_id();
+        let bridge_id = system_bridge_account_id();
+        assert_ne!(bridge_id, AccountId::default());
+        assert_ne!(faucet_id, bridge_id);
+
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let default_owner = Account::default().program_owner;
+
+        let faucet = state.get_account_by_id(faucet_id);
+        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
+        assert_ne!(
+            faucet.program_owner, default_owner,
+            "faucet must have a non-default program_owner"
+        );
+
+        let bridge = state.get_account_by_id(bridge_id);
+        assert_ne!(
+            bridge.program_owner, default_owner,
+            "bridge must have a non-default program_owner"
+        );
+    }
+
+    #[test]
+    fn genesis_commitment_set_digest_differs_from_empty_state() {
+        // The genesis state inserts DUMMY_COMMITMENT, so its commitment-set digest
+        // must differ from a freshly-created empty state's all-zero root.  Catches
+        // the mutation that replaces `commitment_set_digest` with `Default::default()`.
+        let genesis = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let empty = V03State::new();
+        assert_ne!(
+            genesis.commitment_set_digest(),
+            empty.commitment_set_digest()
+        );
+    }
+
+    #[test]
+    fn add_pinata_token_program_sets_non_default_owner_and_data() {
+        // The account created by `add_pinata_token_program` must have a non-default
+        // `program_owner` and non-default `data`.  Catches deletion of either field
+        // from the struct literal.
+        let id = AccountId::new([0xAB_u8; 32]);
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        state.add_pinata_token_program(id);
+        let acc = state.get_account_by_id(id);
+        let default = Account::default();
+        assert_ne!(acc.program_owner, default.program_owner);
+        assert_ne!(acc.data, default.data);
+    }
+
+    #[test]
     fn new_with_genesis() {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
