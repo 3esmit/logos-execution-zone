@@ -4,7 +4,7 @@ use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
-    encryption::{EncryptedAccountData, EphemeralPublicKey},
+    encryption::{EncryptedAccountData, EphemeralPublicKey, ViewTag},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
@@ -34,7 +34,7 @@ pub enum InputAccountIdentity {
     /// matched against `pre_state.account_id`.
     PrivateAuthorizedInit {
         epk: EphemeralPublicKey,
-        view_tag: u8,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         identifier: Identifier,
@@ -43,7 +43,7 @@ pub enum InputAccountIdentity {
     /// membership proof.
     PrivateAuthorizedUpdate {
         epk: EphemeralPublicKey,
-        view_tag: u8,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
@@ -53,7 +53,7 @@ pub enum InputAccountIdentity {
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
     PrivateUnauthorized {
         epk: EphemeralPublicKey,
-        view_tag: u8,
+        view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
@@ -64,7 +64,7 @@ pub enum InputAccountIdentity {
     /// as the 4th input.
     PrivatePdaInit {
         epk: EphemeralPublicKey,
-        view_tag: u8,
+        view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
@@ -81,7 +81,7 @@ pub enum InputAccountIdentity {
     /// previously-seen authorization in a chained call.
     PrivatePdaUpdate {
         epk: EphemeralPublicKey,
-        view_tag: u8,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
