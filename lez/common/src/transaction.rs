@@ -94,7 +94,7 @@ impl LeeTransaction {
 
     /// Computes the validated state diff without enforcing the system-account
     /// restriction. Shared by [`Self::validate_on_state`] and
-    /// [`Self::execute_unchecked_on_state`].
+    /// [`Self::execute_without_system_accounts_check_on_state`].
     fn compute_state_diff(
         &self,
         state: &V03State,
@@ -138,7 +138,7 @@ impl LeeTransaction {
     /// so the indexer cannot yet distinguish deposit txs from user txs.
     ///
     /// REMOVE ME when the indexer can authenticate deposit transactions.
-    pub fn execute_unchecked_on_state(
+    pub fn execute_without_system_accounts_check_on_state(
         self,
         state: &mut V03State,
         block_id: BlockId,
