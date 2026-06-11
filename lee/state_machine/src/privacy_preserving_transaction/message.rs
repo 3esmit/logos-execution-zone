@@ -7,10 +7,9 @@ use lee_core::{
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError};
+pub use lee_core::{EncryptedAccountData, ViewTag};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
-
-pub use lee_core::{EncryptedAccountData, ViewTag};
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {

@@ -1657,7 +1657,7 @@ pub mod tests {
     }
 
     /// After a valid fully-private tx is proven, tampering with a note's epk should
-    /// make the shielding proof invalid
+    /// make the shielding proof invalid.
     #[test]
     fn privacy_tampered_epk_is_rejected() {
         use crate::validated_state_diff::ValidatedStateDiff;
@@ -1683,7 +1683,7 @@ pub mod tests {
     }
 
     /// After a valid fully-private tx is proven, tampering with a note's view tag should
-    /// make the shielding proof invalid
+    /// make the shielding proof invalid.
     #[test]
     fn privacy_tampered_view_tag_is_rejected() {
         use crate::validated_state_diff::ValidatedStateDiff;

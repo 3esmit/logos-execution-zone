@@ -43,7 +43,7 @@ impl std::fmt::Debug for Ciphertext {
 
 pub type ViewTag = u8;
 
-/// Encrypted private-account note for one output
+/// Encrypted private-account note for one output.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct EncryptedAccountData {
