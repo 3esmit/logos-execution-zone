@@ -211,6 +211,17 @@ mod tests {
     }
 
     #[test]
+    fn proof_inner_roundtrip() {
+        // `Proof::from_inner(b).into_inner()` must return exactly `b`. Catches
+        // mutations of `into_inner` returning `vec![]`, `vec![0]`, or `vec![1]`,
+        // and of `from_inner` discarding its argument.
+        let bytes = vec![0xDE_u8, 0xAD, 0xBE, 0xEF];
+        assert_eq!(Proof::from_inner(bytes.clone()).into_inner(), bytes);
+        assert!(Proof::from_inner(vec![]).into_inner().is_empty());
+        assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
+    }
+
+    #[test]
     fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
         let recipient_keys = test_private_account_keys_1();
         let program = Program::authenticated_transfer_program();

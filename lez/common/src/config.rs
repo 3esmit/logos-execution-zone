@@ -53,3 +53,33 @@ impl From<BasicAuth> for BasicAuthCredentials {
         Self::new(value.username, value.password)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr as _;
+
+    use super::BasicAuth;
+
+    #[test]
+    fn parse_preserves_non_empty_password() {
+        let auth = BasicAuth::from_str("user:secret").expect("must parse");
+        assert_eq!(auth.username, "user");
+        assert_eq!(auth.password.as_deref(), Some("secret"));
+    }
+
+    #[test]
+    fn parse_empty_password_is_none() {
+        // A trailing colon means an empty password, which must become `None`.
+        // Catches deletion of `!` in `.filter(|p| !p.is_empty())`, which would
+        // instead yield `Some("")`.
+        let auth = BasicAuth::from_str("user:").expect("must parse");
+        assert_eq!(auth.password, None);
+    }
+
+    #[test]
+    fn parse_username_only_has_no_password() {
+        let auth = BasicAuth::from_str("alice").expect("must parse");
+        assert_eq!(auth.username, "alice");
+        assert_eq!(auth.password, None);
+    }
+}
