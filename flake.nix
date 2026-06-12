@@ -14,7 +14,7 @@
     crane.url = "github:ipetkov/crane";
 
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits";
+      url = "github:logos-blockchain/logos-blockchain-circuits?rev=2e79ac30831d89e6a349720c08d5b8b9978970e0";
     };
   };
 
@@ -53,12 +53,6 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = ./.;
           cargoLock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
-
-          polPrebuilt = pkgs.fetchzip {
-            url = "https://github.com/logos-blockchain/logos-blockchain-circuits/releases/download/v0.5.0/logos-blockchain-circuits-v0.5.0-linux-x86_64.tar.gz";
-            hash = "sha256-OgwG1tFecpuaWVc/kgQJp3LCXxJHB59n/KDRhmvqDBY=";
-            stripRoot = true;
-          };
 
           # Parse Cargo.lock at eval time to find the locked risc0-circuit-recursion
           # version and its crates.io checksum — no hardcoding required.
@@ -107,11 +101,9 @@
               pkgs.gnutar  # Required for crane's archive operations (macOS tar lacks --sort)
               pkgs.python3  # Required for correct builds now, as python is sandboxed in nix builds
             ];
+
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-            LBC_POL_LIB_DIR = "${polPrebuilt}/pol";
-            LBC_POC_LIB_DIR = "${polPrebuilt}/poc";
-            LBC_POQ_LIB_DIR = "${polPrebuilt}/poq";
-            LBC_SIGNATURE_LIB_DIR = "${polPrebuilt}/signature";
+
             # Point the risc0-circuit-recursion build script to the pre-fetched zip
             # so it doesn't try to download it inside the sandbox.
             RECURSION_SRC_PATH = "${recursionZkr}";
