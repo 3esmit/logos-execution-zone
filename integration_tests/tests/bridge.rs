@@ -4,12 +4,14 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{ops::Deref as _, time::Duration};
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, wait_for_indexer_to_catch_up,
+};
 use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
     public_transaction,
@@ -448,6 +450,27 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
         recipient_balance_before + 1,
         "Recipient balance should increase by claimed amount"
     );
+
+    // The indexer must replay the deposit and claim blocks and reach the same
+    // state as the sequencer — including the bridge system account the deposit
+    // modifies, which is the case the hot fix unblocks.
+    wait_for_indexer_to_catch_up(&ctx).await?;
+    let bridge_account_id = lee::system_bridge_account_id();
+    for account_id in [recipient_id, recipient_vault_id, bridge_account_id] {
+        let indexer_account = indexer_service_rpc::RpcClient::get_account(
+            // `deref` is needed for correct trait resolution
+            // of the async `get_account` method on `RpcClient`
+            ctx.indexer_client().deref(),
+            account_id.into(),
+        )
+        .await?;
+        let sequencer_account = ctx.sequencer_client().get_account(account_id).await?;
+        assert_eq!(
+            indexer_account,
+            sequencer_account.into(),
+            "Indexer and sequencer diverged for account {account_id} after deposit"
+        );
+    }
 
     Ok(())
 }
