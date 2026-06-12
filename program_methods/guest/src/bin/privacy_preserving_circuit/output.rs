@@ -1,7 +1,7 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, InputAccountIdentity,
-    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme,
+    EphemeralPublicKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
+    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
 };
@@ -17,7 +17,7 @@ pub fn compute_circuit_output(
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
         public_post_states: Vec::new(),
-        ciphertexts: Vec::new(),
+        encrypted_private_post_states: Vec::new(),
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
         block_validity_window,
@@ -40,6 +40,8 @@ pub fn compute_circuit_output(
                 output.public_post_states.push(post_state);
             }
             InputAccountIdentity::PrivateAuthorizedInit {
+                epk,
+                view_tag,
                 ssk,
                 nsk,
                 identifier,
@@ -71,11 +73,15 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
                     ssk,
+                    epk,
+                    *view_tag,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk,
+                view_tag,
                 ssk,
                 nsk,
                 membership_proof,
@@ -105,11 +111,15 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
                     ssk,
+                    epk,
+                    *view_tag,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateUnauthorized {
+                epk,
+                view_tag,
                 npk,
                 ssk,
                 identifier,
@@ -140,11 +150,15 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
                     ssk,
+                    epk,
+                    *view_tag,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaInit {
+                epk,
+                view_tag,
                 npk: _,
                 ssk,
                 identifier,
@@ -187,11 +201,15 @@ pub fn compute_circuit_output(
                         identifier: *identifier,
                     },
                     ssk,
+                    epk,
+                    *view_tag,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaUpdate {
+                epk,
+                view_tag,
                 ssk,
                 nsk,
                 membership_proof,
@@ -231,6 +249,8 @@ pub fn compute_circuit_output(
                         identifier: *identifier,
                     },
                     ssk,
+                    epk,
+                    *view_tag,
                     new_nullifier,
                     new_nonce,
                 );
@@ -243,7 +263,7 @@ pub fn compute_circuit_output(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "All seven inputs are distinct concerns from the variant arms; bundling would be artificial"
+    reason = "Inputs are distinct concerns from the variant arms; bundling would be artificial"
 )]
 fn emit_private_output(
     output: &mut PrivacyPreservingCircuitOutput,
@@ -252,6 +272,8 @@ fn emit_private_output(
     account_id: &AccountId,
     kind: &PrivateAccountKind,
     shared_secret: &SharedSecretKey,
+    epk: &EphemeralPublicKey,
+    view_tag: u8,
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
 ) {
@@ -270,7 +292,13 @@ fn emit_private_output(
     );
 
     output.new_commitments.push(commitment_post);
-    output.ciphertexts.push(encrypted_account);
+    output
+        .encrypted_private_post_states
+        .push(EncryptedAccountData {
+            ciphertext: encrypted_account,
+            epk: epk.clone(),
+            view_tag,
+        });
     *output_index = output_index
         .checked_add(1)
         .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));

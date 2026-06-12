@@ -492,12 +492,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
         public_post_states: message.public_post_states.clone(),
-        ciphertexts: message
-            .encrypted_private_post_states
-            .iter()
-            .cloned()
-            .map(|value| value.ciphertext)
-            .collect(),
+        encrypted_private_post_states: message.encrypted_private_post_states.clone(),
         new_commitments: message.new_commitments.clone(),
         new_nullifiers: message.new_nullifiers.clone(),
         block_validity_window: message.block_validity_window,
@@ -580,7 +575,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_public_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
         };
 
@@ -664,6 +659,11 @@ mod tests {
         //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -688,7 +688,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();
@@ -728,7 +727,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_private_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
         };
 
@@ -820,6 +819,11 @@ mod tests {
         // so PrivateAuthorizedUpdate is not an option.
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -845,7 +849,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();
