@@ -412,7 +412,7 @@ impl AccountManager {
             .collect();
 
         if let Some(pin) = self.pin.clone() {
-            pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {
+            pyo3::Python::attach(|py| -> pyo3::PyResult<()> {
                 python_path::add_python_path(py)?;
                 let wallet = KeycardWallet::new(py)?;
                 wallet.connect(py, &pin)?;
