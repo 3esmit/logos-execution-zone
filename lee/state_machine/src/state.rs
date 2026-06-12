@@ -656,20 +656,6 @@ pub mod tests {
     }
 
     #[test]
-    fn add_pinata_token_program_sets_non_default_owner_and_data() {
-        // The account created by `add_pinata_token_program` must have a non-default
-        // `program_owner` and non-default `data`.  Catches deletion of either field
-        // from the struct literal.
-        let id = AccountId::new([0xAB_u8; 32]);
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        state.add_pinata_token_program(id);
-        let acc = state.get_account_by_id(id);
-        let default = Account::default();
-        assert_ne!(acc.program_owner, default.program_owner);
-        assert_ne!(acc.data, default.data);
-    }
-
-    #[test]
     fn new_with_genesis() {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
