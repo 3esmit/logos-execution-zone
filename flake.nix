@@ -13,8 +13,14 @@
 
     crane.url = "github:ipetkov/crane";
 
+    # Must stay in sync with the lbc-* tags in logos-blockchain/Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits/d6cf41f66500d4afc157b4f43de0f0d5bfa01443";
+      url = "github:logos-blockchain/logos-blockchain-circuits/2846ee7a4cfa24458bb8063412ab2e753b344d2f";
+    };
+
+    # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
+    rust-rapidsnark = {
+      url = "github:logos-blockchain/logos-blockchain-rust-rapidsnark/e91187f8ccb5bbfc7bb00dac88169112428da78f";
     };
   };
 
@@ -25,6 +31,7 @@
       rust-overlay,
       crane,
       logos-blockchain-circuits,
+      rust-rapidsnark,
       ...
     }:
     let
@@ -103,12 +110,9 @@
               pkgs.python3  # Required for correct builds now, as python is sandboxed in nix builds
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-            LBC_LIB_DIR = "${lbc_dir}";
-            LOGOS_BLOCKCHAIN_CIRCUITS = "${lbc_dir}";
-            LBC_POC_LIB_DIR = "${lbc_dir}/poc";
-            LBC_POL_LIB_DIR = "${lbc_dir}/pol";
-            LBC_POQ_LIB_DIR = "${lbc_dir}/poq";
-            LBC_SIGNATURE_LIB_DIR = "${lbc_dir}/zksign";
+            # Logos blockchain related env vars
+            LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
+            RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;
             # Point the risc0-circuit-recursion build script to the pre-fetched zip
             # so it doesn't try to download it inside the sandbox.
             RECURSION_SRC_PATH = "${recursionZkr}";
