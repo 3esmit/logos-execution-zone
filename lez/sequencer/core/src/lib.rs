@@ -225,7 +225,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             })
         });
 
-        let mut block_publisher = BP::new(
+        let block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
@@ -242,10 +242,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // first publish, zone-sdk's checkpoint persistence covers further
         // restarts.
         if is_fresh_start {
-            log::info!("Waiting while BP is ready");
-
-            block_publisher.wait_ready().await;
-
             block_publisher
                 .publish_block(&genesis_block)
                 .await
@@ -477,8 +473,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect())
     }
 
-    pub fn block_publisher(&self) -> &BP {
-        &self.block_publisher
+    pub fn block_publisher(&self) -> BP {
+        self.block_publisher.clone()
     }
 
     fn next_block_id(&self) -> u64 {
