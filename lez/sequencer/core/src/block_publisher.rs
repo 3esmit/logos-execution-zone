@@ -9,10 +9,12 @@ pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
-    state::{DepositInfo, FinalizedOp, InscriptionInfo},
+    sequencer::{
+        DepositInfo, Event, FinalizedOp, InscriptionInfo,
+        SequencerConfig as ZoneSdkSequencerConfig, ZoneSequencer,
+    },
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::config::BedrockConfig;
 
@@ -30,7 +32,7 @@ pub type OnDepositEventSink =
     Box<dyn Fn(DepositInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
-pub trait BlockPublisherTrait: Clone {
+pub trait BlockPublisherTrait: Sized {
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
@@ -43,13 +45,15 @@ pub trait BlockPublisherTrait: Clone {
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
     /// retries internally; this just hands the payload off.
-    async fn publish_block(&self, block: &Block) -> Result<()>;
+    async fn publish_block(&mut self, block: &Block) -> Result<()>;
+
+    async fn wait_ready(&self);
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
-#[derive(Clone)]
+//#[derive(Clone)]
 pub struct ZoneSdkPublisher {
-    handle: SequencerHandle<NodeHttpClient>,
+    sequencer: Arc<Mutex<ZoneSequencer<NodeHttpClient>>>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
 }
@@ -80,23 +84,35 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             ..ZoneSdkSequencerConfig::default()
         };
 
-        let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
+        let sequencer = Arc::new(Mutex::new(ZoneSequencer::init_with_config(
             config.channel_id,
             bedrock_signing_key,
             node,
             zone_sdk_config,
             initial_checkpoint,
-        );
+        )));
+
+        let drive_sequencer = sequencer.clone();
 
         let drive_task = tokio::spawn(async move {
             loop {
-                let Some(event) = sequencer.next_event().await else {
-                    continue;
+                let event = {
+                    let mut event_guard = drive_sequencer.lock().await;
+
+                    let Some(event) = event_guard.next_event().await else {
+                        continue;
+                    };
+                    event
                 };
+
                 match event {
-                    Event::Checkpoint { checkpoint } => on_checkpoint(checkpoint),
-                    Event::TxsFinalized { items } => {
-                        for op in items.into_iter().flat_map(|item| item.ops) {
+                    Event::BlocksProcessed {
+                        checkpoint,
+                        channel_update: _,
+                        finalized,
+                    } => {
+                        on_checkpoint(checkpoint);
+                        for op in finalized.into_iter().flat_map(|item| item.ops) {
                             match op {
                                 FinalizedOp::Inscription(inscription) => {
                                     if let Some(block_id) = block_id_from_inscription(&inscription)
@@ -111,34 +127,45 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                             }
                         }
                     }
-                    Event::ChannelUpdate { .. }
-                    | Event::Published { .. }
-                    | Event::Readiness { .. }
-                    | Event::TurnNotification { .. } => {}
+                    Event::Ready | Event::TurnNotification { .. } => {}
                 }
             }
         });
 
-        handle.wait_ready().await;
-
         Ok(Self {
-            handle,
+            sequencer,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
     }
 
-    async fn publish_block(&self, block: &Block) -> Result<()> {
+    async fn publish_block(&mut self, block: &Block) -> Result<()> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
-        self.handle
-            .publish_message(data_bounded)
-            .await
-            .context("Failed to publish block")?;
+        {
+            let mut handle_guard = self.sequencer.lock().await;
+
+            let _res = handle_guard
+                .handle()
+                .publish(data_bounded)
+                .context("Failed to publish block")?;
+        }
 
         Ok(())
+    }
+
+    async fn wait_ready(&self) {
+        {
+            let ready_guard = self.sequencer.lock().await;
+
+            ready_guard
+                .subscribe_ready()
+                .wait_for(|val| *val)
+                .await
+                .expect("Channel should be alive");
+        }
     }
 }
 

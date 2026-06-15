@@ -12,6 +12,7 @@ use lee::{AccountId, PublicTransaction, program::Program, public_transaction::Me
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
@@ -224,7 +225,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             })
         });
 
-        let block_publisher = BP::new(
+        let mut block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
@@ -241,6 +242,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // first publish, zone-sdk's checkpoint persistence covers further
         // restarts.
         if is_fresh_start {
+            log::info!("Waiting while BP is ready");
+
+            block_publisher.wait_ready().await;
+
             block_publisher
                 .publish_block(&genesis_block)
                 .await
@@ -472,8 +477,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect())
     }
 
-    pub fn block_publisher(&self) -> BP {
-        self.block_publisher.clone()
+    pub fn block_publisher(&self) -> &BP {
+        &self.block_publisher
     }
 
     fn next_block_id(&self) -> u64 {
@@ -611,9 +616,7 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
     PublicTransaction::new(message, witness_set)
 }
 
-fn pending_deposit_event_record(
-    deposit: &logos_blockchain_zone_sdk::state::DepositInfo,
-) -> PendingDepositEventRecord {
+fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
     PendingDepositEventRecord {
         deposit_op_id: HashType(deposit.op_id),
         source_tx_hash: HashType(deposit.tx_hash.0),
