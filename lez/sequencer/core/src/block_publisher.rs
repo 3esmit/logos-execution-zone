@@ -1,20 +1,28 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
 use log::warn;
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
+use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
 pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
-    state::{DepositInfo, FinalizedOp, InscriptionInfo},
+    sequencer::{
+        DepositInfo, Event, FinalizedOp, InscriptionInfo,
+        SequencerConfig as ZoneSdkSequencerConfig, ZoneSequencer,
+    },
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::config::BedrockConfig;
+
+/// Channel capacity for the publish inbox. One publish per produced block, drained
+/// in microseconds by the drive task — 32 is huge headroom and just provides
+/// backpressure if the drive task stalls (reconnect, long backfill).
+const PUBLISH_INBOX_CAPACITY: usize = 32;
 
 /// Sink for `Event::Published` checkpoints emitted by the drive task.
 /// Caller is responsible for persistence (e.g. writing to rocksdb).
@@ -47,9 +55,16 @@ pub trait BlockPublisherTrait: Clone {
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
+///
+/// The sequencer is owned exclusively by the drive task — the new zone-sdk
+/// `SequencerHandle` is a `&mut self` borrow, so any out-of-task access
+/// requires routing requests through a channel. We send serialized
+/// inscriptions over a bounded mpsc; the drive task `tokio::select!`s
+/// between `next_event()` and the inbox, calling `sequencer.handle().publish(...)`
+/// inline.
 #[derive(Clone)]
 pub struct ZoneSdkPublisher {
-    handle: SequencerHandle<NodeHttpClient>,
+    publish_tx: mpsc::Sender<Inscription>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
 }
@@ -80,7 +95,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             ..ZoneSdkSequencerConfig::default()
         };
 
-        let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
+        let mut sequencer = ZoneSequencer::init_with_config(
             config.channel_id,
             bedrock_signing_key,
             node,
@@ -88,41 +103,70 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             initial_checkpoint,
         );
 
+        // Grab readiness receiver before moving the sequencer into the drive
+        // task so we can await cold-start completion below.
+        let mut ready_rx = sequencer.subscribe_ready();
+
+        let (publish_tx, mut publish_rx) = mpsc::channel::<Inscription>(PUBLISH_INBOX_CAPACITY);
+
         let drive_task = tokio::spawn(async move {
             loop {
-                let Some(event) = sequencer.next_event().await else {
-                    continue;
-                };
-                match event {
-                    Event::Checkpoint { checkpoint } => on_checkpoint(checkpoint),
-                    Event::TxsFinalized { items } => {
-                        for op in items.into_iter().flat_map(|item| item.ops) {
-                            match op {
-                                FinalizedOp::Inscription(inscription) => {
-                                    if let Some(block_id) = block_id_from_inscription(&inscription)
-                                    {
-                                        on_finalized_block(block_id);
+                #[expect(
+                    clippy::integer_division_remainder_used,
+                    reason = "tokio::select! expansion uses `%` for random branch selection"
+                )]
+                {
+                    tokio::select! {
+                        // Drain external publish requests by calling the
+                        // borrowing handle — `&mut sequencer` is only
+                        // available here.
+                        Some(data) = publish_rx.recv() => {
+                            if let Err(e) = sequencer.handle().publish(data) {
+                                warn!("zone-sdk publish failed: {e:?}");
+                            }
+                        }
+                        event = sequencer.next_event() => {
+                            let Some(event) = event else { continue };
+                            match event {
+                                Event::BlocksProcessed {
+                                    checkpoint,
+                                    channel_update: _,
+                                    finalized,
+                                } => {
+                                    on_checkpoint(checkpoint);
+                                    for op in finalized.into_iter().flat_map(|item| item.ops) {
+                                        match op {
+                                            FinalizedOp::Inscription(inscription) => {
+                                                if let Some(block_id) =
+                                                    block_id_from_inscription(&inscription)
+                                                {
+                                                    on_finalized_block(block_id);
+                                                }
+                                            }
+                                            FinalizedOp::Deposit(deposit) => {
+                                                on_deposit_event(deposit).await;
+                                            }
+                                            FinalizedOp::Withdraw(_) => {}
+                                        }
                                     }
                                 }
-                                FinalizedOp::Deposit(deposit) => {
-                                    on_deposit_event(deposit).await;
-                                }
-                                FinalizedOp::Withdraw(_) => {}
+                                Event::Ready | Event::TurnNotification { .. } => {}
                             }
                         }
                     }
-                    Event::ChannelUpdate { .. }
-                    | Event::Published { .. }
-                    | Event::Readiness { .. }
-                    | Event::TurnNotification { .. } => {}
                 }
             }
         });
 
-        handle.wait_ready().await;
+        // Wait for cold-start backfill to complete before returning so callers
+        // can publish immediately (e.g. genesis block) without racing readiness.
+        ready_rx
+            .wait_for(|v| *v)
+            .await
+            .context("Zone-sdk readiness channel closed before becoming ready")?;
 
         Ok(Self {
-            handle,
+            publish_tx,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
     }
@@ -133,10 +177,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
-        self.handle
-            .publish_message(data_bounded)
+        self.publish_tx
+            .send(data_bounded)
             .await
-            .context("Failed to publish block")?;
+            .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
         Ok(())
     }

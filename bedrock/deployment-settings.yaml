@@ -8,7 +8,6 @@ blend:
     scheduler:
       cover:
         message_frequency_per_round: 1.0
-        intervals_for_safety_buffer: 100
       delayer:
         maximum_release_delay_in_rounds: 3
     minimum_messages_coefficient: 1
@@ -31,10 +30,9 @@ cryptarchia:
   sdp_config:
     service_params:
       BN:
-        lock_period: 10
         inactivity_period: 1
         retention_period: 1
-        timestamp: 0
+        epoch: 0
     min_stake:
       threshold: 1
       timestamp: 0
@@ -72,13 +70,10 @@ cryptarchia:
             inscription: '0c000000000000006c6f676f732d6465766e65742c046269000000000000000000000000000000000000000000000000000000000000000000000000'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
-        execution_gas_price: 0
-        storage_gas_price: 0
       ops_proofs:
       - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
 time:
   slot_duration: '1.0'
-  chain_start_time: PLACEHOLDER_CHAIN_START_TIME
 mempool:
   pubsub_topic: mantle_e2e_tests
