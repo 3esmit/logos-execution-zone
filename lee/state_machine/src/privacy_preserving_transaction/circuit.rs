@@ -178,8 +178,8 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use lee_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
-        PrivacyPreservingCircuitOutput, SharedSecretKey,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme,
+        EphemeralPublicKey, Nullifier, PrivacyPreservingCircuitOutput, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         program::{PdaSeed, PrivateAccountKind},
     };
@@ -201,13 +201,24 @@ mod tests {
         idx: usize,
     ) -> PrivateAccountKind {
         let (kind, _) = EncryptionScheme::decrypt(
-            &output.ciphertexts[idx],
+            &output.encrypted_private_post_states[idx].ciphertext,
             ssk,
             &output.new_commitments[idx],
             u32::try_from(idx).expect("idx fits in u32"),
         )
         .unwrap();
         kind
+    }
+
+    #[test]
+    fn proof_inner_roundtrip() {
+        // `Proof::from_inner(b).into_inner()` must return exactly `b`. Catches
+        // mutations of `into_inner` returning `vec![]`, `vec![0]`, or `vec![1]`,
+        // and of `from_inner` discarding its argument.
+        let bytes = vec![0xDE_u8, 0xAD, 0xBE, 0xEF];
+        assert_eq!(Proof::from_inner(bytes.clone()).into_inner(), bytes);
+        assert!(Proof::from_inner(vec![]).into_inner().is_empty());
+        assert_eq!(Proof::from_inner(vec![0xFF]).into_inner(), vec![0xFF_u8]);
     }
 
     #[test]
@@ -257,6 +268,11 @@ mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(
+                        &recipient_keys.npk(),
+                        &recipient_keys.vpk(),
+                    ),
                     npk: recipient_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
@@ -274,10 +290,10 @@ mod tests {
         assert_eq!(sender_post, expected_sender_post);
         assert_eq!(output.new_commitments.len(), 1);
         assert_eq!(output.new_nullifiers.len(), 1);
-        assert_eq!(output.ciphertexts.len(), 1);
+        assert_eq!(output.encrypted_private_post_states.len(), 1);
 
         let (_identifier, recipient_post) = EncryptionScheme::decrypt(
-            &output.ciphertexts[0],
+            &output.encrypted_private_post_states[0].ciphertext,
             &shared_secret,
             &output.new_commitments[0],
             0,
@@ -356,6 +372,11 @@ mod tests {
             .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(
+                        &sender_keys.npk(),
+                        &sender_keys.vpk(),
+                    ),
                     ssk: shared_secret_1,
                     nsk: sender_keys.nsk,
                     membership_proof: commitment_set
@@ -364,6 +385,11 @@ mod tests {
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(
+                        &recipient_keys.npk(),
+                        &recipient_keys.vpk(),
+                    ),
                     npk: recipient_keys.npk(),
                     ssk: shared_secret_2,
                     identifier: 0,
@@ -378,10 +404,10 @@ mod tests {
         assert!(output.public_post_states.is_empty());
         assert_eq!(output.new_commitments, expected_new_commitments);
         assert_eq!(output.new_nullifiers, expected_new_nullifiers);
-        assert_eq!(output.ciphertexts.len(), 2);
+        assert_eq!(output.encrypted_private_post_states.len(), 2);
 
         let (_identifier, sender_post) = EncryptionScheme::decrypt(
-            &output.ciphertexts[0],
+            &output.encrypted_private_post_states[0].ciphertext,
             &shared_secret_1,
             &expected_new_commitments[0],
             0,
@@ -390,7 +416,7 @@ mod tests {
         assert_eq!(sender_post, expected_private_account_1);
 
         let (_identifier, recipient_post) = EncryptionScheme::decrypt(
-            &output.ciphertexts[1],
+            &output.encrypted_private_post_states[1].ciphertext,
             &shared_secret_2,
             &expected_new_commitments[1],
             1,
@@ -432,6 +458,11 @@ mod tests {
             vec![pre],
             instruction,
             vec![InputAccountIdentity::PrivateUnauthorized {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &account_keys.npk(),
+                    &account_keys.vpk(),
+                ),
                 npk: account_keys.npk(),
                 ssk: shared_secret,
                 identifier: 0,
@@ -461,6 +492,8 @@ mod tests {
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                 npk,
                 ssk: shared_secret,
                 identifier,
@@ -508,6 +541,8 @@ mod tests {
             vec![pda_pre],
             instruction,
             vec![InputAccountIdentity::PrivatePdaInit {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                 npk,
                 ssk: shared_secret_pda,
                 identifier: 0,
@@ -561,6 +596,8 @@ mod tests {
             instruction,
             vec![
                 InputAccountIdentity::PrivatePdaInit {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                     npk,
                     ssk: shared_secret_pda,
                     identifier: 0,
@@ -618,6 +655,11 @@ mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(
+                        &shared_npk,
+                        &shared_keys.vpk(),
+                    ),
                     npk: shared_npk,
                     ssk: shared_secret,
                     identifier: shared_identifier,
@@ -647,6 +689,8 @@ mod tests {
             Program::serialize_instruction(authenticated_transfer_core::Instruction::Initialize)
                 .unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
                 ssk,
                 nsk: keys.nsk,
                 identifier,
@@ -691,6 +735,8 @@ mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
                     npk: keys.npk(),
                     ssk,
                     identifier,
@@ -735,6 +781,8 @@ mod tests {
             .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
                     ssk,
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
@@ -789,6 +837,8 @@ mod tests {
             Program::serialize_instruction((seed, 1_u128, auth_transfer_id, false)).unwrap(),
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                     ssk,
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
@@ -827,6 +877,8 @@ mod tests {
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                 npk,
                 ssk: shared_secret,
                 identifier: 99,
@@ -870,6 +922,8 @@ mod tests {
             Program::serialize_instruction((seed, 1_u128, auth_transfer_id, false)).unwrap(),
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
                     ssk,
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),

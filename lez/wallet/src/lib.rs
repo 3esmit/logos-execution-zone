@@ -587,10 +587,6 @@ impl WalletCore {
             lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(
                 acc_manager.public_account_ids(),
                 acc_manager.public_account_nonces(),
-                private_account_keys
-                    .iter()
-                    .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
-                    .collect(),
                 output,
             )?;
 

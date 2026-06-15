@@ -78,18 +78,9 @@ impl LeeTransaction {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
-        let diff = match self {
-            Self::Public(tx) => {
-                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
-            }
-            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
-                tx, state, block_id, timestamp,
-            ),
-            Self::ProgramDeployment(tx) => {
-                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
-            }
-        }?;
+        let diff = self.compute_state_diff(state, block_id, timestamp)?;
 
+        // system accounts guard
         let system_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS.iter().copied().chain([
             lee::system_faucet_account_id(),
             lee::system_bridge_account_id(),
@@ -99,6 +90,28 @@ impl LeeTransaction {
         }
 
         Ok(diff)
+    }
+
+    /// Computes the validated state diff without enforcing the system-account
+    /// restriction. Shared by [`Self::validate_on_state`] and
+    /// [`Self::execute_without_system_accounts_check_on_state`].
+    fn compute_state_diff(
+        &self,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+        match self {
+            Self::Public(tx) => {
+                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
+            }
+            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
+                tx, state, block_id, timestamp,
+            ),
+            Self::ProgramDeployment(tx) => {
+                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+            }
+        }
     }
 
     /// Validates the transaction against the current state, rejects modifications to clock
@@ -111,6 +124,28 @@ impl LeeTransaction {
     ) -> Result<Self, lee::error::LeeError> {
         let diff = self
             .validate_on_state(state, block_id, timestamp)
+            .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
+        state.apply_state_diff(diff);
+        Ok(self)
+    }
+
+    /// Similar to [`Self::execute_check_on_state`], but skips the system-account guard.
+    ///
+    /// FIXME: HOT FIX (testnet v0.2): the indexer replays blocks the sequencer already
+    /// accepted, including sequencer-generated deposit transactions that
+    /// legitimately modify the bridge account. The `TransactionOrigin::Sequencer`
+    /// tag that lets the sequencer bypass the guard is not carried in the block,
+    /// so the indexer cannot yet distinguish deposit txs from user txs.
+    ///
+    /// REMOVE ME when the indexer can authenticate deposit transactions.
+    pub fn execute_without_system_accounts_check_on_state(
+        self,
+        state: &mut V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<Self, lee::error::LeeError> {
+        let diff = self
+            .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
         Ok(self)
@@ -186,5 +221,49 @@ fn validate_doesnt_modify_account(
         )))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lee::{
+        AccountId, CLOCK_01_PROGRAM_ACCOUNT_ID, PrivateKey, PublicKey, V03State,
+        system_bridge_account_id, system_faucet_account_id,
+    };
+
+    use crate::test_utils::create_transaction_native_token_transfer;
+
+    #[test]
+    fn system_account_ids_are_distinct_and_non_default() {
+        let faucet = system_faucet_account_id();
+        let bridge = system_bridge_account_id();
+        assert_ne!(faucet, AccountId::default());
+        assert_ne!(bridge, AccountId::default());
+        assert_ne!(faucet, bridge);
+    }
+
+    #[test]
+    fn validate_on_state_rejects_modifying_a_system_account() {
+        // A native transfer that credits a clock system account *changes* that
+        // account, so `validate_doesnt_modify_account` must reject it.  Catches
+        // the `!=` → `==` inversion at `validate_doesnt_modify_account` (a changed
+        // account would no longer be flagged) and `public_diff → HashMap::new()`
+        // (an empty diff hides the modification).
+        let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let state = V03State::new_with_genesis_accounts(&[(sender_id, 10_000)], vec![], 0);
+
+        let tx = create_transaction_native_token_transfer(
+            sender_id,
+            0,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            100,
+            &sender_key,
+        );
+
+        assert!(
+            tx.validate_on_state(&state, 1, 0).is_err(),
+            "validate_on_state must reject a transfer that credits a clock system account",
+        );
     }
 }

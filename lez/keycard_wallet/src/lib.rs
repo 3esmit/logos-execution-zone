@@ -7,8 +7,9 @@ use zeroize::Zeroizing;
 
 pub mod python_path;
 
-/// NSK and VSK as fixed-length zeroizing byte arrays.
-type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
+/// NSK (32 bytes) and VSK (64 bytes, the ML-KEM-768 seed `d || z`) as fixed-length zeroizing byte
+/// arrays.
+type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 64]>);
 
 // TODO: encrypt at rest alongside broader wallet storage encryption work.
 #[derive(Serialize, Deserialize)]
@@ -123,7 +124,7 @@ impl KeycardWallet {
     }
 
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -190,7 +191,7 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> PyResult<(Signature, PublicKey)> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -239,13 +240,13 @@ impl KeycardWallet {
         };
 
         let vsk = {
-            if raw_vsk.len() != 32 {
+            if raw_vsk.len() != 64 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "expected 32-byte VSK from keycard, got {} bytes",
+                    "expected 64-byte VSK from keycard, got {} bytes",
                     raw_vsk.len()
                 )));
             }
-            let mut arr = Zeroizing::new([0_u8; 32]);
+            let mut arr = Zeroizing::new([0_u8; 64]);
             arr.copy_from_slice(&raw_vsk);
             arr
         };
@@ -257,7 +258,7 @@ impl KeycardWallet {
         pin: &str,
         path: &str,
     ) -> PyResult<PrivateKeyPair> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;

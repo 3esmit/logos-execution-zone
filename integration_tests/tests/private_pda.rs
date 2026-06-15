@@ -23,7 +23,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    InputAccountIdentity, NullifierPublicKey,
+    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -74,6 +74,8 @@ async fn fund_private_pda(
     let account_identities = vec![
         InputAccountIdentity::Public,
         InputAccountIdentity::PrivatePdaInit {
+            epk,
+            view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
             npk,
             ssk,
             identifier,
@@ -89,13 +91,9 @@ async fn fund_private_pda(
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
-    let message = Message::try_from_circuit_output(
-        vec![sender],
-        vec![sender_account.nonce],
-        vec![(npk, vpk, epk)],
-        output,
-    )
-    .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
+    let message =
+        Message::try_from_circuit_output(vec![sender], vec![sender_account.nonce], output)
+            .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
 
     let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);

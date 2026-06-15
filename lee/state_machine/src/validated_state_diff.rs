@@ -492,12 +492,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
         public_post_states: message.public_post_states.clone(),
-        ciphertexts: message
-            .encrypted_private_post_states
-            .iter()
-            .cloned()
-            .map(|value| value.ciphertext)
-            .collect(),
+        encrypted_private_post_states: message.encrypted_private_post_states.clone(),
         new_commitments: message.new_commitments.clone(),
         new_nullifiers: message.new_nullifiers.clone(),
         block_validity_window: message.block_validity_window,
@@ -526,6 +521,44 @@ mod tests {
         validated_state_diff::ValidatedStateDiff,
     };
 
+    #[test]
+    fn public_diff_reflects_a_successful_transfer() {
+        // A successful native transfer must record the debited sender in
+        // `public_diff()`.  Catches the mutation that replaces `public_diff` with
+        // `HashMap::new()` (which would hide every account change).
+        use authenticated_transfer_core::Instruction as AtInstruction;
+
+        let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+        let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+
+        let state = V03State::new_with_genesis_accounts(&[(from, 100)], vec![], 0);
+        let program_id = Program::authenticated_transfer_program().id();
+        let message = Message::try_new(
+            program_id,
+            vec![from, to],
+            vec![Nonce(0), Nonce(0)],
+            AtInstruction::Transfer { amount: 5 },
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
+        let tx = crate::PublicTransaction::new(message, witness_set);
+
+        let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+            .expect("a valid native transfer must validate");
+        let public_diff = diff.public_diff();
+
+        assert!(
+            public_diff.contains_key(&from),
+            "public_diff must contain the debited sender",
+        );
+        assert_eq!(
+            public_diff[&from].balance, 95,
+            "sender balance in the diff must reflect the debit",
+        );
+    }
+
     /// Privacy-path version of the authorization-injection attack. The test passes when the
     /// attack is rejected and the victim's balance is left untouched.
     ///
@@ -542,7 +575,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_public_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
         };
 
@@ -626,6 +659,11 @@ mod tests {
         //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -650,7 +688,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();
@@ -690,7 +727,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_private_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
         };
 
@@ -782,6 +819,11 @@ mod tests {
         // so PrivateAuthorizedUpdate is not an option.
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -807,7 +849,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();

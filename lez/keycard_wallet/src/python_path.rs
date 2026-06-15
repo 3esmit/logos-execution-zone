@@ -48,7 +48,7 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
 
     let sys = PyModule::import(py, "sys")?;
     let binding = sys.getattr("path")?;
-    let sys_path = binding.downcast::<PyList>()?;
+    let sys_path = binding.cast::<PyList>()?;
 
     for path in &paths_to_add {
         let path_str = path.to_str().expect("Invalid path");

@@ -9,11 +9,14 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
     clippy::float_arithmetic,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
     clippy::print_stderr,
     clippy::print_stdout,
+    clippy::suboptimal_flops,
     reason = "Bench tool: matches test-style fixture code"
 )]
 
@@ -68,6 +71,13 @@ struct BenchResult {
     user_cycles: u64,
     segments: usize,
     exec_stats: Stats,
+    /// Compute-only execution time (ms): best-of-N executor wall-time minus the calibrated
+    /// host-side fixed per-call overhead. Filled after the calibration fit over all cases.
+    net_compute_ms: Option<f64>,
+    /// Deterministic model prediction of compute time (ms): `user_cycles * slope` from the
+    /// calibration fit. Pure function of the deterministic cycle count and the pinned-hardware
+    /// throughput, so it reproduces across re-runs where raw wall-time does not.
+    calibrated_ms: Option<f64>,
     /// Stats over prover.prove(env, elf) wall-clock samples. Only populated when --prove is set.
     /// Single-sample (n=1) when --prove is on without explicit repetition, since proving is slow.
     prove_stats: Option<Stats>,
@@ -79,6 +89,89 @@ struct BenchResult {
     prove_paging_cycles: Option<u64>,
     /// Segments from ProveInfo.stats.
     prove_segments: Option<usize>,
+}
+
+/// Linear calibration of executor wall-time against deterministic user cycles,
+/// fitted across all standalone cases as `best_ms = intercept_ms + slope_ms_per_cycle *
+/// user_cycles`.
+///
+/// The intercept is the host-side fixed per-call cost (ELF parse, `ExecutorEnv` build) that is
+/// outside the cycle count and does not scale with the instruction's work. The slope is the
+/// per-cycle execution rate on the pinned box; its reciprocal is the throughput the tokenomics
+/// fee model denominates public execution in, and is the public-side counterpart to the flat
+/// `G_verify` verify cost. The intercept is an ELF-size-averaged constant, so `net_compute_ms`
+/// is a first-order decomposition, not a mechanistic per-program overhead.
+#[derive(Debug, Serialize, Clone, Copy)]
+struct Calibration {
+    /// Cases the fit was computed over.
+    n: usize,
+    /// Slope: milliseconds of executor wall-time per user cycle.
+    slope_ms_per_cycle: f64,
+    /// Intercept: host-side fixed per-call overhead in milliseconds.
+    intercept_ms: f64,
+    /// Reciprocal of the slope: cycles executed per millisecond on the pinned box.
+    throughput_cycles_per_ms: f64,
+    /// Coefficient of determination of the fit (1.0 = perfect linear fit).
+    r2: f64,
+}
+
+impl Calibration {
+    /// Ordinary least squares of `best_ms` (y) on `user_cycles` (x) across `results`.
+    /// The fit uses best-of-N rather than the mean so a single OS scheduling spike in one
+    /// case cannot tilt the slope; best-of-N is the per-case noise floor and reproduces
+    /// run-to-run, which is what a pinned-hardware throughput constant needs.
+    /// Returns `None` when there are fewer than two distinct cycle counts to fit a line.
+    fn fit(results: &[BenchResult]) -> Option<Self> {
+        let n = results.len();
+        if n < 2 {
+            return None;
+        }
+        let xs: Vec<f64> = results.iter().map(|r| r.user_cycles as f64).collect();
+        let ys: Vec<f64> = results.iter().map(|r| r.exec_stats.best_ms).collect();
+        let nf = n as f64;
+        let sum_x: f64 = xs.iter().sum();
+        let sum_y: f64 = ys.iter().sum();
+        let sum_xy: f64 = xs.iter().zip(&ys).map(|(x, y)| x * y).sum();
+        let sum_xx: f64 = xs.iter().map(|x| x * x).sum();
+        let denom = nf * sum_xx - sum_x.powi(2);
+        if denom.abs() < f64::EPSILON {
+            return None;
+        }
+        let slope = (nf * sum_xy - sum_x * sum_y) / denom;
+        let intercept = (sum_y - slope * sum_x) / nf;
+        let mean_y = sum_y / nf;
+        let ss_tot: f64 = ys.iter().map(|y| (y - mean_y).powi(2)).sum();
+        let ss_res: f64 = xs
+            .iter()
+            .zip(&ys)
+            .map(|(x, y)| (y - (intercept + slope * x)).powi(2))
+            .sum();
+        // ss_tot ≈ 0 means every best_ms is identical; the ratio is 0/0. We report 1.0 (a flat
+        // line fits a flat cloud exactly). This is a degenerate guard, not a real-data path: the
+        // bench cases span a wide cycle range, so ss_tot is large in practice.
+        let r2 = if ss_tot.abs() < f64::EPSILON {
+            1.0
+        } else {
+            1.0 - ss_res / ss_tot
+        };
+        let throughput_cycles_per_ms = if slope.abs() < f64::EPSILON {
+            0.0
+        } else {
+            1.0 / slope
+        };
+        Some(Self {
+            n,
+            slope_ms_per_cycle: slope,
+            intercept_ms: intercept,
+            throughput_cycles_per_ms,
+            r2,
+        })
+    }
+
+    /// Compute-time prediction for a cycle count: `slope * user_cycles` (overhead excluded).
+    fn calibrated_ms(&self, user_cycles: u64) -> f64 {
+        self.slope_ms_per_cycle * user_cycles as f64
+    }
 }
 
 struct Case {
@@ -185,6 +278,8 @@ impl Case {
             user_cycles: info.cycles(),
             segments: info.segments.len(),
             exec_stats,
+            net_compute_ms: None,
+            calibrated_ms: None,
             prove_stats,
             prove_total_cycles,
             prove_user_cycles,
@@ -495,12 +590,23 @@ fn main() -> Result<()> {
         )?,
     ];
 
-    let results: Vec<BenchResult> = cases
+    let mut results: Vec<BenchResult> = cases
         .into_iter()
         .map(|c| c.run(prove, exec_iters))
         .collect::<Result<Vec<_>>>()?;
 
+    let calibration = Calibration::fit(&results);
+    if let Some(cal) = calibration {
+        for r in &mut results {
+            r.calibrated_ms = Some(cal.calibrated_ms(r.user_cycles));
+            r.net_compute_ms = Some(r.exec_stats.best_ms - cal.intercept_ms);
+        }
+    }
+
     print_table(&results, prove);
+    if let Some(cal) = calibration {
+        print_calibration(&cal);
+    }
 
     #[cfg(feature = "ppe")]
     let ppe_results = if cli.ppe { ppe::run_all() } else { Vec::new() };
@@ -525,12 +631,31 @@ fn main() -> Result<()> {
     }
     let combined = serde_json::json!({
         "standalone": results,
+        "calibration": calibration,
         "ppe": ppe_results,
     });
     std::fs::write(&out_path, serde_json::to_string_pretty(&combined)?)?;
     println!("\nJSON written to {}", out_path.display());
 
     Ok(())
+}
+
+fn print_calibration(cal: &Calibration) {
+    println!("\npublic-execution ms calibration (pinned hardware):");
+    println!(
+        "  fit: best_ms = {:.4} + {:.3e} * user_cycles  (n={}, R²={:.4})",
+        cal.intercept_ms, cal.slope_ms_per_cycle, cal.n, cal.r2,
+    );
+    println!(
+        "  throughput:    {:.0} cycles/ms",
+        cal.throughput_cycles_per_ms,
+    );
+    println!(
+        "  fixed overhead: {:.3} ms host-side per call (ELF parse + env build, off-cycle)",
+        cal.intercept_ms,
+    );
+    println!("  calib_ms = user_cycles / throughput  (compute only, overhead excluded)");
+    println!("  net_ms   = best exec_ms - fixed overhead  (measured compute, overhead stripped)");
 }
 
 fn print_table(results: &[BenchResult], prove: bool) {
@@ -555,15 +680,28 @@ fn print_table(results: &[BenchResult], prove: bool) {
         .unwrap_or(0)
         .max("exec_ms (best / mean ± stdev)".len());
 
+    let dw = 10_usize;
     println!(
-        "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}",
-        "program", "instruction", "user_cycles", "segments", "exec_ms (best / mean ± stdev)",
+        "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
+        "program",
+        "instruction",
+        "user_cycles",
+        "segments",
+        "exec_ms (best / mean ± stdev)",
+        "calib_ms",
+        "net_ms",
     );
-    println!("{}", "-".repeat(pw + iw + cw + sw + exec_w + 8));
+    println!("{}", "-".repeat(pw + iw + cw + sw + exec_w + 2 * dw + 12));
     for r in results {
+        let calib = r
+            .calibrated_ms
+            .map_or_else(|| "-".to_owned(), |v| format!("{v:.2}"));
+        let net = r
+            .net_compute_ms
+            .map_or_else(|| "-".to_owned(), |v| format!("{v:.2}"));
         println!(
-            "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}",
-            r.program, r.instruction, r.user_cycles, r.segments, r.exec_stats,
+            "{:<pw$}  {:<iw$}  {:>cw$}  {:>sw$}  {:<exec_w$}  {:>dw$}  {:>dw$}",
+            r.program, r.instruction, r.user_cycles, r.segments, r.exec_stats, calib, net,
         );
     }
 
@@ -593,5 +731,80 @@ fn print_table(results: &[BenchResult], prove: bool) {
                 r.program, r.instruction, total, pms, psegs,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cycle_bench::stats::Stats;
+
+    use super::{BenchResult, Calibration};
+
+    /// Minimal `BenchResult` carrying only the fields the calibration fit reads:
+    /// `user_cycles` (x) and `exec_stats.best_ms` (y).
+    fn point(user_cycles: u64, best_ms: f64) -> BenchResult {
+        BenchResult {
+            program: "test",
+            instruction: "test",
+            user_cycles,
+            segments: 1,
+            exec_stats: Stats::from_samples(&[best_ms]),
+            net_compute_ms: None,
+            calibrated_ms: None,
+            prove_stats: None,
+            prove_total_cycles: None,
+            prove_user_cycles: None,
+            prove_paging_cycles: None,
+            prove_segments: None,
+        }
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn fit_recovers_a_known_line() {
+        // best_ms = 10 + 0.001 * user_cycles  ->  slope 1e-3, intercept 10, throughput 1000.
+        let results = [point(1000, 11.0), point(2000, 12.0), point(3000, 13.0)];
+        let cal = Calibration::fit(&results).expect("fit over three points");
+
+        assert!(
+            close(cal.slope_ms_per_cycle, 0.001),
+            "slope {}",
+            cal.slope_ms_per_cycle
+        );
+        assert!(
+            close(cal.intercept_ms, 10.0),
+            "intercept {}",
+            cal.intercept_ms
+        );
+        assert!(
+            close(cal.throughput_cycles_per_ms, 1000.0),
+            "throughput {}",
+            cal.throughput_cycles_per_ms,
+        );
+        assert!(close(cal.r2, 1.0), "r2 {}", cal.r2);
+        assert_eq!(cal.n, 3);
+        // calibrated_ms is the overhead-excluded compute prediction: slope * cycles.
+        assert!(
+            close(cal.calibrated_ms(2000), 2.0),
+            "calib {}",
+            cal.calibrated_ms(2000)
+        );
+    }
+
+    #[test]
+    fn fit_needs_at_least_two_points() {
+        assert!(Calibration::fit(&[]).is_none());
+        assert!(Calibration::fit(&[point(1000, 11.0)]).is_none());
+    }
+
+    #[test]
+    fn fit_with_identical_cycle_counts_returns_none() {
+        // Zero spread in x leaves the slope undetermined; the fit must decline rather than divide
+        // by zero.
+        let results = [point(1000, 11.0), point(1000, 12.0)];
+        assert!(Calibration::fit(&results).is_none());
     }
 }
