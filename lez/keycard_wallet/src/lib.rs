@@ -124,7 +124,7 @@ impl KeycardWallet {
     }
 
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -191,7 +191,7 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> PyResult<(Signature, PublicKey)> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -258,7 +258,7 @@ impl KeycardWallet {
         pin: &str,
         path: &str,
     ) -> PyResult<PrivateKeyPair> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;

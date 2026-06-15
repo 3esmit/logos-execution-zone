@@ -39,7 +39,7 @@ impl WalletSubcommand for KeycardSubcommand {
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Available => {
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     python_path::add_python_path(py)
                         .expect("`wallet::keycard::available`: unable to setup python path");
 
@@ -61,7 +61,7 @@ impl WalletSubcommand for KeycardSubcommand {
             Self::Connect => {
                 let pin = read_pin()?;
 
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     python_path::add_python_path(py)
                         .expect("`wallet::keycard::connect`: unable to setup python path");
 
@@ -81,7 +81,7 @@ impl WalletSubcommand for KeycardSubcommand {
             Self::Disconnect => {
                 let pin = read_pin()?;
 
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     python_path::add_python_path(py)
                         .expect("`wallet::keycard::disconnect`: unable to setup python path");
 
@@ -105,7 +105,7 @@ impl WalletSubcommand for KeycardSubcommand {
             Self::Init => {
                 let pin = read_pin()?;
 
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     python_path::add_python_path(py)
                         .expect("`wallet::keycard::init`: unable to setup python path");
 
@@ -128,7 +128,7 @@ impl WalletSubcommand for KeycardSubcommand {
                 let pin = read_pin()?;
                 let mnemonic = read_mnemonic()?;
 
-                Python::with_gil(|py| {
+                Python::attach(|py| {
                     python_path::add_python_path(py)
                         .expect("`wallet::keycard::load`: unable to setup python path");
 
