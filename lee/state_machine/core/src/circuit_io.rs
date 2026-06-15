@@ -4,7 +4,7 @@ use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
-    encryption::Ciphertext,
+    encryption::{EncryptedAccountData, EphemeralPublicKey, ViewTag},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
@@ -33,6 +33,8 @@ pub enum InputAccountIdentity {
     /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk), identifier)` and
     /// matched against `pre_state.account_id`.
     PrivateAuthorizedInit {
+        epk: EphemeralPublicKey,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         identifier: Identifier,
@@ -40,6 +42,8 @@ pub enum InputAccountIdentity {
     /// Update of an authorized standalone private account: existing on-chain commitment, with
     /// membership proof.
     PrivateAuthorizedUpdate {
+        epk: EphemeralPublicKey,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
@@ -48,6 +52,8 @@ pub enum InputAccountIdentity {
     /// Init of a standalone private account the caller does not own (e.g. a recipient who
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
     PrivateUnauthorized {
+        epk: EphemeralPublicKey,
+        view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
@@ -57,6 +63,8 @@ pub enum InputAccountIdentity {
     /// PDA within the `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it
     /// as the 4th input.
     PrivatePdaInit {
+        epk: EphemeralPublicKey,
+        view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
@@ -72,6 +80,8 @@ pub enum InputAccountIdentity {
     /// from `nsk`. Authorization may be established upstream by a caller `pda_seeds` match or a
     /// previously-seen authorization in a chained call.
     PrivatePdaUpdate {
+        epk: EphemeralPublicKey,
+        view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
@@ -123,7 +133,7 @@ impl InputAccountIdentity {
 pub struct PrivacyPreservingCircuitOutput {
     pub public_pre_states: Vec<AccountWithMetadata>,
     pub public_post_states: Vec<Account>,
-    pub ciphertexts: Vec<Ciphertext>,
+    pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
     pub block_validity_window: BlockValidityWindow,
@@ -148,6 +158,7 @@ mod tests {
     use crate::{
         Commitment, Nullifier,
         account::{Account, AccountId, AccountWithMetadata, Nonce},
+        encryption::Ciphertext,
     };
 
     #[test]
@@ -181,7 +192,11 @@ mod tests {
                 data: b"post state data".to_vec().try_into().unwrap(),
                 nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
             }],
-            ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
+            encrypted_private_post_states: vec![EncryptedAccountData {
+                ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
+                epk: EphemeralPublicKey(vec![9, 9, 9]),
+                view_tag: 42,
+            }],
             new_commitments: vec![Commitment::new(
                 &AccountId::new([1; 32]),
                 &Account::default(),

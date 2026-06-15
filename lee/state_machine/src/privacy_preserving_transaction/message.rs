@@ -1,51 +1,15 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Nullifier, NullifierPublicKey, PrivacyPreservingCircuitOutput,
+    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
     account::{Account, Nonce},
-    encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
+pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::LeeError};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
-
-pub type ViewTag = u8;
-
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct EncryptedAccountData {
-    pub ciphertext: Ciphertext,
-    pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
-}
-
-impl EncryptedAccountData {
-    fn new(
-        ciphertext: Ciphertext,
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        epk: EphemeralPublicKey,
-    ) -> Self {
-        let view_tag = Self::compute_view_tag(npk, vpk);
-        Self {
-            ciphertext,
-            epk,
-            view_tag,
-        }
-    }
-
-    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || Npk || vpk).
-    #[must_use]
-    pub fn compute_view_tag(npk: &NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        let mut hasher = Sha256::new();
-        hasher.update(b"/LEE/v0.3/ViewTag/");
-        hasher.update(npk.to_byte_array());
-        hasher.update(vpk.to_bytes());
-        let digest: [u8; 32] = hasher.finalize().into();
-        digest[0]
-    }
-}
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
@@ -92,28 +56,13 @@ impl Message {
     pub fn try_from_circuit_output(
         public_account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
-        public_keys: Vec<(NullifierPublicKey, ViewingPublicKey, EphemeralPublicKey)>,
         output: PrivacyPreservingCircuitOutput,
     ) -> Result<Self, LeeError> {
-        if public_keys.len() != output.ciphertexts.len() {
-            return Err(LeeError::InvalidInput(
-                "Ephemeral public keys and ciphertexts length mismatch".into(),
-            ));
-        }
-
-        let encrypted_private_post_states = output
-            .ciphertexts
-            .into_iter()
-            .zip(public_keys)
-            .map(|(ciphertext, (npk, vpk, epk))| {
-                EncryptedAccountData::new(ciphertext, &npk, &vpk, epk)
-            })
-            .collect();
         Ok(Self {
             public_account_ids,
             nonces,
             public_post_states: output.public_post_states,
-            encrypted_private_post_states,
+            encrypted_private_post_states: output.encrypted_private_post_states,
             new_commitments: output.new_commitments,
             new_nullifiers: output.new_nullifiers,
             block_validity_window: output.block_validity_window,
@@ -143,7 +92,7 @@ pub mod tests {
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
         SharedSecretKey,
         account::{Account, AccountId, Nonce},
-        encryption::{EphemeralPublicKey, ViewingPublicKey},
+        encryption::ViewingPublicKey,
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
@@ -208,7 +157,7 @@ pub mod tests {
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         // all remaining vec fields are empty: u32 len=0
         let empty_vec_bytes: &[u8] = &[0_u8; 4];
-        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
+        // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0_u8; 2];
 
         let expected_borsh_vec: Vec<u8> = [
@@ -246,13 +195,11 @@ pub mod tests {
     #[test]
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
-        let vpk = ViewingPublicKey::from_scalar([2; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
         let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, 0);
         let commitment = Commitment::new(&account_id, &account);
-        let esk = [3; 32];
-        let shared_secret = SharedSecretKey::new(esk, &vpk);
-        let epk = EphemeralPublicKey::from_scalar(esk);
+        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0_u8; 32], 0);
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),

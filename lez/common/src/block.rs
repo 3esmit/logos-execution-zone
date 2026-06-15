@@ -5,14 +5,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{HashType, transaction::LeeTransaction};
-pub type MantleMsgId = [u8; 32];
 pub type BlockHash = HashType;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockMeta {
     pub id: BlockId,
     pub hash: BlockHash,
-    pub msg_id: MantleMsgId,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +53,6 @@ pub struct Block {
     pub header: BlockHeader,
     pub body: BlockBody,
     pub bedrock_status: BedrockStatus,
-    pub bedrock_parent_id: MantleMsgId,
 }
 
 impl Serialize for Block {
@@ -80,11 +77,7 @@ pub struct HashableBlockData {
 
 impl HashableBlockData {
     #[must_use]
-    pub fn into_pending_block(
-        self,
-        signing_key: &lee::PrivateKey,
-        bedrock_parent_id: MantleMsgId,
-    ) -> Block {
+    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let data_bytes = borsh::to_vec(&self).unwrap();
@@ -111,7 +104,6 @@ impl HashableBlockData {
                 transactions: self.transactions,
             },
             bedrock_status: BedrockStatus::Pending,
-            bedrock_parent_id,
         }
     }
 }

@@ -23,7 +23,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    InputAccountIdentity, NullifierPublicKey,
+    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -64,9 +64,9 @@ async fn fund_private_pda(
     let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
 
-    let eph_holder = EphemeralKeyHolder::new(&npk);
-    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
-    let epk = eph_holder.generate_ephemeral_public_key();
+    let eph_holder = EphemeralKeyHolder::new(&vpk);
+    let ssk = eph_holder.calculate_shared_secret_sender();
+    let epk = eph_holder.ephemeral_public_key().clone();
 
     let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
         .context("failed to serialize auth_transfer instruction")?;
@@ -74,6 +74,8 @@ async fn fund_private_pda(
     let account_identities = vec![
         InputAccountIdentity::Public,
         InputAccountIdentity::PrivatePdaInit {
+            epk,
+            view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
             npk,
             ssk,
             identifier,
@@ -89,13 +91,9 @@ async fn fund_private_pda(
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
-    let message = Message::try_from_circuit_output(
-        vec![sender],
-        vec![sender_account.nonce],
-        vec![(npk, vpk, epk)],
-        output,
-    )
-    .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
+    let message =
+        Message::try_from_circuit_output(vec![sender], vec![sender_account.nonce], output)
+            .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
 
     let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -272,10 +270,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // Fresh recipients — hardcoded npks not in any wallet.
     let recipient_npk_0 = NullifierPublicKey([0xAA; 32]);
-    let recipient_vpk_0 = ViewingPublicKey::from_scalar(recipient_npk_0.0);
+    let recipient_vpk_0 = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let recipient_npk_1 = NullifierPublicKey([0xBB; 32]);
-    let recipient_vpk_1 = ViewingPublicKey::from_scalar(recipient_npk_1.0);
+    let recipient_vpk_1 = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
 
     let amount_spend_0: u128 = 13;
     let amount_spend_1: u128 = 37;

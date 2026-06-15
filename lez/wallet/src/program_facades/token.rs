@@ -10,8 +10,8 @@ pub struct Token<'wallet>(pub &'wallet WalletCore);
 impl Token<'_> {
     pub async fn send_new_definition(
         &self,
-        definition_account_id: AccountId,
-        supply_account_id: AccountId,
+        definition: AccountIdentity,
+        supply: AccountIdentity,
         name: String,
         total_supply: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -21,14 +21,7 @@ impl Token<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(definition_account_id),
-                    AccountIdentity::Public(supply_account_id),
-                ],
-                instruction_data,
-                &program.into(),
-            )
+            .send_pub_tx(vec![definition, supply], instruction_data, &program.into())
             .await
     }
 
@@ -131,8 +124,8 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction(
         &self,
-        sender_account_id: AccountId,
-        recipient_account_id: AccountId,
+        sender: AccountIdentity,
+        recipient: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
@@ -143,14 +136,7 @@ impl Token<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(sender_account_id),
-                    AccountIdentity::Public(recipient_account_id),
-                ],
-                instruction_data,
-                &program.into(),
-            )
+            .send_pub_tx(vec![sender, recipient], instruction_data, &program.into())
             .await
     }
 
@@ -261,7 +247,7 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction_shielded_owned_account(
         &self,
-        sender_account_id: AccountId,
+        sender: AccountIdentity,
         recipient_account_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
@@ -270,11 +256,10 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
+                    sender,
                     self.0
                         .resolve_private_account(recipient_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -294,7 +279,7 @@ impl Token<'_> {
 
     pub async fn send_transfer_transaction_shielded_foreign_account(
         &self,
-        sender_account_id: AccountId,
+        sender: AccountIdentity,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
@@ -305,11 +290,10 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
+                    sender,
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
@@ -332,7 +316,7 @@ impl Token<'_> {
     pub async fn send_burn_transaction(
         &self,
         definition_account_id: AccountId,
-        holder_account_id: AccountId,
+        holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
@@ -344,10 +328,7 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![
-                    AccountIdentity::PublicNoSign(definition_account_id),
-                    AccountIdentity::Public(holder_account_id),
-                ],
+                vec![AccountIdentity::PublicNoSign(definition_account_id), holder],
                 instruction_data,
                 &program.into(),
             )
@@ -456,8 +437,8 @@ impl Token<'_> {
 
     pub async fn send_mint_transaction(
         &self,
-        definition_account_id: AccountId,
-        holder_account_id: AccountId,
+        definition: AccountIdentity,
+        holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
@@ -468,14 +449,7 @@ impl Token<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(definition_account_id),
-                    AccountIdentity::Public(holder_account_id),
-                ],
-                instruction_data,
-                &program.into(),
-            )
+            .send_pub_tx(vec![definition, holder], instruction_data, &program.into())
             .await
     }
 

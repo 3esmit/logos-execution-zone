@@ -4,12 +4,14 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{ops::Deref as _, time::Duration};
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, wait_for_indexer_to_catch_up,
+};
 use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
     public_transaction,
@@ -43,6 +45,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         vec![bridge_account_id, recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: [0_u8; 32],
             vault_program_id,
             recipient_id,
             amount: 1,
@@ -129,6 +132,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
+        l1_deposit_op_id: [0_u8; 32],
         vault_program_id,
         recipient_id,
         amount: 1,
@@ -148,7 +152,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = privacy_preserving_transaction::Message::try_from_circuit_output(
         vec![bridge_account_id, recipient_vault_id],
         vec![bridge_pre.account.nonce, vault_pre.account.nonce],
-        vec![],
         output,
     )
     .context("Failed to build privacy-preserving bridge deposit message")?;
@@ -204,7 +207,9 @@ async fn submit_bedrock_deposit(
 
     // Encode deposit metadata
     let metadata = borsh::to_vec(&DepositMetadata { recipient_id })
-        .context("Failed to encode deposit metadata")?;
+        .context("Failed to encode deposit metadata")?
+        .try_into()
+        .context("Encoded metadata is too big")?;
 
     let funding_key = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
 
@@ -307,7 +312,7 @@ async fn submit_bedrock_deposit(
         tip: None,
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![selected_note_id]),
+            inputs: Inputs::new(selected_note_id),
             metadata,
         },
         change_public_key: balance.address,
@@ -445,6 +450,27 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
         recipient_balance_before + 1,
         "Recipient balance should increase by claimed amount"
     );
+
+    // The indexer must replay the deposit and claim blocks and reach the same
+    // state as the sequencer — including the bridge system account the deposit
+    // modifies, which is the case the hot fix unblocks.
+    wait_for_indexer_to_catch_up(&ctx).await?;
+    let bridge_account_id = lee::system_bridge_account_id();
+    for account_id in [recipient_id, recipient_vault_id, bridge_account_id] {
+        let indexer_account = indexer_service_rpc::RpcClient::get_account(
+            // `deref` is needed for correct trait resolution
+            // of the async `get_account` method on `RpcClient`
+            ctx.indexer_client().deref(),
+            account_id.into(),
+        )
+        .await?;
+        let sequencer_account = ctx.sequencer_client().get_account(account_id).await?;
+        assert_eq!(
+            indexer_account,
+            sequencer_account.into(),
+            "Indexer and sequencer diverged for account {account_id} after deposit"
+        );
+    }
 
     Ok(())
 }

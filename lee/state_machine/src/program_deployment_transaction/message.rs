@@ -16,3 +16,18 @@ impl Message {
         self.bytecode
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Message;
+
+    #[test]
+    fn bytecode_roundtrip() {
+        // `Message::new(b).into_bytecode()` must return exactly `b`. Catches
+        // mutations of `into_bytecode` returning `vec![]`, `vec![0]`, or `vec![1]`.
+        let bytecode = vec![0x7F_u8, 0x45, 0x4C, 0x46]; // ELF magic
+        assert_eq!(Message::new(bytecode.clone()).into_bytecode(), bytecode);
+        assert!(Message::new(vec![]).into_bytecode().is_empty());
+        assert_eq!(Message::new(vec![0xAB]).into_bytecode(), vec![0xAB_u8]);
+    }
+}

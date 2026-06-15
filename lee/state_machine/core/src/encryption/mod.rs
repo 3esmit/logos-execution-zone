@@ -6,7 +6,7 @@ use chacha20::{
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
-pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
+pub use shared_key_derivation::{MlKem768EncapsulationKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account, program::PrivateAccountKind};
 #[cfg(feature = "host")]
@@ -16,6 +16,11 @@ pub type Scalar = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
+
+/// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
+/// former ECDH ephemeral public key. Always 1088 bytes for ML-KEM-768.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct EphemeralPublicKey(pub Vec<u8>);
 
 pub struct EncryptionScheme;
 
@@ -33,6 +38,45 @@ impl std::fmt::Debug for Ciphertext {
             acc
         });
         write!(f, "Ciphertext({hex})")
+    }
+}
+
+pub type ViewTag = u8;
+
+/// Encrypted private-account note for one output.
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct EncryptedAccountData {
+    pub ciphertext: Ciphertext,
+    pub epk: EphemeralPublicKey,
+    pub view_tag: ViewTag,
+}
+
+#[cfg(feature = "host")]
+impl EncryptedAccountData {
+    #[must_use]
+    pub fn new(
+        ciphertext: Ciphertext,
+        npk: &crate::NullifierPublicKey,
+        vpk: &ViewingPublicKey,
+        epk: EphemeralPublicKey,
+    ) -> Self {
+        let view_tag = Self::compute_view_tag(npk, vpk);
+        Self {
+            ciphertext,
+            epk,
+            view_tag,
+        }
+    }
+
+    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || npk || vpk).
+    #[must_use]
+    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"/LEE/v0.3/ViewTag/");
+        bytes.extend_from_slice(&npk.to_byte_array());
+        bytes.extend_from_slice(vpk.to_bytes());
+        Impl::hash_bytes(&bytes).as_bytes()[0]
     }
 }
 
@@ -153,5 +197,42 @@ mod tests {
         );
 
         assert_eq!(account_ct.0.len(), pda_ct.0.len());
+    }
+
+    /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
+    /// feeds the correct shared secret into the SHA-256 KDF and `ChaCha20` round-trip.
+    #[cfg(feature = "host")]
+    #[test]
+    fn kem_to_chacha20_round_trip() {
+        let d = [1_u8; 32];
+        let z = [2_u8; 32];
+        let vpk = shared_key_derivation::ViewingPublicKey::from_seed(&d, &z);
+
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
+
+        let account = Account {
+            program_owner: [12_u32; 8],
+            balance: 999,
+            ..Account::default()
+        };
+        let kind = PrivateAccountKind::Regular(0);
+        let commitment = crate::Commitment::new(&AccountId::new([7_u8; 32]), &account);
+
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &commitment, 0);
+        let (decoded_kind, decoded_account) =
+            EncryptionScheme::decrypt(&ct, &receiver_ss, &commitment, 0)
+                .expect("decryption must succeed with correct shared secret");
+
+        assert_eq!(decoded_account, account);
+        assert_eq!(decoded_kind, kind);
+
+        // Wrong shared secret must not decrypt correctly.
+        let wrong_ss = SharedSecretKey([0_u8; 32]);
+        let bad = EncryptionScheme::decrypt(&ct, &wrong_ss, &commitment, 0);
+        assert!(
+            bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
+            "wrong shared secret must not produce the correct plaintext"
+        );
     }
 }

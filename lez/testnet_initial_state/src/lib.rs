@@ -2,10 +2,10 @@ use common::PINATA_BASE58;
 use key_protocol::key_management::{
     KeyChain,
     key_tree::chain_index::ChainIndex,
-    secret_holders::{PrivateKeyHolder, SecretSpendingKey},
+    secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey},
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
-use lee_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
+use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -38,24 +38,24 @@ const NSK_PRIV_ACC_B: [u8; 32] = [
     23, 99, 9, 4, 177, 230, 125, 109, 91, 160, 30,
 ];
 
-const VSK_PRIV_ACC_A: [u8; 32] = [
-    5, 85, 114, 119, 141, 187, 202, 170, 122, 253, 198, 81, 150, 8, 155, 21, 192, 65, 24, 124, 116,
-    98, 110, 106, 137, 90, 165, 239, 80, 13, 222, 30,
+const VSK_D_PRIV_ACC_A: [u8; 32] = [
+    255, 250, 140, 26, 222, 223, 174, 95, 132, 108, 124, 88, 30, 247, 82, 72, 52, 70, 84, 139, 241,
+    187, 41, 163, 19, 231, 232, 122, 225, 55, 134, 184,
 ];
 
-const VSK_PRIV_ACC_B: [u8; 32] = [
-    205, 32, 76, 251, 255, 236, 96, 119, 61, 111, 65, 100, 75, 218, 12, 22, 17, 170, 55, 226, 21,
-    154, 161, 34, 208, 74, 27, 1, 119, 13, 88, 128,
+const VSK_Z_PRIV_ACC_A: [u8; 32] = [
+    225, 24, 98, 78, 31, 203, 175, 248, 213, 17, 133, 207, 10, 135, 132, 151, 59, 184, 5, 81, 28,
+    238, 137, 62, 233, 227, 99, 17, 236, 159, 244, 63,
 ];
 
-const VPK_PRIV_ACC_A: [u8; 33] = [
-    2, 210, 206, 38, 213, 4, 182, 198, 220, 47, 93, 148, 61, 84, 148, 250, 158, 45, 8, 81, 48, 80,
-    46, 230, 87, 210, 47, 204, 76, 58, 214, 167, 81,
+const VSK_D_PRIV_ACC_B: [u8; 32] = [
+    128, 85, 85, 103, 226, 218, 119, 56, 60, 252, 31, 113, 232, 215, 156, 2, 159, 247, 156, 192,
+    12, 178, 229, 236, 255, 120, 146, 211, 169, 117, 153, 180,
 ];
 
-const VPK_PRIV_ACC_B: [u8; 33] = [
-    2, 79, 110, 46, 203, 29, 206, 205, 18, 86, 27, 189, 104, 103, 113, 181, 110, 53, 78, 172, 11,
-    171, 190, 18, 126, 214, 81, 77, 192, 154, 58, 195, 238,
+const VSK_Z_PRIV_ACC_B: [u8; 32] = [
+    165, 80, 169, 87, 248, 88, 167, 154, 27, 67, 131, 122, 50, 130, 111, 40, 164, 180, 204, 75,
+    188, 140, 110, 132, 113, 133, 222, 8, 49, 123, 187, 18,
 ];
 
 const NPK_PRIV_ACC_A: [u8; 32] = [
@@ -136,20 +136,20 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
-            viewing_secret_key: VSK_PRIV_ACC_A,
+            viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_A, VSK_Z_PRIV_ACC_A),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
-        viewing_public_key: Secp256k1Point(VPK_PRIV_ACC_A.to_vec()),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_Z_PRIV_ACC_A),
     };
 
     let key_chain_2 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
-            viewing_secret_key: VSK_PRIV_ACC_B,
+            viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_B, VSK_Z_PRIV_ACC_B),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
-        viewing_public_key: Secp256k1Point(VPK_PRIV_ACC_B.to_vec()),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_Z_PRIV_ACC_B),
     };
 
     vec![

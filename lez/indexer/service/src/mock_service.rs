@@ -10,10 +10,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, HashType, MantleMsgId,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, PublicMessage, PublicTransaction, Signature,
-    Transaction, ValidityWindow, WitnessSet,
+    CommitmentSetDigest, Data, EncryptedAccountData, HashType, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, ProgramDeploymentMessage, ProgramDeploymentTransaction,
+    ProgramId, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -432,7 +432,6 @@ fn build_mock_block(
             transactions: block_transactions,
         },
         bedrock_status,
-        bedrock_parent_id: MantleMsgId([0; 32]),
     }
 }
 

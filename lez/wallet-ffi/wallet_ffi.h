@@ -119,12 +119,13 @@ typedef enum WalletFfiError {
 typedef enum FfiAccountIdentityKind {
   PUBLIC = 0,
   PUBLIC_NO_SIGN = 1,
-  PRIVATE_OWNED = 2,
-  PRIVATE_FOREIGN = 3,
-  PRIVATE_PDA_OWNED = 4,
-  PRIVATE_PDA_FOREIGN = 5,
-  PRIVATE_SHARED = 6,
-  PRIVATE_PDA_SHARED = 7,
+  PUBLIC_KEYCARD = 2,
+  PRIVATE_OWNED = 3,
+  PRIVATE_FOREIGN = 4,
+  PRIVATE_PDA_OWNED = 5,
+  PRIVATE_PDA_FOREIGN = 6,
+  PRIVATE_SHARED = 7,
+  PRIVATE_PDA_SHARED = 8,
 } FfiAccountIdentityKind;
 
 /**
@@ -153,11 +154,11 @@ typedef struct FfiPrivateAccountKeys {
    */
   struct FfiBytes32 nullifier_public_key;
   /**
-   * viewing public key (compressed secp256k1 point).
+   * Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
    */
   const uint8_t *viewing_public_key;
   /**
-   * Length of viewing public key (typically 33 bytes).
+   * Length of viewing public key (always 1184 bytes for ML-KEM-768).
    */
   uintptr_t viewing_public_key_len;
 } FfiPrivateAccountKeys;
@@ -230,6 +231,10 @@ typedef struct FfiInstructionWords {
 typedef struct FfiAccountIdentity {
   enum FfiAccountIdentityKind kind;
   struct FfiBytes32 account_id;
+  /**
+   * C-compatible string.
+   */
+  char *key_path;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
   const uint8_t *viewing_public_key;
@@ -997,6 +1002,7 @@ enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
                                                  const struct FfiPrivateAccountKeys *to_keys,
                                                  const struct FfiU128 *to_identifier,
                                                  const uint8_t (*amount)[16],
+                                                 const char *key_path,
                                                  struct FfiTransferResult *out_result);
 
 /**
@@ -1104,6 +1110,7 @@ enum WalletFfiError wallet_ffi_transfer_shielded_owned(struct WalletHandle *hand
                                                        const struct FfiBytes32 *from,
                                                        const struct FfiBytes32 *to,
                                                        const uint8_t (*amount)[16],
+                                                       const char *key_path,
                                                        struct FfiTransferResult *out_result);
 
 /**

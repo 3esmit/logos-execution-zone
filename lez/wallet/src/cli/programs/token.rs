@@ -1,11 +1,11 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use common::transaction::LeeTransaction;
 use lee::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    WalletCore,
+    AccountIdentity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::token::Token,
@@ -41,13 +41,17 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
+        to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
-        /// private account via `--to-npk`/`--to-vpk`).
+        /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
         to_identifier: Option<u128>,
         /// amount - amount of balance to move.
@@ -87,13 +91,17 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         holder: Option<CliAccountMention>,
         /// `holder_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "holder_keys")]
         holder_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `holder_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "holder_keys")]
         holder_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--holder-npk` and `--holder-vpk`.
+        #[arg(long, conflicts_with_all = ["holder_npk", "holder_vpk"])]
+        holder_keys: Option<String>,
         /// Identifier for the holder's private account (only used when minting to a foreign
-        /// private account via `--holder-npk`/`--holder-vpk`).
+        /// private account via `--holder-npk`/`--holder-vpk` or `--holder-keys`).
         #[arg(long)]
         holder_identifier: Option<u128>,
         /// amount - amount of balance to mint.
@@ -114,20 +122,21 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 name,
                 total_supply,
             } => {
+                let def_mention = definition_account_id.clone();
+                let sup_mention = supply_account_id.clone();
                 let definition_account_id = definition_account_id.resolve(wallet_core.storage())?;
                 let supply_account_id = supply_account_id.resolve(wallet_core.storage())?;
                 let underlying_subcommand = match (definition_account_id, supply_account_id) {
-                    (
-                        AccountIdWithPrivacy::Public(definition_account_id),
-                        AccountIdWithPrivacy::Public(supply_account_id),
-                    ) => TokenProgramSubcommand::Create(
-                        CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
-                            definition_account_id,
-                            supply_account_id,
-                            name,
-                            total_supply,
-                        },
-                    ),
+                    (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
+                        TokenProgramSubcommand::Create(
+                            CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
+                                definition_account_id: def_mention,
+                                supply_account_id: sup_mention,
+                                name,
+                                total_supply,
+                            },
+                        )
+                    }
                     (
                         AccountIdWithPrivacy::Public(definition_account_id),
                         AccountIdWithPrivacy::Private(supply_account_id),
@@ -170,9 +179,19 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to,
                 to_npk,
                 to_vpk,
+                to_keys,
                 to_identifier,
                 amount,
             } => {
+                let from_mention = from.clone();
+                let to_mention = to.clone();
+                let (to_npk, to_vpk) = if let Some(path) = to_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (to_npk, to_vpk)
+                };
+
                 let from = from.resolve(wallet_core.storage())?;
                 let to = to
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -192,11 +211,11 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
                     (Some(to), None, None) => match (from, to) {
-                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
+                        (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
                             TokenProgramSubcommand::Public(
                                 TokenProgramSubcommandPublic::TransferToken {
-                                    sender_account_id: from,
-                                    recipient_account_id: to,
+                                    sender_account_id: from_mention,
+                                    recipient_account_id: to_mention.expect("`wallet::cli::programs::token::Send`: Invalid to_mention account provided"),
                                     balance_to_move: amount,
                                 },
                             )
@@ -223,7 +242,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
                             TokenProgramSubcommand::Shielded(
                                 TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
-                                    sender_account_id: from,
+                                    sender: Some(from_mention.into_public_identity(from)),
                                     recipient_account_id: to,
                                     balance_to_move: amount,
                                 },
@@ -242,7 +261,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         ),
                         AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
                             TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
-                                sender_account_id: from,
+                                sender: Some(from_mention.into_public_identity(from)),
                                 recipient_npk: to_npk,
                                 recipient_vpk: to_vpk,
                                 recipient_identifier: to_identifier,
@@ -259,17 +278,17 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 amount,
             } => {
+                let holder_mention = holder.clone();
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder.resolve(wallet_core.storage())?;
                 let underlying_subcommand = match (definition, holder) {
-                    (
-                        AccountIdWithPrivacy::Public(definition),
-                        AccountIdWithPrivacy::Public(holder),
-                    ) => TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
-                        definition_account_id: definition,
-                        holder_account_id: holder,
-                        amount,
-                    }),
+                    (AccountIdWithPrivacy::Public(definition), AccountIdWithPrivacy::Public(_)) => {
+                        TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
+                            definition_account_id: definition,
+                            holder_account_id: holder_mention,
+                            amount,
+                        })
+                    }
                     (
                         AccountIdWithPrivacy::Private(definition),
                         AccountIdWithPrivacy::Private(holder),
@@ -309,9 +328,19 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 holder_npk,
                 holder_vpk,
+                holder_keys,
                 holder_identifier,
                 amount,
             } => {
+                let def_mention = definition.clone();
+                let holder_mention = holder.clone();
+                let (holder_npk, holder_vpk) = if let Some(path) = holder_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (holder_npk, holder_vpk)
+                };
+
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -331,16 +360,15 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
                     (Some(holder), None, None) => match (definition, holder) {
-                        (
-                            AccountIdWithPrivacy::Public(definition),
-                            AccountIdWithPrivacy::Public(holder),
-                        ) => TokenProgramSubcommand::Public(
-                            TokenProgramSubcommandPublic::MintToken {
-                                definition_account_id: definition,
-                                holder_account_id: holder,
-                                amount,
-                            },
-                        ),
+                        (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
+                            TokenProgramSubcommand::Public(
+                                TokenProgramSubcommandPublic::MintToken {
+                                    definition_account_id: def_mention,
+                                    holder_account_id: holder_mention.expect("`wallet::cli::programs::token::Mint`: Invalid holder_mention account provided"),
+                                    amount,
+                                },
+                            )
+                        }
                         (
                             AccountIdWithPrivacy::Private(definition),
                             AccountIdWithPrivacy::Private(holder),
@@ -430,9 +458,9 @@ pub enum TokenProgramSubcommandPublic {
     // Transfer tokens using the token program
     TransferToken {
         #[arg(short, long)]
-        sender_account_id: AccountId,
+        sender_account_id: CliAccountMention,
         #[arg(short, long)]
-        recipient_account_id: AccountId,
+        recipient_account_id: CliAccountMention,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -441,16 +469,16 @@ pub enum TokenProgramSubcommandPublic {
         #[arg(short, long)]
         definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: AccountId,
+        holder_account_id: CliAccountMention,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintToken {
         #[arg(short, long)]
-        definition_account_id: AccountId,
+        definition_account_id: CliAccountMention,
         #[arg(short, long)]
-        holder_account_id: AccountId,
+        holder_account_id: CliAccountMention,
         #[arg(short, long)]
         amount: u128,
     },
@@ -475,7 +503,7 @@ pub enum TokenProgramSubcommandPrivate {
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_vpk` - valid 33 byte hex string.
+        /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
@@ -555,8 +583,8 @@ pub enum TokenProgramSubcommandDeshielded {
 pub enum TokenProgramSubcommandShielded {
     // Transfer tokens using the token program
     TransferTokenShieldedOwned {
-        #[arg(short, long)]
-        sender_account_id: AccountId,
+        #[arg(skip)]
+        sender: Option<AccountIdentity>,
         #[arg(short, long)]
         recipient_account_id: AccountId,
         #[arg(short, long)]
@@ -564,12 +592,12 @@ pub enum TokenProgramSubcommandShielded {
     },
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
-        #[arg(short, long)]
-        sender_account_id: AccountId,
+        #[arg(skip)]
+        sender: Option<AccountIdentity>,
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_vpk` - valid 33 byte hex string.
+        /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
@@ -620,9 +648,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - public, supply - public.
     NewPublicDefPublicSupp {
         #[arg(short, long)]
-        definition_account_id: AccountId,
+        definition_account_id: CliAccountMention,
         #[arg(short, long)]
-        supply_account_id: AccountId,
+        supply_account_id: CliAccountMention,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -680,13 +708,28 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                Token(wallet_core)
+                let sender = sender_account_id.resolve(wallet_core.storage())?;
+                let recipient = recipient_account_id.resolve(wallet_core.storage())?;
+                let (
+                    AccountIdWithPrivacy::Public(sender_id),
+                    AccountIdWithPrivacy::Public(recipient_id),
+                ) = (sender, recipient)
+                else {
+                    anyhow::bail!(
+                        "`TokenProgramSubcommandPublic::TransferToken`: Unexpected private account received."
+                    );
+                };
+                let tx_hash = Token(wallet_core)
                     .send_transfer_transaction(
-                        sender_account_id,
-                        recipient_account_id,
+                        sender_account_id.into_public_identity(sender_id),
+                        recipient_account_id.into_public_identity(recipient_id),
                         balance_to_move,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::BurnToken {
@@ -694,9 +737,23 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 holder_account_id,
                 amount,
             } => {
-                Token(wallet_core)
-                    .send_burn_transaction(definition_account_id, holder_account_id, amount)
+                let holder = holder_account_id.resolve(wallet_core.storage())?;
+                let AccountIdWithPrivacy::Public(holder_id) = holder else {
+                    anyhow::bail!(
+                        "`TokenProgramSubcommandPublic::BurnToken`: holder account must be public."
+                    );
+                };
+                let tx_hash = Token(wallet_core)
+                    .send_burn_transaction(
+                        definition_account_id,
+                        holder_account_id.into_public_identity(holder_id),
+                        amount,
+                    )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::MintToken {
@@ -704,9 +761,26 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 holder_account_id,
                 amount,
             } => {
-                Token(wallet_core)
-                    .send_mint_transaction(definition_account_id, holder_account_id, amount)
+                let definition = definition_account_id.resolve(wallet_core.storage())?;
+                let holder = holder_account_id.resolve(wallet_core.storage())?;
+                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(holder_id)) =
+                    (definition, holder)
+                else {
+                    anyhow::bail!(
+                        "`TokenProgramSubcommandPublic::MintToken`: holder account must be public."
+                    );
+                };
+                let tx_hash = Token(wallet_core)
+                    .send_mint_transaction(
+                        definition_account_id.into_public_identity(def_id),
+                        holder_account_id.into_public_identity(holder_id),
+                        amount,
+                    )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
         }
@@ -764,12 +838,12 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_npk.copy_from_slice(&recipient_npk_res);
                 let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
-                let recipient_vpk_res = hex::decode(recipient_vpk)?;
-                let mut recipient_vpk = [0_u8; 33];
-                recipient_vpk.copy_from_slice(&recipient_vpk_res);
-                let recipient_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
-                    recipient_vpk.to_vec(),
-                );
+                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
+                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
+                )?;
+                let recipient_vpk =
+                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, [secret_sender, _]) = Token(wallet_core)
                     .send_transfer_transaction_private_foreign_account(
@@ -876,12 +950,11 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_npk.copy_from_slice(&holder_npk_res);
                 let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
-                let holder_vpk_res = hex::decode(holder_vpk)?;
-                let mut holder_vpk = [0_u8; 33];
-                holder_vpk.copy_from_slice(&holder_vpk_res);
-                let holder_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
-                    holder_vpk.to_vec(),
-                );
+                let holder_vpk_res = hex::decode(&holder_vpk).context(
+                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
+                )?;
+                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, [secret_definition, _]) = Token(wallet_core)
                     .send_mint_transaction_private_foreign_account(
@@ -1021,7 +1094,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::TransferTokenShieldedForeign {
-                sender_account_id,
+                sender,
                 recipient_npk,
                 recipient_vpk,
                 recipient_identifier,
@@ -1032,16 +1105,16 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_npk.copy_from_slice(&recipient_npk_res);
                 let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
-                let recipient_vpk_res = hex::decode(recipient_vpk)?;
-                let mut recipient_vpk = [0_u8; 33];
-                recipient_vpk.copy_from_slice(&recipient_vpk_res);
-                let recipient_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
-                    recipient_vpk.to_vec(),
-                );
+                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
+                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
+                )?;
+                let recipient_vpk =
+                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, _) = Token(wallet_core)
                     .send_transfer_transaction_shielded_foreign_account(
-                        sender_account_id,
+                        sender.expect("sender set during Send dispatch"),
                         recipient_npk,
                         recipient_vpk,
                         recipient_identifier.unwrap_or_else(rand::random),
@@ -1062,13 +1135,13 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
             Self::TransferTokenShieldedOwned {
-                sender_account_id,
+                sender,
                 recipient_account_id,
                 balance_to_move,
             } => {
                 let (tx_hash, secret_recipient) = Token(wallet_core)
                     .send_transfer_transaction_shielded_owned_account(
-                        sender_account_id,
+                        sender.expect("sender set during Send dispatch"),
                         recipient_account_id,
                         balance_to_move,
                     )
@@ -1163,12 +1236,11 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_npk.copy_from_slice(&holder_npk_res);
                 let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
-                let holder_vpk_res = hex::decode(holder_vpk)?;
-                let mut holder_vpk = [0_u8; 33];
-                holder_vpk.copy_from_slice(&holder_vpk_res);
-                let holder_vpk = lee_core::encryption::shared_key_derivation::Secp256k1Point(
-                    holder_vpk.to_vec(),
-                );
+                let holder_vpk_res = hex::decode(&holder_vpk).context(
+                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
+                )?;
+                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, _) = Token(wallet_core)
                     .send_mint_transaction_shielded_foreign_account(
@@ -1307,14 +1379,25 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                Token(wallet_core)
+                let definition = definition_account_id.resolve(wallet_core.storage())?;
+                let supply = supply_account_id.resolve(wallet_core.storage())?;
+                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(sup_id)) =
+                    (definition, supply)
+                else {
+                    anyhow::bail!("`NewPublicDefPublicSupp`: unexpected private account received.");
+                };
+                let tx_hash = Token(wallet_core)
                     .send_new_definition(
-                        definition_account_id,
-                        supply_account_id,
+                        definition_account_id.into_public_identity(def_id),
+                        supply_account_id.into_public_identity(sup_id),
                         name,
                         total_supply,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
         }

@@ -492,12 +492,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
         public_post_states: message.public_post_states.clone(),
-        ciphertexts: message
-            .encrypted_private_post_states
-            .iter()
-            .cloned()
-            .map(|value| value.ciphertext)
-            .collect(),
+        encrypted_private_post_states: message.encrypted_private_post_states.clone(),
         new_commitments: message.new_commitments.clone(),
         new_nullifiers: message.new_nullifiers.clone(),
         block_validity_window: message.block_validity_window,
@@ -526,6 +521,44 @@ mod tests {
         validated_state_diff::ValidatedStateDiff,
     };
 
+    #[test]
+    fn public_diff_reflects_a_successful_transfer() {
+        // A successful native transfer must record the debited sender in
+        // `public_diff()`.  Catches the mutation that replaces `public_diff` with
+        // `HashMap::new()` (which would hide every account change).
+        use authenticated_transfer_core::Instruction as AtInstruction;
+
+        let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+        let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+
+        let state = V03State::new_with_genesis_accounts(&[(from, 100)], vec![], 0);
+        let program_id = Program::authenticated_transfer_program().id();
+        let message = Message::try_new(
+            program_id,
+            vec![from, to],
+            vec![Nonce(0), Nonce(0)],
+            AtInstruction::Transfer { amount: 5 },
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
+        let tx = crate::PublicTransaction::new(message, witness_set);
+
+        let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+            .expect("a valid native transfer must validate");
+        let public_diff = diff.public_diff();
+
+        assert!(
+            public_diff.contains_key(&from),
+            "public_diff must contain the debited sender",
+        );
+        assert_eq!(
+            public_diff[&from].balance, 95,
+            "sender balance in the diff must reflect the debit",
+        );
+    }
+
     /// Privacy-path version of the authorization-injection attack. The test passes when the
     /// attack is rejected and the victim's balance is left untouched.
     ///
@@ -542,9 +575,8 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_public_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
-            encryption::EphemeralPublicKey,
         };
 
         use crate::{
@@ -571,9 +603,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let attacker_esk = [12_u8; 32];
-        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
-        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
 
         let victim_id = AccountId::new([20_u8; 32]);
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -629,6 +659,11 @@ mod tests {
         //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -653,7 +688,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();
@@ -693,9 +727,8 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_private_victim() {
         use lee_core::{
-            Commitment, InputAccountIdentity, SharedSecretKey,
+            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
-            encryption::EphemeralPublicKey,
         };
 
         use crate::{
@@ -725,9 +758,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let attacker_esk = [12_u8; 32];
-        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
-        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
 
         // Victim is a private account — not registered in public chain state.
         let victim_keys = test_private_account_keys_2();
@@ -788,6 +819,11 @@ mod tests {
         // so PrivateAuthorizedUpdate is not an option.
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: attacker_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(
+                    &attacker_keys.npk(),
+                    &attacker_keys.vpk(),
+                ),
                 ssk: attacker_ssk,
                 nsk: attacker_keys.nsk,
                 membership_proof,
@@ -813,7 +849,6 @@ mod tests {
         let message = Message::try_from_circuit_output(
             vec![victim_id, recipient_id],
             vec![], // no public signers, no nonces
-            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
             circuit_output,
         )
         .unwrap();
@@ -935,5 +970,57 @@ mod tests {
             recipient_balance_after, 0,
             "recipient should receive nothing"
         );
+    }
+
+    /// Regression test: a `PrivacyPreservingTransaction` carrying a structurally invalid
+    /// proof must be rejected with a clean `Err`.
+    #[test]
+    fn privacy_garbage_proof_is_rejected() {
+        use lee_core::{
+            Commitment,
+            account::Account,
+            program::{BlockValidityWindow, TimestampValidityWindow},
+        };
+
+        use crate::{
+            PrivacyPreservingTransaction,
+            privacy_preserving_transaction::{
+                circuit::Proof, message::Message, witness_set::WitnessSet,
+            },
+        };
+
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        // Minimal message that passes every check up to proof verification: a single
+        // commitment satisfies the non-empty requirement, no signers makes the
+        // nonce/signature checks vacuously true, and unbounded validity windows are valid
+        // for any block/timestamp.
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(
+            &PrivateKey::try_new([1_u8; 32]).unwrap(),
+        ));
+        let commitment = Commitment::new(&account_id, &Account::default());
+        let message = Message {
+            public_account_ids: vec![],
+            nonces: vec![],
+            public_post_states: vec![],
+            encrypted_private_post_states: vec![],
+            new_commitments: vec![commitment],
+            new_nullifiers: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        };
+
+        // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
+        let garbage_proof = Proof::from_inner(vec![0xff_u8; 64]);
+        let witness_set = WitnessSet::for_message(&message, garbage_proof, &[]);
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+        match result {
+            Err(LeeError::InvalidPrivacyPreservingProof) => {}
+            Err(other) => panic!("expected InvalidPrivacyPreservingProof, got {other:?}"),
+            Ok(_) => panic!("garbage proof was accepted instead of rejected"),
+        }
     }
 }

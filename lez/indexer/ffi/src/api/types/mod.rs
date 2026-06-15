@@ -1,4 +1,4 @@
-use indexer_service_protocol::{AccountId, HashType, MantleMsgId, ProgramId, PublicKey, Signature};
+use indexer_service_protocol::{AccountId, HashType, ProgramId, PublicKey, Signature};
 
 pub mod account;
 pub mod block;
@@ -68,7 +68,6 @@ impl From<FfiU128> for u128 {
 }
 
 pub type FfiHashType = FfiBytes32;
-pub type FfiMsgId = FfiBytes32;
 pub type FfiBlockId = u64;
 pub type FfiTimestamp = u64;
 pub type FfiSignature = FfiBytes64;
@@ -78,12 +77,6 @@ pub type FfiPublicKey = FfiBytes32;
 
 impl From<HashType> for FfiHashType {
     fn from(value: HashType) -> Self {
-        Self { data: value.0 }
-    }
-}
-
-impl From<MantleMsgId> for FfiMsgId {
-    fn from(value: MantleMsgId) -> Self {
         Self { data: value.0 }
     }
 }

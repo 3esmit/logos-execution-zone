@@ -3,8 +3,13 @@ use std::path::PathBuf;
 use lee::{AccountId, PublicKey, Signature};
 use pyo3::{prelude::*, types::PyAny};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub mod python_path;
+
+/// NSK (32 bytes) and VSK (64 bytes, the ML-KEM-768 seed `d || z`) as fixed-length zeroizing byte
+/// arrays.
+type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 64]>);
 
 // TODO: encrypt at rest alongside broader wallet storage encryption work.
 #[derive(Serialize, Deserialize)]
@@ -51,10 +56,10 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn get_pairing_data(&self, py: Python<'_>) -> PyResult<(u8, Vec<u8>)> {
+    pub fn pair(&self, py: Python<'_>, pin: &str) -> PyResult<(u8, Vec<u8>)> {
         self.instance
             .bind(py)
-            .call_method0("get_pairing_data")?
+            .call_method1("pair", (pin,))?
             .extract()
     }
 
@@ -91,18 +96,9 @@ impl KeycardWallet {
         {
             return Ok(());
         }
-        self.setup_communication(py, pin)?;
-        if let Ok((index, key)) = self.get_pairing_data(py) {
-            save_pairing(&KeycardPairingData { index, key });
-        }
+        let (index, key) = self.pair(py, pin)?;
+        save_pairing(&KeycardPairingData { index, key });
         Ok(())
-    }
-
-    pub fn setup_communication(&self, py: Python<'_>, pin: &str) -> PyResult<bool> {
-        self.instance
-            .bind(py)
-            .call_method1("setup_communication", (pin,))?
-            .extract()
     }
 
     pub fn disconnect(&self, py: Python) -> PyResult<bool> {
@@ -128,7 +124,7 @@ impl KeycardWallet {
     }
 
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -138,6 +134,10 @@ impl KeycardWallet {
         })
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "64 - s_stripped.len() is safe: s_stripped.len() ≤ 31 because py_signature.len() is in [32, 63]"
+    )]
     pub fn sign_message_for_path(
         &self,
         py: Python,
@@ -149,6 +149,24 @@ impl KeycardWallet {
             .bind(py)
             .call_method1("sign_message_for_path", (message, path))?
             .extract()?;
+
+        // The keycard Python library strips leading zeros from S when S < 2^(8k) for some k.
+        // Left-pad S back to 32 bytes so the full signature is always 64 bytes (R || S).
+        let py_signature = if py_signature.len() < 64 {
+            if py_signature.len() < 32 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "signature from keycard too short: {} bytes",
+                    py_signature.len()
+                )));
+            }
+            let s_stripped = &py_signature[32..];
+            let mut padded = [0_u8; 64];
+            padded[..32].copy_from_slice(&py_signature[..32]);
+            padded[(64 - s_stripped.len())..].copy_from_slice(s_stripped);
+            padded.to_vec()
+        } else {
+            py_signature
+        };
 
         let signature: [u8; 64] = py_signature.try_into().map_err(|vec: Vec<u8>| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
@@ -173,7 +191,7 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> PyResult<(Signature, PublicKey)> {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             python_path::add_python_path(py)?;
             let wallet = Self::new(py)?;
             wallet.connect(py, pin)?;
@@ -190,10 +208,64 @@ impl KeycardWallet {
         Ok(())
     }
 
-    pub fn get_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
+    pub fn get_public_account_id_for_path_with_connect(
+        pin: &str,
+        key_path: &str,
+    ) -> PyResult<String> {
         let public_key = Self::get_public_key_for_path_with_connect(pin, key_path)?;
 
         Ok(format!("Public/{}", AccountId::from(&public_key)))
+    }
+
+    pub fn get_private_keys_for_path(&self, py: Python, path: &str) -> PyResult<PrivateKeyPair> {
+        let (raw_nsk, raw_vsk): (Vec<u8>, Vec<u8>) = self
+            .instance
+            .bind(py)
+            .call_method1("get_private_keys_for_path", (path,))?
+            .extract()?;
+
+        let raw_nsk = Zeroizing::new(raw_nsk);
+        let raw_vsk = Zeroizing::new(raw_vsk);
+
+        let nsk = {
+            if raw_nsk.len() != 32 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "expected 32-byte NSK from keycard, got {} bytes",
+                    raw_nsk.len()
+                )));
+            }
+            let mut arr = Zeroizing::new([0_u8; 32]);
+            arr.copy_from_slice(&raw_nsk);
+            arr
+        };
+
+        let vsk = {
+            if raw_vsk.len() != 64 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "expected 64-byte VSK from keycard, got {} bytes",
+                    raw_vsk.len()
+                )));
+            }
+            let mut arr = Zeroizing::new([0_u8; 64]);
+            arr.copy_from_slice(&raw_vsk);
+            arr
+        };
+
+        Ok((nsk, vsk))
+    }
+
+    pub fn get_private_keys_for_path_with_connect(
+        pin: &str,
+        path: &str,
+    ) -> PyResult<PrivateKeyPair> {
+        Python::attach(|py| {
+            python_path::add_python_path(py)?;
+            let wallet = Self::new(py)?;
+            wallet.connect(py, pin)?;
+            let result = wallet.get_private_keys_for_path(py, path);
+            drop(wallet.disconnect(py));
+            result
+        })
     }
 }
 

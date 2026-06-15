@@ -12,8 +12,12 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
         .unwrap_or_else(|| current_dir.clone());
 
     let mut paths_to_add: Vec<PathBuf> = vec![
-        python_base.join("keycard_wallet").join("python"),
         python_base
+            .join("lez")
+            .join("keycard_wallet")
+            .join("python"),
+        python_base
+            .join("lez")
             .join("keycard_wallet")
             .join("python")
             .join("keycard-py"),
@@ -44,7 +48,7 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
 
     let sys = PyModule::import(py, "sys")?;
     let binding = sys.getattr("path")?;
-    let sys_path = binding.downcast::<PyList>()?;
+    let sys_path = binding.cast::<PyList>()?;
 
     for path in &paths_to_add {
         let path_str = path.to_str().expect("Invalid path");

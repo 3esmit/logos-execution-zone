@@ -1,6 +1,9 @@
 use std::{path::Path, sync::Arc};
 
-use common::block::{BedrockStatus, Block, BlockMeta, MantleMsgId};
+use common::{
+    HashType,
+    block::{BedrockStatus, Block, BlockMeta},
+};
 use lee::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
@@ -12,7 +15,8 @@ use crate::{
     error::DbError,
     sequencer::sequencer_cells::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
-        LatestBlockMetaCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
+        PendingDepositEventsCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -24,6 +28,9 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing queued deposit events that were not yet
+/// fulfilled on L2.
+pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
 
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
@@ -47,12 +54,7 @@ impl RocksDBIO {
         Self::open_inner(path, &db_opts)
     }
 
-    pub fn create(
-        path: &Path,
-        genesis_block: &Block,
-        genesis_msg_id: MantleMsgId,
-        genesis_state: &V03State,
-    ) -> DbResult<Self> {
+    pub fn create(path: &Path, genesis_block: &Block, genesis_state: &V03State) -> DbResult<Self> {
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
@@ -62,14 +64,13 @@ impl RocksDBIO {
         if !is_start_set {
             let block_id = genesis_block.header.block_id;
             // TODO: Shouldn't this be atomic (batched)?
-            dbio.put_meta_first_block_in_db(genesis_block, genesis_msg_id)?;
+            dbio.put_meta_first_block_in_db(genesis_block)?;
             dbio.put_meta_is_first_block_set()?;
             dbio.put_meta_last_block_in_db(block_id)?;
             dbio.put_meta_last_finalized_block_id(None)?;
             dbio.put_meta_latest_block_meta(&BlockMeta {
                 id: genesis_block.header.block_id,
                 hash: genesis_block.header.hash,
-                msg_id: genesis_msg_id,
             })?;
             dbio.put_lee_state_in_db(genesis_state)?;
         }
@@ -161,7 +162,7 @@ impl RocksDBIO {
         self.put_batch(&LEEStateCellRef(state), (), batch)
     }
 
-    pub fn put_meta_first_block_in_db(&self, block: &Block, msg_id: MantleMsgId) -> DbResult<()> {
+    pub fn put_meta_first_block_in_db(&self, block: &Block) -> DbResult<()> {
         let cf_meta = self.meta_column();
         self.db
             .put_cf(
@@ -182,7 +183,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         let mut batch = WriteBatch::default();
-        self.put_block(block, msg_id, true, &mut batch)?;
+        self.put_block(block, true, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
@@ -239,13 +240,73 @@ impl RocksDBIO {
         self.put(&ZoneSdkCheckpointCellRef(bytes), ())
     }
 
-    pub fn put_block(
+    pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
+        Ok(self
+            .get_opt::<PendingDepositEventsCellOwned>(())?
+            .map_or_else(Vec::new, |cell| cell.0))
+    }
+
+    fn put_pending_deposit_events(&self, records: &[PendingDepositEventRecord]) -> DbResult<()> {
+        self.put(&PendingDepositEventsCellRef(records), ())
+    }
+
+    pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
+        let mut records = self.get_pending_deposit_events()?;
+        if records
+            .iter()
+            .any(|record| record.deposit_op_id == event.deposit_op_id)
+        {
+            return Ok(false);
+        }
+        records.push(event);
+        self.put_pending_deposit_events(&records)?;
+        Ok(true)
+    }
+
+    pub fn mark_pending_deposit_events_submitted(
         &self,
-        block: &Block,
-        msg_id: MantleMsgId,
-        first: bool,
-        batch: &mut WriteBatch,
-    ) -> DbResult<()> {
+        deposit_op_ids: &[HashType],
+        submitted_block_id: u64,
+    ) -> DbResult<usize> {
+        let mut records = self.get_pending_deposit_events()?;
+        let mut updated: usize = 0;
+
+        for record in records
+            .iter_mut()
+            .filter(|record| deposit_op_ids.contains(&record.deposit_op_id))
+        {
+            record.submitted_in_block_id = Some(submitted_block_id);
+            updated = updated.saturating_add(1);
+        }
+
+        if updated > 0 {
+            self.put_pending_deposit_events(&records)?;
+        }
+
+        Ok(updated)
+    }
+
+    pub fn remove_fulfilled_pending_deposit_events_up_to_block(
+        &self,
+        finalized_block_id: u64,
+    ) -> DbResult<usize> {
+        let mut records = self.get_pending_deposit_events()?;
+        let before = records.len();
+        records.retain(|record| {
+            record
+                .submitted_in_block_id
+                .is_none_or(|submitted_id| submitted_id > finalized_block_id)
+        });
+
+        let removed = before.saturating_sub(records.len());
+        if removed > 0 {
+            self.put_pending_deposit_events(&records)?;
+        }
+
+        Ok(removed)
+    }
+
+    pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
         let cf_block = self.block_column();
 
         if !first {
@@ -257,7 +318,6 @@ impl RocksDBIO {
                     &BlockMeta {
                         id: block.header.block_id,
                         hash: block.header.hash,
-                        msg_id,
                     },
                     batch,
                 )?;
@@ -379,15 +439,10 @@ impl RocksDBIO {
             })
     }
 
-    pub fn atomic_update(
-        &self,
-        block: &Block,
-        msg_id: MantleMsgId,
-        state: &V03State,
-    ) -> DbResult<()> {
+    pub fn atomic_update(&self, block: &Block, state: &V03State) -> DbResult<()> {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();
-        self.put_block(block, msg_id, false, &mut batch)?;
+        self.put_block(block, false, &mut batch)?;
         self.put_lee_state_in_db_batch(state, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
