@@ -111,7 +111,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         let drive_task = tokio::spawn(async move {
             loop {
-                #[allow(clippy::integer_division_remainder_used)]
+                #[expect(
+                    clippy::integer_division_remainder_used,
+                    reason = "tokio::select! expansion uses `%` for random branch selection"
+                )]
                 {
                     tokio::select! {
                         // Drain external publish requests by calling the
