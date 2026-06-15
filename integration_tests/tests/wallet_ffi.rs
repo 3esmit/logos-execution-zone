@@ -26,7 +26,8 @@ use log::info;
 use tempfile::tempdir;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
-    FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error, wallet::FfiCreateWalletResult
+    FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
+    FfiTransferResult, FfiU128, WalletHandle, error, wallet::FfiCreateWalletResult,
 };
 
 unsafe extern "C" {
@@ -1398,6 +1399,34 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         );
         u128::from_le_bytes(out_balance)
     };
+
+    // Get the account list with FFI method
+    let wallet_ffi_account_list = unsafe {
+        let mut out_list = FfiAccountList::default();
+        wallet_ffi_list_accounts(wallet_ffi_handle, &raw mut out_list).unwrap();
+        out_list
+    };
+
+    let wallet_ffi_account_list_slice = unsafe {
+        core::slice::from_raw_parts(
+            wallet_ffi_account_list.entries,
+            wallet_ffi_account_list.count,
+        )
+    };
+
+    // All created accounts must appear in the list
+    let listed_public_ids: HashSet<_> = wallet_ffi_account_list_slice
+        .iter()
+        .filter(|e| e.is_public)
+        .map(|e| hex::encode(e.account_id.data))
+        .collect();
+
+    info!("Current list of accounts: {listed_public_ids:?}");
+
+    info!("Private acc to be restored 1 {:?}", hex::encode(private_account_id_1.data));
+    info!("Private acc to be restored 2 {:?}", hex::encode(private_account_id_2.data));
+    info!("Pub acc to be restored 1 {:?}", hex::encode(public_account_id_1.data));
+    info!("Pub acc to be restored 2 {:?}", hex::encode(public_account_id_2.data));
 
     assert_eq!(private_account_id_1_balance, 100);
     assert_eq!(private_account_id_2_balance, 101);

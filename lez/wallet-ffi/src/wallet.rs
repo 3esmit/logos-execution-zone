@@ -7,10 +7,10 @@ use std::{
     sync::Mutex,
 };
 
-use wallet::WalletCore;
+use wallet::{cli::execute_keys_restoration, WalletCore};
 
 use crate::{
-    c_str_to_string,
+    block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::WalletHandle,
 };
@@ -276,12 +276,24 @@ pub unsafe extern "C" fn wallet_ffi_restore_data(
         return WalletFfiError::NullPointer;
     };
 
-    match wallet.restore_storage(&mnemonic, &password) {
+    let res = match wallet.restore_storage(&mnemonic, &password) {
         Ok(()) => WalletFfiError::Success,
         Err(e) => {
             print_error(format!("Failed to restore wallet data: {e}"));
             WalletFfiError::StorageError
         }
+    };
+
+    if res == WalletFfiError::Success {
+        match block_on(execute_keys_restoration(&mut wallet, 10)) {
+            Ok(_) => WalletFfiError::Success,
+            Err(err) => {
+                print_error(format!("Failed to restore wallet data: {err}"));
+                WalletFfiError::StorageError
+            }
+        }
+    } else {
+        res
     }
 }
 

@@ -879,13 +879,17 @@ impl WalletCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::{CStr, CString}, str::FromStr};
+    use std::{
+        ffi::{CStr, CString},
+        str::FromStr,
+    };
 
-use bip39::Mnemonic;
+    use bip39::Mnemonic;
 
     #[test]
     fn mnemonic_roundtrip() {
-        let mnemonic = Mnemonic::from_entropy(&[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]).unwrap();
+        let mnemonic =
+            Mnemonic::from_entropy(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).unwrap();
 
         let c_mnemonic_string = CString::new(mnemonic.to_string()).unwrap();
 
