@@ -17,7 +17,20 @@ pub enum Instruction {
         l1_deposit_op_id: [u8; 32],
         vault_program_id: ProgramId,
         recipient_id: AccountId,
-        amount: u128,
+        amount: u64,
+    },
+
+    /// Transfers native tokens from a user account to the bridge PDA account.
+    ///
+    /// Required accounts (2):
+    /// - Sender account
+    /// - Bridge PDA account
+    ///
+    /// `bedrock_account_pk` is consumed by the Sequencer and is not used by the Bridge program
+    /// logic.
+    Withdraw {
+        amount: u64,
+        bedrock_account_pk: [u8; 32],
     },
 }
 

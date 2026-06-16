@@ -97,6 +97,7 @@ impl Nullifier {
     }
 
     /// Computes a nullifier for an account initialization.
+    // TODO: Accept account_id by value as it's Copy
     #[must_use]
     pub fn for_account_initialization(account_id: &AccountId) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Initialize/\x00";

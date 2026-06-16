@@ -10,7 +10,10 @@ use lee::V03State;
 use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 pub use storage::DbResult;
-use storage::sequencer::{RocksDBIO, sequencer_cells::PendingDepositEventRecord};
+use storage::sequencer::{
+    RocksDBIO,
+    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
+};
 
 pub struct SequencerStore {
     dbio: Arc<RocksDBIO>,
@@ -128,9 +131,16 @@ impl SequencerStore {
         self.dbio.get_all_blocks()
     }
 
-    pub(crate) fn update(&mut self, block: &Block, state: &V03State) -> DbResult<()> {
+    pub(crate) fn update(
+        &mut self,
+        block: &Block,
+        deposit_event_ids: &[HashType],
+        withdrawals: Vec<WithdrawalReconciliationKey>,
+        state: &V03State,
+    ) -> DbResult<()> {
         let new_transactions_map = block_to_transactions_map(block);
-        self.dbio.atomic_update(block, state)?;
+        self.dbio
+            .atomic_update(block, deposit_event_ids, withdrawals, state)?;
         self.tx_hash_to_block_map.extend(new_transactions_map);
         Ok(())
     }
@@ -157,23 +167,6 @@ impl SequencerStore {
 
     pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
         self.dbio.get_pending_deposit_events()
-    }
-
-    pub fn mark_unfulfilled_deposit_events_submitted(
-        &self,
-        deposit_op_ids: &[HashType],
-        submitted_block_id: u64,
-    ) -> DbResult<usize> {
-        self.dbio
-            .mark_pending_deposit_events_submitted(deposit_op_ids, submitted_block_id)
-    }
-
-    pub fn remove_fulfilled_unfulfilled_deposit_events_up_to_block(
-        &self,
-        finalized_block_id: u64,
-    ) -> DbResult<usize> {
-        self.dbio
-            .remove_fulfilled_pending_deposit_events_up_to_block(finalized_block_id)
     }
 }
 
@@ -227,7 +220,9 @@ mod tests {
         assert_eq!(None, retrieved_tx);
         // Add the block with the transaction
         let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        node_store.update(&block, &dummy_state).unwrap();
+        node_store
+            .update(&block, &[], vec![], &dummy_state)
+            .unwrap();
         // Try again
         let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
         assert_eq!(Some(tx), retrieved_tx);
@@ -292,7 +287,9 @@ mod tests {
         let block_hash = block.header.hash;
 
         let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        node_store.update(&block, &dummy_state).unwrap();
+        node_store
+            .update(&block, &[], vec![], &dummy_state)
+            .unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
         let latest_meta = node_store.latest_block_meta().unwrap();
@@ -328,7 +325,9 @@ mod tests {
         let block_id = block.header.block_id;
 
         let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        node_store.update(&block, &dummy_state).unwrap();
+        node_store
+            .update(&block, &[], vec![], &dummy_state)
+            .unwrap();
 
         // Verify initial status is Pending
         let retrieved_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
@@ -377,7 +376,12 @@ mod tests {
             // Add a new block
             let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
             node_store
-                .update(&block, &V03State::new_with_genesis_accounts(&[], vec![], 0))
+                .update(
+                    &block,
+                    &[],
+                    vec![],
+                    &V03State::new_with_genesis_accounts(&[], vec![], 0),
+                )
                 .unwrap();
         }
 

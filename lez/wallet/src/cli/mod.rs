@@ -20,7 +20,7 @@ use crate::{
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
+            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
             token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
         },
@@ -68,6 +68,9 @@ pub enum Command {
     /// Vault program interaction subcommand.
     #[command(subcommand)]
     Vault(VaultSubcommand),
+    /// Bridge program interaction subcommand.
+    #[command(subcommand)]
+    Bridge(BridgeSubcommand),
     /// Group key management (create, invite, join, derive keys).
     #[command(subcommand)]
     Group(GroupSubcommand),
@@ -258,6 +261,9 @@ pub async fn execute_subcommand(
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Vault(vault_subcommand) => vault_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Bridge(bridge_subcommand) => {
+            bridge_subcommand.handle_subcommand(wallet_core).await?
+        }
         Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Keycard(keycard_subcommand) => {
             keycard_subcommand.handle_subcommand(wallet_core).await?
