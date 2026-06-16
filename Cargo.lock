@@ -10915,6 +10915,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "risc0-zkvm",
  "sequencer_service_rpc",
  "serde_json",
  "tempfile",

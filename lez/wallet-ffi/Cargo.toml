@@ -19,6 +19,7 @@ sequencer_service_rpc = { workspace = true, features = ["client"] }
 tokio.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
+risc0-zkvm.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"

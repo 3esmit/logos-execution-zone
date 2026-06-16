@@ -2,6 +2,8 @@
 //!
 //! Uses numeric error codes with error messages printed to stderr.
 
+use std::str::Utf8Error;
+
 /// Error codes returned by FFI functions.
 #[repr(C)]
 #[must_use]
@@ -41,8 +43,16 @@ pub enum WalletFfiError {
     InvalidTypeConversion = 15,
     /// Invalid Key value.
     InvalidKeyValue = 16,
+    /// Invalid program bytecode.
+    InvalidBytecode = 17,
     /// Internal error (catch-all).
     InternalError = 99,
+}
+
+impl From<Utf8Error> for WalletFfiError {
+    fn from(_value: Utf8Error) -> Self {
+        Self::InvalidUtf8
+    }
 }
 
 impl WalletFfiError {

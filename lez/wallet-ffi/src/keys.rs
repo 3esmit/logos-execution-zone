@@ -1,13 +1,15 @@
 //! Key retrieval functions.
 
-use std::ptr;
+use std::{ffi::CString, ptr};
 
 use lee::{AccountId, PublicKey};
+use wallet::AccountIdentity;
 
 use crate::{
     error::{print_error, WalletFfiError},
     types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, WalletHandle},
     wallet::get_wallet,
+    FfiAccountIdentity,
 };
 
 /// Get the public key for a public account.
@@ -249,4 +251,154 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
     }
 
     WalletFfiError::Success
+}
+
+/// Resolve public account.
+///
+/// # Parameters
+/// - `account_id`: 32 bytes of the public account ID
+/// - `needs_sign`: whether the account needs signing
+/// - `out_account_identity`: valid pointer, where output will be written
+///
+/// # Returns
+/// - `Success` on successful retrieval
+///
+/// # Safety
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_resolve_public_account(
+    account_id: FfiBytes32,
+    needs_sign: bool,
+    out_account_identity: *mut FfiAccountIdentity,
+) -> WalletFfiError {
+    if out_account_identity.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let resolved_account = if needs_sign {
+        AccountIdentity::Public(account_id.into())
+    } else {
+        AccountIdentity::PublicNoSign(account_id.into())
+    };
+
+    unsafe {
+        *out_account_identity = resolved_account.into();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Resolve private account.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `account_id`: 32 bytes of the public account ID
+/// - `out_account_identity`: valid pointer, where output will be written
+///
+/// # Returns
+/// - `Success` on successful retrieval
+/// - `InternalError` if failed to lock wallet
+/// - `AccountNotFound` if the account is not found
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `out_account_identity` must be a valid pointer to a `FfiAccountIdentity` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_resolve_private_account(
+    handle: *mut WalletHandle,
+    account_id: FfiBytes32,
+    out_account_identity: *mut FfiAccountIdentity,
+) -> WalletFfiError {
+    if out_account_identity.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let account_id = account_id.into();
+
+    let Some(resolved_account) = wallet.resolve_private_account(account_id) else {
+        print_error("Account not found");
+        return WalletFfiError::AccountNotFound;
+    };
+
+    unsafe {
+        *out_account_identity = resolved_account.into();
+    }
+
+    WalletFfiError::Success
+}
+
+/// Free account identity returned by `wallet_ffi_resolve_private_account` or
+/// `wallet_ffi_resolve_public_account`.
+///
+/// # Safety
+/// The account must be either null or a valid account returned by
+/// `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_account_identity(
+    account_identity: *mut FfiAccountIdentity,
+) {
+    if account_identity.is_null() {
+        return;
+    }
+
+    unsafe {
+        let FfiAccountIdentity {
+            kind: _,
+            account_id: _,
+            key_path,
+            nullifier_secret_key: _,
+            nullifier_public_key: _,
+            viewing_public_key,
+            viewing_public_key_len,
+            identifier: _,
+        } = *account_identity;
+
+        if !viewing_public_key.is_null() {
+            let slice = std::slice::from_raw_parts_mut(
+                viewing_public_key.cast_mut(),
+                viewing_public_key_len,
+            );
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        }
+
+        if !key_path.is_null() {
+            let key_path_cstring = CString::from_raw(key_path);
+            drop(key_path_cstring);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lee::AccountId;
+    use wallet::AccountIdentity;
+
+    use crate::{keys::wallet_ffi_free_account_identity, FfiAccountIdentity};
+
+    #[test]
+    fn acc_identity_correct_free() {
+        let acc_identity = AccountIdentity::Public(AccountId::new([42; 32]));
+        let mut ffi_acc_identity: FfiAccountIdentity = acc_identity.into();
+
+        unsafe {
+            wallet_ffi_free_account_identity(&raw mut ffi_acc_identity);
+        }
+
+        assert!(ffi_acc_identity.viewing_public_key.is_null());
+    }
 }

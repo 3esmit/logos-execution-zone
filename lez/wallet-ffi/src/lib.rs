@@ -23,6 +23,7 @@
 #![expect(
     clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
+    clippy::as_conversions,
     reason = "TODO: fix later"
 )]
 
@@ -42,6 +43,7 @@ use crate::error::print_error;
 
 pub mod account;
 pub mod error;
+pub mod generic_transaction;
 pub mod keys;
 pub mod pinata;
 pub mod sync;
