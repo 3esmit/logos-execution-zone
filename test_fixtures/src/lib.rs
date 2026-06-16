@@ -353,7 +353,7 @@ impl TestContextBuilder {
         )
         .context("Failed to setup wallet")?;
 
-        setup_public_accounts_with_initial_supply(&wallet, &initial_public_accounts)
+        setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
             .await
             .context("Failed to initialize public accounts in wallet")?;
 

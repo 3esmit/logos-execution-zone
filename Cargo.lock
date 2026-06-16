@@ -9666,7 +9666,6 @@ dependencies = [
  "testcontainers",
  "tokio",
  "url",
- "vault_core",
  "wallet",
 ]
 
@@ -10751,6 +10750,7 @@ dependencies = [
  "token_core",
  "tokio",
  "url",
+ "vault_core",
  "zeroize",
 ]
 
