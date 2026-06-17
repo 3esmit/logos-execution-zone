@@ -874,6 +874,122 @@ enum WalletFfiError wallet_ffi_claim_pinata_private_owned_not_initialized(struct
                                                                           struct FfiTransferResult *out_result);
 
 /**
+ * Send a program deployment transaction.
+ *
+ * Publishes program for future use.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `elf_data`: Valid pointer to elf data in bytes
+ * - `elf_size`: Size of elf data
+ * - `out_result`: Output pointer for transfer result
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Memory
+ * The result must be freed with `wallet_ffi_free_transaction_result()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `elf_data` must be a valid pointer to elf data
+ * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+ */
+enum WalletFfiError wallet_ffi_program_deployment(struct WalletHandle *handle,
+                                                  const uint8_t *elf_data,
+                                                  uintptr_t elf_size,
+                                                  struct FfiTransactionResult *out_result);
+
+/**
+ * Writes elf data of authenticated transfer program into buffer.
+ *
+ * WARNING: Result is not consisent and change between versions, use for testing purposes only.
+ *
+ * # Parameters
+ * - `ffi_program`: Valid pointer to `FfiProgram`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Memory
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
+ *
+ * # Safety
+ * - `ffi_program` must be a non-null pointer
+ */
+enum WalletFfiError wallet_ffi_transfer_elf(struct FfiProgram *ffi_program);
+
+/**
+ * Writes elf data of authenticated token program into buffer.
+ *
+ * WARNING: Result is not consisent and change between versions, use for testing purposes only.
+ *
+ * # Parameters
+ * - `ffi_program`: Valid pointer to `FfiProgram`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Memory
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
+ *
+ * # Safety
+ * - `ffi_program` must be a non-null pointer
+ */
+enum WalletFfiError wallet_ffi_token_elf(struct FfiProgram *ffi_program);
+
+/**
+ * Writes elf data of amm into buffer.
+ *
+ * WARNING: Result is not consisent and change between versions, use for testing purposes only.
+ *
+ * # Parameters
+ * - `ffi_program`: Valid pointer to `FfiProgram`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Memory
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
+ *
+ * # Safety
+ * - `ffi_program` must be a non-null pointer
+ */
+enum WalletFfiError wallet_ffi_amm_elf(struct FfiProgram *ffi_program);
+
+/**
+ * Writes elf data of ata into buffer.
+ *
+ * WARNING: Result is not consisent and change between versions, use for testing purposes only.
+ *
+ * # Parameters
+ * - `ffi_program`: Valid pointer to `FfiProgram`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Memory
+ * - `FfiProgram` can be freed with corresponding `wallet_ffi_free_ffi_program` function
+ *
+ * # Safety
+ * - `ffi_program` must be a non-null pointer
+ */
+enum WalletFfiError wallet_ffi_ata_elf(struct FfiProgram *ffi_program);
+
+/**
+ * Free a ffi program returned by functions `wallet_ffi_*_elf`.
+ *
+ * # Safety
+ * The result must be either null or a valid result from a elf getter function.
+ */
+void wallet_ffi_free_ffi_program(struct FfiProgram *ffi_program);
+
+/**
  * Synchronize private accounts to a specific block.
  *
  * This scans the blockchain from the last synced block to the specified block,
