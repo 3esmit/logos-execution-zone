@@ -147,8 +147,6 @@ The sequencer and logos blockchain node can be run locally:
  1. On one terminal go to the `logos-blockchain/logos-blockchain` repo and run a local logos blockchain node:
     - `git checkout master; git pull`
     - `cargo clean`
-    - `rm -r ~/.logos-blockchain-circuits`
-    - `./scripts/setup-logos-blockchain-circuits.sh`
     - `cargo build --all-features`
     - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
 

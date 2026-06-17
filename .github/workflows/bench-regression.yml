@@ -28,10 +28,6 @@ jobs:
 
       - uses: ./.github/actions/install-risc0
 
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install active toolchain
         run: rustup install
 

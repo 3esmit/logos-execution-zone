@@ -37,9 +37,6 @@ RUN cp "$(which r0vm)" /usr/local/bin/r0vm
 RUN test -x /usr/local/bin/r0vm
 RUN r0vm --version
 
-# Install logos blockchain circuits
-RUN curl -sSL https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/main/scripts/setup-logos-blockchain-circuits.sh | bash
-
 WORKDIR /indexer_service
 
 # Planner stage - generates dependency recipe
@@ -82,9 +79,6 @@ COPY --from=builder --chown=indexer_service_user:indexer_service_user /usr/local
 
 # Copy r0vm binary from builder
 COPY --from=builder --chown=indexer_service_user:indexer_service_user /usr/local/bin/r0vm /usr/local/bin/r0vm
-
-# Copy logos blockchain circuits from builder
-COPY --from=builder --chown=indexer_service_user:indexer_service_user /root/.logos-blockchain-circuits /home/indexer_service_user/.logos-blockchain-circuits
 
 VOLUME /var/lib/indexer_service
 

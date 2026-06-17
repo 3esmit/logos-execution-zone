@@ -37,9 +37,6 @@ RUN cp "$(which r0vm)" /usr/local/bin/r0vm
 RUN test -x /usr/local/bin/r0vm
 RUN r0vm --version
 
-# Install logos blockchain circuits
-RUN curl -sSL https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/main/scripts/setup-logos-blockchain-circuits.sh | bash
-
 WORKDIR /sequencer_service
 
 # Build argument to enable standalone feature (defaults to false)
@@ -94,9 +91,6 @@ COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/sequenc
 
 # Copy r0vm binary from builder
 COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /usr/local/bin/r0vm
-
-# Copy logos blockchain circuits from builder
-COPY --from=builder --chown=sequencer_user:sequencer_user /root/.logos-blockchain-circuits /home/sequencer_user/.logos-blockchain-circuits
 
 VOLUME /var/lib/sequencer_service
 
