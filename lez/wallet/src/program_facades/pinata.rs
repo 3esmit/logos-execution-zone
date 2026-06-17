@@ -13,7 +13,6 @@ impl Pinata<'_> {
         winner_account_id: AccountId,
         solution: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::pinata();
         let instruction = solution;
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -25,7 +24,7 @@ impl Pinata<'_> {
                     AccountIdentity::PublicNoSign(winner_account_id),
                 ],
                 instruction_data,
-                &program.into(),
+                programs::pinata().id(),
             )
             .await
     }

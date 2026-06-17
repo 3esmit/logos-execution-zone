@@ -21,8 +21,7 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = programs::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
@@ -39,7 +38,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }
@@ -55,8 +54,7 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = programs::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
@@ -76,7 +74,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }
@@ -91,8 +89,7 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = programs::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
@@ -112,7 +109,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(definition_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }

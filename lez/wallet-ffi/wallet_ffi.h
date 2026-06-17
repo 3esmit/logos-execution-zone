@@ -257,23 +257,6 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * Intended to be created manually.
- */
-typedef struct FfiProgram {
-  const uint8_t *elf_data;
-  uintptr_t elf_size;
-} FfiProgram;
-
-/**
- * Intended to be created manually.
- */
-typedef struct FfiProgramWithDependencies {
-  struct FfiProgram program;
-  const struct FfiProgram *deps;
-  uintptr_t deps_size;
-} FfiProgramWithDependencies;
-
-/**
  * Result of a generic transaction operation.
  */
 typedef struct FfiTransactionResult {
@@ -291,6 +274,23 @@ typedef struct FfiTransactionResult {
    */
   uintptr_t secrets_size;
 } FfiTransactionResult;
+
+/**
+ * Intended to be created manually.
+ */
+typedef struct FfiProgram {
+  const uint8_t *elf_data;
+  uintptr_t elf_size;
+} FfiProgram;
+
+/**
+ * Intended to be created manually.
+ */
+typedef struct FfiProgramWithDependencies {
+  struct FfiProgram program;
+  const struct FfiProgram *deps;
+  uintptr_t deps_size;
+} FfiProgramWithDependencies;
 
 /**
  * Public key info for a public account.
@@ -613,7 +613,7 @@ enum WalletFfiError wallet_ffi_send_generic_public_transaction(struct WalletHand
                                                                uintptr_t account_identities_size,
                                                                const uint32_t *instruction_words,
                                                                uintptr_t instruction_words_size,
-                                                               const struct FfiProgramWithDependencies *program_with_dependencies,
+                                                               struct FfiProgramId program_id,
                                                                struct FfiTransactionResult *out_result);
 
 /**

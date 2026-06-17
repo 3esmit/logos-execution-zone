@@ -10,7 +10,7 @@ use crate::{
     error::{print_error, WalletFfiError},
     map_execution_error,
     wallet::get_wallet,
-    FfiAccountIdentity, FfiBytes32, WalletHandle,
+    FfiAccountIdentity, FfiBytes32, FfiProgramId, WalletHandle,
 };
 
 #[repr(C)]
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     account_identities_size: usize,
     instruction_words: *const u32,
     instruction_words_size: usize,
-    program_with_dependencies: *const FfiProgramWithDependencies,
+    program_id: FfiProgramId,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -260,12 +260,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     }
 
-    let program = match unsafe { &*program_with_dependencies }.try_into() {
-        Ok(v) => v,
-        Err(err) => return err,
-    };
-
-    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), &program)) {
+    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), program_id.into())) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);

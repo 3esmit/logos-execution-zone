@@ -21,7 +21,7 @@ impl NativeTokenTransfer<'_> {
             .send_pub_tx_with_pre_check(
                 vec![from, to],
                 instruction_data,
-                &program.into(),
+                program.id(),
                 tx_pre_check,
             )
             .await
@@ -31,11 +31,14 @@ impl NativeTokenTransfer<'_> {
         &self,
         account: AccountIdentity,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::authenticated_transfer();
         let instruction_data = Program::serialize_instruction(AuthTransferInstruction::Initialize)?;
 
         self.0
-            .send_pub_tx(vec![account], instruction_data, &program.into())
+            .send_pub_tx(
+                vec![account],
+                instruction_data,
+                programs::authenticated_transfer().id(),
+            )
             .await
     }
 }

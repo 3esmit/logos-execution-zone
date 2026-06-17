@@ -12,7 +12,6 @@ impl Bridge<'_> {
         amount: u64,
         bedrock_account_pk: [u8; 32],
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::bridge();
         let bridge_account_id = system_accounts::bridge_account_id();
         let instruction = bridge_core::Instruction::Withdraw {
             amount,
@@ -28,7 +27,7 @@ impl Bridge<'_> {
                     AccountIdentity::PublicNoSign(bridge_account_id),
                 ],
                 instruction_data,
-                &program.into(),
+                programs::bridge().id(),
             )
             .await
     }

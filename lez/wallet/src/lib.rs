@@ -16,7 +16,7 @@ use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
@@ -619,9 +619,9 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
             .await
     }
 
@@ -629,7 +629,7 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -652,7 +652,6 @@ impl WalletCore {
         )?;
 
         let account_ids = acc_manager.public_account_ids();
-        let program_id = program.program.id();
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(

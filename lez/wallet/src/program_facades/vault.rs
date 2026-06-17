@@ -17,8 +17,7 @@ impl Vault<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::vault();
-        let vault_program_id = program.id();
+        let vault_program_id = programs::vault().id();
         let recipient_vault_id =
             vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
@@ -36,7 +35,7 @@ impl Vault<'_> {
                     AccountIdentity::PublicNoSign(recipient_vault_id),
                 ],
                 instruction_data,
-                &program.into(),
+                vault_program_id,
             )
             .await
     }
@@ -80,8 +79,7 @@ impl Vault<'_> {
         owner_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::vault();
-        let vault_program_id = program.id();
+        let vault_program_id = programs::vault().id();
         let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
 
         let instruction = vault_core::Instruction::Claim { amount };
@@ -95,7 +93,7 @@ impl Vault<'_> {
                     AccountIdentity::PublicNoSign(owner_vault_id),
                 ],
                 instruction_data,
-                &program.into(),
+                vault_program_id,
             )
             .await
     }

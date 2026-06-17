@@ -31,7 +31,7 @@ use tempfile::tempdir;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys,
-    FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
+    FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     wallet::FfiCreateWalletOutput,
 };
@@ -234,7 +234,7 @@ unsafe extern "C" {
         account_identities_size: usize,
         instruction_words: *const u32,
         instruction_words_size: usize,
-        program_with_dependencies: *const FfiProgramWithDependencies,
+        program_id: FfiProgramId,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -1595,7 +1595,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             account_identities_size,
             instruction_words,
             instruction_words_size,
-            &raw const program_with_dependencies,
+            program_id.into(),
             &raw mut transaction_result,
         )
         .unwrap();

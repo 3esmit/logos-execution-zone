@@ -15,13 +15,16 @@ impl Token<'_> {
         name: String,
         total_supply: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::token();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(vec![definition, supply], instruction_data, &program.into())
+            .send_pub_tx(
+                vec![definition, supply],
+                instruction_data,
+                programs::token().id(),
+            )
             .await
     }
 
@@ -128,7 +131,6 @@ impl Token<'_> {
         recipient: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::token();
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -136,7 +138,11 @@ impl Token<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(vec![sender, recipient], instruction_data, &program.into())
+            .send_pub_tx(
+                vec![sender, recipient],
+                instruction_data,
+                programs::token().id(),
+            )
             .await
     }
 
@@ -319,7 +325,6 @@ impl Token<'_> {
         holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::token();
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
@@ -330,7 +335,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![AccountIdentity::PublicNoSign(definition_account_id), holder],
                 instruction_data,
-                &program.into(),
+                programs::token().id(),
             )
             .await
     }
@@ -441,7 +446,6 @@ impl Token<'_> {
         holder: AccountIdentity,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = programs::token();
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -449,7 +453,11 @@ impl Token<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_pub_tx(vec![definition, holder], instruction_data, &program.into())
+            .send_pub_tx(
+                vec![definition, holder],
+                instruction_data,
+                programs::token().id(),
+            )
             .await
     }
 
