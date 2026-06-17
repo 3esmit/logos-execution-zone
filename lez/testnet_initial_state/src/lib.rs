@@ -233,6 +233,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
+                    program_owner: programs::authenticated_transfer().id(),
                     balance: acc_data.balance,
                     ..Default::default()
                 },

@@ -68,9 +68,10 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let post_state_account = ctx.sequencer_client().get_account(account_id).await?;
 
+    let expected_data: &[u8] = &[];
     assert_eq!(post_state_account.program_owner, claimer.id());
     assert_eq!(post_state_account.balance, 0);
-    assert_eq!(post_state_account.data.as_ref(), &[0]);
+    assert_eq!(post_state_account.data.as_ref(), expected_data);
     assert_eq!(post_state_account.nonce.0, 1);
 
     info!("Successfully deployed and executed program");

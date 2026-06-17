@@ -1585,8 +1585,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_words_size = instruction_data.len();
     let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
 
-    let program: ProgramWithDependencies = programs::authenticated_transfer().into();
-    let program_with_dependencies: FfiProgramWithDependencies = program.into();
+    let program_id = programs::authenticated_transfer().id();
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(

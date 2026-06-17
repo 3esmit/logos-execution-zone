@@ -1609,6 +1609,7 @@ mod tests {
             nonce: Nonce(0xdead_beef),
             data: Data::default(),
         };
+        let bridge_account_id = system_accounts::bridge_account_id();
 
         let mut state = V03State::new()
             .with_public_accounts([(bridge_account_id, system_accounts::bridge_account())])
@@ -1618,7 +1619,6 @@ mod tests {
             )]);
 
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
-        let bridge_account_id = system_accounts::bridge_account_id();
 
         let sender_pre = AccountWithMetadata::new(
             sender_private_account,

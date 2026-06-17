@@ -667,7 +667,7 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_authorized_init_encrypts_regular_kind_with_identifier() {
-        let program = crate::test_methods::simple_balance_transfer();
+        let program = crate::test_methods::claimer();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
@@ -676,7 +676,7 @@ mod tests {
 
         let (output, _) = execute_and_prove(
             vec![pre],
-            Program::serialize_instruction(0).unwrap(),
+            Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 epk: EphemeralPublicKey(Vec::new()),
                 view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
@@ -698,36 +698,23 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
-        let program = crate::test_methods::simple_balance_transfer();
+        let program = crate::test_methods::claimer();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
-
-        let sender = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 1,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        );
         let recipient_id = AccountId::for_regular_private_account(&keys.npk(), identifier);
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let (output, _) = execute_and_prove(
-            vec![sender, recipient],
-            Program::serialize_instruction(1).unwrap(),
-            vec![
-                InputAccountIdentity::Public,
-                InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
-                    npk: keys.npk(),
-                    ssk,
-                    identifier,
-                },
-            ],
+            vec![recipient],
+            Program::serialize_instruction(()).unwrap(),
+            vec![InputAccountIdentity::PrivateUnauthorized {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                npk: keys.npk(),
+                ssk,
+                identifier,
+            }],
             &program.into(),
         )
         .unwrap();
@@ -742,7 +729,7 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_authorized_update_encrypts_regular_kind_with_identifier() {
-        let program = crate::test_methods::simple_balance_transfer();
+        let program = crate::test_methods::noop();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
@@ -757,22 +744,18 @@ mod tests {
         commitment_set.extend(std::slice::from_ref(&commitment));
 
         let sender = AccountWithMetadata::new(account, true, account_id);
-        let recipient = AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
 
         let (output, _) = execute_and_prove(
-            vec![sender, recipient],
-            Program::serialize_instruction(1).unwrap(),
-            vec![
-                InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
-                    ssk,
-                    nsk: keys.nsk,
-                    membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
-                    identifier,
-                },
-                InputAccountIdentity::Public,
-            ],
+            vec![sender],
+            Program::serialize_instruction(()).unwrap(),
+            vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                ssk,
+                nsk: keys.nsk,
+                membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+                identifier,
+            }],
             &program.into(),
         )
         .unwrap();

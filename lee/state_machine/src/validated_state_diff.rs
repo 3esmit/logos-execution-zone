@@ -533,6 +533,7 @@ mod tests {
                 (
                     account_id,
                     Account {
+                        program_owner: crate::test_methods::simple_balance_transfer().id(),
                         balance,
                         ..Account::default()
                     },
@@ -558,7 +559,7 @@ mod tests {
             ));
         let program_id = crate::test_methods::simple_balance_transfer().id();
         let message =
-            Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5).unwrap();
+            Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
         let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
         let tx = crate::PublicTransaction::new(message, witness_set);
 

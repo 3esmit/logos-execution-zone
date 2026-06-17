@@ -364,6 +364,27 @@ pub mod tests {
             self.insert_program(crate::test_methods::data_changer());
             self.insert_program(crate::test_methods::minter());
             self.insert_program(crate::test_methods::burner());
+            self.insert_program(crate::test_methods::auth_asserting_noop());
+            self.insert_program(crate::test_methods::private_pda_delegator());
+            self.insert_program(crate::test_methods::pda_claimer());
+            self.insert_program(crate::test_methods::two_pda_claimer());
+            self.insert_program(crate::test_methods::noop());
+            self.insert_program(crate::test_methods::chain_caller());
+            self.insert_program(crate::test_methods::modified_transfer_program());
+            self.insert_program(crate::test_methods::malicious_authorization_changer());
+            self.insert_program(crate::test_methods::validity_window());
+            self.insert_program(crate::test_methods::flash_swap_initiator());
+            self.insert_program(crate::test_methods::flash_swap_callback());
+            self.insert_program(crate::test_methods::malicious_self_program_id());
+            self.insert_program(crate::test_methods::malicious_caller_program_id());
+            self.insert_program(crate::test_methods::pda_spend_proxy());
+            self.insert_program(crate::test_methods::claimer());
+            self.insert_program(crate::test_methods::changer_claimer());
+            self.insert_program(crate::test_methods::validity_window_chain_caller());
+            self.insert_program(crate::test_methods::simple_transfer_proxy());
+            self.insert_program(crate::test_methods::malicious_injector());
+            self.insert_program(crate::test_methods::malicious_launderer());
+            self.insert_program(crate::test_methods::modified_transfer_program());
             self
         }
 
@@ -474,6 +495,7 @@ pub mod tests {
                 (
                     account_id,
                     Account {
+                        program_owner: crate::test_methods::simple_balance_transfer().id(),
                         balance,
                         ..Account::default()
                     },
@@ -599,6 +621,7 @@ pub mod tests {
         let initial_data = [(
             account_id,
             Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 balance: 100,
                 ..Account::default()
             },
@@ -638,6 +661,7 @@ pub mod tests {
         let initial_data = [(
             account_id,
             Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 balance: 100,
                 ..Account::default()
             },
@@ -694,6 +718,7 @@ pub mod tests {
             (
                 account_id1,
                 Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
                     balance: 100,
                     ..Account::default()
                 },
@@ -701,6 +726,7 @@ pub mod tests {
             (
                 account_id2,
                 Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
                     balance: 200,
                     ..Account::default()
                 },
@@ -734,6 +760,7 @@ pub mod tests {
         let initial_data = [(
             account_id1,
             Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 balance: 100,
                 ..Account::default()
             },
@@ -1504,6 +1531,7 @@ pub mod tests {
             .with_public_accounts([(
                 recipient_keys.account_id(),
                 Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
                     balance: recipient_initial_balance,
                     ..Account::default()
                 },
@@ -2667,7 +2695,7 @@ pub mod tests {
         assert_eq!(state.get_account_by_id(account_id), Account::default());
 
         let message =
-            public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0)
+            public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
                 .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
@@ -2687,9 +2715,13 @@ pub mod tests {
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-        let message =
-            public_transaction::Message::try_new(program.id(), vec![account_id], vec![Nonce(0)], 0)
-                .unwrap();
+        let message = public_transaction::Message::try_new(
+            program.id(),
+            vec![account_id],
+            vec![Nonce(0)],
+            0_u128,
+        )
+        .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
         let tx = PublicTransaction::new(message, witness_set);
 
@@ -2899,7 +2931,7 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![public_account],
-            Program::serialize_instruction(0).unwrap(),
+            Program::serialize_instruction(0_u128).unwrap(),
             vec![InputAccountIdentity::Public],
             &program.into(),
         );
@@ -3190,7 +3222,7 @@ pub mod tests {
             AccountWithMetadata::new(state.get_account_by_id(recipient_id), false, sender_id);
 
         let message = public_transaction::Message::try_new(
-            crate::test_methods::modified_transfer_program().id(),
+            modified_transfer_id,
             vec![sender_id, recipient_id],
             vec![sender_nonce],
             balance_to_move,
@@ -3255,7 +3287,7 @@ pub mod tests {
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
-        let instruction = 0;
+        let instruction: u128 = 0;
 
         // Execute and prove the circuit with the authorized account but no commitment proof
         let (output, proof) = execute_and_prove(
@@ -3307,7 +3339,7 @@ pub mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![unauthorized_account],
-            Program::serialize_instruction(0_u128).unwrap(),
+            Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
                 epk,
                 view_tag: EncryptedAccountData::compute_view_tag(
@@ -3353,7 +3385,7 @@ pub mod tests {
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
-        let instruction = 0;
+        let instruction = ();
 
         // Step 2: Execute claimer program to claim the account with authentication
         let (output, proof) = execute_and_prove(

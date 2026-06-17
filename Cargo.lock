@@ -9459,7 +9459,9 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "programs",
  "rocksdb",
+ "system_accounts",
  "tempfile",
  "thiserror 2.0.18",
 ]

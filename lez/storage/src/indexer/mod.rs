@@ -295,6 +295,7 @@ mod tests {
                 (
                     id,
                     Account {
+                        program_owner: programs::authenticated_transfer().id(),
                         balance,
                         ..Account::default()
                     },
