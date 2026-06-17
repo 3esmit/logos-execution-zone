@@ -29,13 +29,17 @@ wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 
+logos-blockchain-http-api-common.workspace = true
+logos-blockchain-core.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+logos-blockchain-key-management-system-service.workspace = true
 anyhow.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+futures.workspace = true
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
 reqwest.workspace = true
 borsh.workspace = true
-logos-blockchain-http-api-common.workspace = true
-logos-blockchain-core.workspace = true
+num-bigint.workspace = true

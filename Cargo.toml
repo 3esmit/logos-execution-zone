@@ -133,6 +133,7 @@ chrono = "0.4.41"
 borsh = "1.5.7"
 base58 = "0.2.0"
 itertools = "0.14.0"
+num-bigint = "0.4.6"
 url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
@@ -157,6 +158,7 @@ k256 = { version = "0.13.3", features = [
   "expose-field",
   "serde",
   "pem",
+  "schnorr",
 ] }
 ml-kem = { version = "0.3", features = ["hazmat"] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }

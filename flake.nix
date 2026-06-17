@@ -13,12 +13,12 @@
 
     crane.url = "github:ipetkov/crane";
 
-    # Must stay in sync with the lbc-* tags in logos-blockchain/Cargo.toml.
+    # Must stay in sync with the lbc-* tags in logos-blockchain/Cargo.lock.
     logos-blockchain-circuits = {
       url = "github:logos-blockchain/logos-blockchain-circuits/2846ee7a4cfa24458bb8063412ab2e753b344d2f";
     };
 
-    # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
+    # Must stay in sync with the rust-rapidsnark rev in Cargo.lock.
     rust-rapidsnark = {
       url = "github:logos-blockchain/logos-blockchain-rust-rapidsnark/e91187f8ccb5bbfc7bb00dac88169112428da78f";
     };

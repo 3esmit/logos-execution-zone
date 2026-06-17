@@ -2,17 +2,17 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
-use log::warn;
+use log::{info, warn};
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
 use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
-pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{
         DepositInfo, Event, FinalizedOp, InscriptionInfo,
-        SequencerConfig as ZoneSdkSequencerConfig, ZoneSequencer,
+        SequencerConfig as ZoneSdkSequencerConfig, WithdrawArg, WithdrawInfo, ZoneSequencer,
     },
 };
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -37,8 +37,16 @@ pub type FinalizedBlockSink = Box<dyn Fn(u64) + Send + 'static>;
 pub type OnDepositEventSink =
     Box<dyn Fn(DepositInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
+/// Sink for finalized Bedrock withdraw events.
+pub type OnWithdrawEventSink =
+    Box<dyn Fn(WithdrawInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
+
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Looks better than bundling all those callbacks into a struct"
+    )]
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
@@ -47,24 +55,18 @@ pub trait BlockPublisherTrait: Clone {
         on_checkpoint: CheckpointSink,
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
+        on_withdraw_event: OnWithdrawEventSink,
     ) -> Result<Self>;
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
     /// retries internally; this just hands the payload off.
-    async fn publish_block(&self, block: &Block) -> Result<()>;
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
-///
-/// The sequencer is owned exclusively by the drive task — the new zone-sdk
-/// `SequencerHandle` is a `&mut self` borrow, so any out-of-task access
-/// requires routing requests through a channel. We send serialized
-/// inscriptions over a bounded mpsc; the drive task `tokio::select!`s
-/// between `next_event()` and the inbox, calling `sequencer.handle().publish(...)`
-/// inline.
 #[derive(Clone)]
 pub struct ZoneSdkPublisher {
-    publish_tx: mpsc::Sender<Inscription>,
+    publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
 }
@@ -86,6 +88,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         on_checkpoint: CheckpointSink,
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
+        on_withdraw_event: OnWithdrawEventSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
@@ -107,7 +110,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         // task so we can await cold-start completion below.
         let mut ready_rx = sequencer.subscribe_ready();
 
-        let (publish_tx, mut publish_rx) = mpsc::channel::<Inscription>(PUBLISH_INBOX_CAPACITY);
+        let (publish_tx, mut publish_rx) =
+            mpsc::channel::<(Inscription, Vec<WithdrawArg>)>(PUBLISH_INBOX_CAPACITY);
 
         let drive_task = tokio::spawn(async move {
             loop {
@@ -120,13 +124,30 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                         // Drain external publish requests by calling the
                         // borrowing handle — `&mut sequencer` is only
                         // available here.
-                        Some(data) = publish_rx.recv() => {
-                            if let Err(e) = sequencer.handle().publish(data) {
-                                warn!("zone-sdk publish failed: {e:?}");
+                        Some((data_bounded, withdrawals)) = publish_rx.recv() => {
+                            let data_byte_size = data_bounded.len();
+                            if withdrawals.is_empty() {
+                                if let Err(e) = sequencer.handle()
+                                                .publish(data_bounded)
+                                                .context("Failed to publish block") {
+                                                    warn!("zone-sdk publish failed: {e:?}");
+                                                }
+
+                                info!("Published block with the size of {data_byte_size} bytes");
+                            } else {
+                                let withdraw_count = withdrawals.len();
+                                if let Err(e) = sequencer.handle()
+                                                .publish_atomic_withdraw(data_bounded, withdrawals)
+                                                .context("Failed to publish block with withdrawals") {
+                                                    warn!("zone-sdk publish failed: {e:?}");
+                                                }
+
+                                info!(
+                                    "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+                                );
                             }
                         }
-                        event = sequencer.next_event() => {
-                            let Some(event) = event else { continue };
+                        Some(event) = sequencer.next_event() => {
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
@@ -146,7 +167,9 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                             FinalizedOp::Deposit(deposit) => {
                                                 on_deposit_event(deposit).await;
                                             }
-                                            FinalizedOp::Withdraw(_) => {}
+                                            FinalizedOp::Withdraw(withdraw) => {
+                                                on_withdraw_event(withdraw).await;
+                                            }
                                         }
                                     }
                                 }
@@ -171,14 +194,14 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(&self, block: &Block) -> Result<()> {
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
-        let data_bounded = data
+        let data_bounded: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
         self.publish_tx
-            .send(data_bounded)
+            .send((data_bounded, withdrawals))
             .await
             .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
