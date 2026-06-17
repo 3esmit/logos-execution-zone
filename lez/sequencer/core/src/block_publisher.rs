@@ -147,7 +147,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 );
                             }
                         }
-                        Some(event) = sequencer.next_event() => {
+                        event = sequencer.next_event() => {
+                            let Some(event) = event else {
+                                continue;
+                            };
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
