@@ -1797,6 +1797,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
+name = "cross_zone_inbox_core"
+version = "0.1.0"
+dependencies = [
+ "lee",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "cross_zone_outbox_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
