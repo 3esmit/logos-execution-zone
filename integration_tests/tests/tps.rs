@@ -23,7 +23,7 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    EncryptedAccountData, InputAccountIdentity, MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -301,12 +301,16 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         .unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: sender_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(&sender_npk, &sender_vpk),
                 ssk: sender_ss,
                 nsk: sender_nsk,
                 membership_proof: proof,
                 identifier: 0,
             },
             InputAccountIdentity::PrivateUnauthorized {
+                epk: recipient_epk,
+                view_tag: EncryptedAccountData::compute_view_tag(&recipient_npk, &recipient_vpk),
                 npk: recipient_npk,
                 ssk: recipient_ss,
                 identifier: 0,
@@ -315,16 +319,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         &program.into(),
     )
     .unwrap();
-    let message = pptx::message::Message::try_from_circuit_output(
-        vec![],
-        vec![],
-        vec![
-            (sender_npk, sender_vpk, sender_epk),
-            (recipient_npk, recipient_vpk, recipient_epk),
-        ],
-        output,
-    )
-    .unwrap();
+    let message = pptx::message::Message::try_from_circuit_output(vec![], vec![], output).unwrap();
     let witness_set = pptx::witness_set::WitnessSet::for_message(&message, proof, &[]);
     pptx::PrivacyPreservingTransaction::new(message, witness_set)
 }

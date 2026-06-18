@@ -13,8 +13,14 @@
 
     crane.url = "github:ipetkov/crane";
 
+    # Must stay in sync with the lbc-* tags in logos-blockchain/Cargo.lock.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits";
+      url = "github:logos-blockchain/logos-blockchain-circuits/2846ee7a4cfa24458bb8063412ab2e753b344d2f";
+    };
+
+    # Must stay in sync with the rust-rapidsnark rev in Cargo.lock.
+    rust-rapidsnark = {
+      url = "github:logos-blockchain/logos-blockchain-rust-rapidsnark/e91187f8ccb5bbfc7bb00dac88169112428da78f";
     };
   };
 
@@ -25,6 +31,7 @@
       rust-overlay,
       crane,
       logos-blockchain-circuits,
+      rust-rapidsnark,
       ...
     }:
     let
@@ -53,6 +60,7 @@
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = ./.;
           cargoLock = builtins.fromTOML (builtins.readFile ./Cargo.lock);
+          lbc_dir = logos-blockchain-circuits.packages.${system}.default;
 
           # Parse Cargo.lock at eval time to find the locked risc0-circuit-recursion
           # version and its crates.io checksum — no hardcoding required.
@@ -102,6 +110,9 @@
               pkgs.python3  # Required for correct builds now, as python is sandboxed in nix builds
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            # Logos blockchain related env vars
+            LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
+            RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;
             # Point the risc0-circuit-recursion build script to the pre-fetched zip
             # so it doesn't try to download it inside the sandbox.
             RECURSION_SRC_PATH = "${recursionZkr}";
@@ -115,7 +126,6 @@
             '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
               export PATH="$PATH:/usr/bin"
             '';
-            LOGOS_BLOCKCHAIN_CIRCUITS = logos-blockchain-circuits.packages.${system}.default;
           };
 
           walletFfiPackage = craneLib.buildPackage (
@@ -142,7 +152,7 @@
               cargoExtraArgs = "-p indexer_ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp indexer/ffi/indexer_ffi.h $out/include/
+                cp lez/indexer/ffi/indexer_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libindexer_ffi.dylib $out/lib/libindexer_ffi.dylib

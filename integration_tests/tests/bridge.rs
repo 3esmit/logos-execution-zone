@@ -4,19 +4,22 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::Duration;
+use std::{ops::Deref as _, time::Duration};
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use futures::StreamExt as _;
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, wait_for_indexer_to_catch_up,
+};
 use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
 use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use log::info;
-use logos_blockchain_core::mantle::{Value, ledger::Inputs, ops::channel::deposit::DepositOp};
+use logos_blockchain_core::mantle::{ledger::Inputs, ops::channel::deposit::DepositOp};
 use logos_blockchain_http_api_common::bodies::{
     channel::ChannelDepositRequestBody,
     wallet::{
@@ -24,8 +27,14 @@ use logos_blockchain_http_api_common::bodies::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
 };
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
+};
+use num_bigint::BigUint;
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::public_mention;
 use tokio::test;
+use wallet::cli::{Command, execute_subcommand, programs::bridge::BridgeSubcommand};
 
 const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
@@ -150,7 +159,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message = privacy_preserving_transaction::Message::try_from_circuit_output(
         vec![bridge_account_id, recipient_vault_id],
         vec![bridge_pre.account.nonce, vault_pre.account.nonce],
-        vec![],
         output,
     )
     .context("Failed to build privacy-preserving bridge deposit message")?;
@@ -196,8 +204,9 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
 async fn submit_bedrock_deposit(
     bedrock_addr: std::net::SocketAddr,
+    bedrock_account_pk: &str,
     recipient_id: AccountId,
-    amount: u128,
+    amount: u64,
 ) -> anyhow::Result<()> {
     #[derive(BorshSerialize)]
     struct DepositMetadata {
@@ -210,18 +219,13 @@ async fn submit_bedrock_deposit(
         .try_into()
         .context("Encoded metadata is too big")?;
 
-    let funding_key = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
-
-    let amount: Value = amount
-        .try_into()
-        .context("Deposit amount does not fit Bedrock Value type")?;
     let channel_id = integration_tests::config::bedrock_channel_id();
     let client = reqwest::Client::new();
 
     let query_balance = || async {
         let balance_response = client
             .get(format!(
-                "http://{bedrock_addr}/wallet/{funding_key}/balance"
+                "http://{bedrock_addr}/wallet/{bedrock_account_pk}/balance"
             ))
             .send()
             .await
@@ -238,13 +242,13 @@ async fn submit_bedrock_deposit(
     let mut balance = query_balance().await?;
 
     info!(
-        "Queried Bedrock balance for key {funding_key}: {:?}",
+        "Queried Bedrock balance for key {bedrock_account_pk}: {:?}",
         balance.balance
     );
 
     if balance.balance < amount {
         anyhow::bail!(
-            "Bedrock wallet with key {funding_key} has insufficient balance {:?} for deposit amount {:?}",
+            "Bedrock wallet with key {bedrock_account_pk} has insufficient balance {:?} for deposit amount {:?}",
             balance.balance,
             amount
         );
@@ -370,11 +374,18 @@ async fn wait_for_vault_balance(
     })?
 }
 
+/// Test deposit and withdraw round trip.
+///
+/// Implemented as one test instead of two separate tests for deposit and withdraw, because the
+/// withdraw test depends on the deposit to set up the necessary state (funds in vault) for testing
+/// withdraw functionality.
 #[test]
-async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<()> {
-    let ctx = TestContext::new().await?;
+async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Result<()> {
+    let mut ctx = TestContext::new().await?;
 
+    let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
     let recipient_id = ctx.existing_public_accounts()[0];
+    let amount = 1_u64;
     let vault_program_id = Program::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
@@ -388,10 +399,17 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
         .await?;
 
     // Submit deposit to Bedrock
-    submit_bedrock_deposit(ctx.bedrock_addr(), recipient_id, 1).await?;
+    submit_bedrock_deposit(ctx.bedrock_addr(), bedrock_account_pk, recipient_id, amount)
+        .await
+        .context("Failed to submit Bedrock deposit for round-trip setup")?;
 
     // Wait for vault to receive the deposit (minted from bridge to vault)
-    wait_for_vault_balance(&ctx, recipient_vault_id, vault_balance_before + 1).await?;
+    wait_for_vault_balance(
+        &ctx,
+        recipient_vault_id,
+        vault_balance_before + u128::from(amount),
+    )
+    .await?;
 
     // Now claim funds from vault back to recipient
     let nonces = ctx
@@ -411,7 +429,9 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
         vault_program_id,
         vec![recipient_id, recipient_vault_id],
         nonces,
-        vault_core::Instruction::Claim { amount: 1 },
+        vault_core::Instruction::Claim {
+            amount: u128::from(amount),
+        },
     )
     .context("Failed to build vault claim message")?;
 
@@ -446,9 +466,125 @@ async fn bedrock_deposit_mints_to_vault_then_claim_succeeds() -> anyhow::Result<
     );
     assert_eq!(
         recipient_balance_after_claim,
-        recipient_balance_before + 1,
+        recipient_balance_before + u128::from(amount),
         "Recipient balance should increase by claimed amount"
     );
 
+    // The indexer must replay the deposit and claim blocks and reach the same
+    // state as the sequencer — including the bridge system account the deposit
+    // modifies, which is the case the hot fix unblocks.
+    wait_for_indexer_to_catch_up(&ctx).await?;
+    let bridge_account_id = lee::system_bridge_account_id();
+    for account_id in [recipient_id, recipient_vault_id, bridge_account_id] {
+        let indexer_account = indexer_service_rpc::RpcClient::get_account(
+            // `deref` is needed for correct trait resolution
+            // of the async `get_account` method on `RpcClient`
+            ctx.indexer_client().deref(),
+            account_id.into(),
+        )
+        .await?;
+        let sequencer_account = ctx.sequencer_client().get_account(account_id).await?;
+        assert_eq!(
+            indexer_account,
+            sequencer_account.into(),
+            "Indexer and sequencer diverged for account {account_id} after deposit"
+        );
+    }
+
+    // Withdraw back to Bedrock and wait for finalized withdraw event.
+    let sender_id = recipient_id;
+
+    let observer = create_zone_indexer_observer(ctx.bedrock_addr())?;
+    let observe_fut = wait_for_finalized_withdraw_op(&observer, amount, bedrock_account_pk);
+
+    let withdraw_fut = execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Bridge(BridgeSubcommand::Withdraw {
+            from: public_mention(sender_id),
+            amount,
+            bedrock_account_pk: bedrock_account_pk.to_owned(),
+        }),
+    );
+
+    let (observe_result, withdraw_result) = tokio::join!(observe_fut, withdraw_fut);
+
+    withdraw_result.context("Failed to execute wallet bridge withdraw command")?;
+
+    observe_result
+        .context("Failed while waiting for finalized withdraw event from zone indexer")?;
+
+    // Sleep to observe sequencer log about validated withdraw event
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
     Ok(())
+}
+
+fn create_zone_indexer_observer(
+    bedrock_addr: std::net::SocketAddr,
+) -> anyhow::Result<ZoneIndexer<NodeHttpClient>> {
+    let bedrock_url = integration_tests::config::addr_to_url(
+        integration_tests::config::UrlProtocol::Http,
+        bedrock_addr,
+    )
+    .context("Failed to convert Bedrock addr to URL for zone indexer observer")?;
+
+    let node = NodeHttpClient::new(CommonHttpClient::new(None), bedrock_url);
+
+    Ok(ZoneIndexer::new(
+        integration_tests::config::bedrock_channel_id(),
+        node,
+    ))
+}
+
+async fn wait_for_finalized_withdraw_op(
+    observer: &ZoneIndexer<NodeHttpClient>,
+    expected_amount: u64,
+    receiver_pk: &str,
+) -> anyhow::Result<()> {
+    let timeout = TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK
+        + Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS);
+
+    let bedrock_account_pk_bytes = hex::decode(receiver_pk)
+        .context("Failed to decode expected receiver public key from hex")?;
+    let expected_receiver_pk =
+        logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
+            BigUint::from_bytes_le(&bedrock_account_pk_bytes),
+        );
+
+    tokio::time::timeout(timeout, async {
+        loop {
+            let stream = observer
+                .follow()
+                .await
+                .context("Failed to read zone indexer message batch")?;
+            let mut stream = std::pin::pin!(stream);
+
+            while let Some(message) = stream.next().await {
+                info!("Observed zone message {message:?}");
+
+                let ZoneMessage::Withdraw(withdraw) = message else {
+                    continue;
+                };
+
+                let mut iter = withdraw.outputs.iter();
+                let Some(note) = iter.next() else {
+                    continue;
+                };
+                if iter.next().is_some() {
+                    // Withdraw op should only have one output
+                    continue;
+                }
+
+                if note.value == expected_amount && note.pk == expected_receiver_pk {
+                    return Ok(());
+                }
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .with_context(|| {
+        format!("Timed out waiting for finalized withdraw message with amount {expected_amount}")
+    })?
 }

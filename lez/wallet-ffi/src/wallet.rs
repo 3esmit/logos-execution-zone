@@ -286,7 +286,7 @@ pub unsafe extern "C" fn wallet_ffi_restore_data(
 
     if res == WalletFfiError::Success {
         match block_on(execute_keys_restoration(&mut wallet, 10)) {
-            Ok(_) => WalletFfiError::Success,
+            Ok(()) => WalletFfiError::Success,
             Err(err) => {
                 print_error(format!("Failed to restore wallet data: {err}"));
                 WalletFfiError::StorageError

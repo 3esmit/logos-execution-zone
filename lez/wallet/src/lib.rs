@@ -587,10 +587,6 @@ impl WalletCore {
             lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(
                 acc_manager.public_account_ids(),
                 acc_manager.public_account_nonces(),
-                private_account_keys
-                    .iter()
-                    .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
-                    .collect(),
                 output,
             )?;
 
@@ -881,7 +877,7 @@ impl WalletCore {
 mod tests {
     use std::{
         ffi::{CStr, CString},
-        str::FromStr,
+        str::FromStr as _,
     };
 
     use bip39::Mnemonic;
@@ -896,7 +892,10 @@ mod tests {
         let boxed_mnemonic_string = Box::new(c_mnemonic_string.as_ptr());
         let raw_mnemonic_string_pointer = Box::into_raw(boxed_mnemonic_string);
 
-        let c_str = unsafe { CStr::from_ptr(*raw_mnemonic_string_pointer) };
+        // Safety: Will be safe, pointer is created from CString
+        let c_str_pointer = unsafe { *raw_mnemonic_string_pointer };
+        // Safety: Will be safe, pointer is created from CString
+        let c_str = unsafe { CStr::from_ptr(c_str_pointer) };
         let mn_string = c_str.to_str().unwrap();
 
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();

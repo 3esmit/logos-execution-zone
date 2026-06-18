@@ -171,7 +171,10 @@ impl IndexerStore {
                     transaction
                         .clone()
                         .transaction_stateless_check()?
-                        .execute_check_on_state(
+                        // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
+                        // sequencer-generated deposit tx'es;
+                        // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
+                        .execute_without_system_accounts_check_on_state(
                             &mut state_guard,
                             block.header.block_id,
                             block.header.timestamp,
@@ -238,10 +241,8 @@ mod tests {
             timestamp: 0,
             transactions: vec![clock_tx],
         };
-        let genesis_block = genesis_block_data.into_pending_block(
-            &common::test_utils::sequencer_sign_key_for_testing(),
-            [0; 32],
-        );
+        let genesis_block = genesis_block_data
+            .into_pending_block(&common::test_utils::sequencer_sign_key_for_testing());
         let mut prev_hash = Some(genesis_block.header.hash);
         storage
             .put_block(genesis_block, HeaderId::from([0_u8; 32]))

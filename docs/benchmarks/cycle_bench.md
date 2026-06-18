@@ -14,21 +14,37 @@ Per-program Risc0 cycle counts, prover wall time, PPE composition cost, and veri
 | Profile | release |
 | GPU acceleration | none |
 
-## Executor cycles
+## Executor cycles and public-execution ms
 
-`SessionInfo::cycles()` per instruction. Deterministic across runs. Wall time is `best / mean ± stdev` over 5 timed iterations (1 warmup discarded).
+`SessionInfo::cycles()` per instruction. Deterministic across runs. Wall time is `best / mean ± stdev` over the timed iterations (1 warmup discarded; `--exec-iters` sets the count, 50 below). `calib_ms` and `net_ms` are the public-execution time in milliseconds, on the same axis as the private `G_verify` so the fee model has one common unit for both paths. See the calibration block below for how they are derived.
 
-| Program | Instruction | user_cycles | segments | exec_ms (best / mean ± stdev) |
-|---|---|---:|---:|---|
-| authenticated_transfer | Initialize | 43,642 | 1 | 18.86 / 19.41 ± 0.48 |
-| authenticated_transfer | Transfer | 77,095 | 1 | 19.67 / 20.84 ± 1.16 |
-| token | Burn | 116,546 | 1 | 24.86 / 25.46 ± 0.63 |
-| token | Mint | 116,862 | 1 | 24.47 / 25.08 ± 0.42 |
-| token | Transfer | 127,726 | 1 | 25.00 / 25.40 ± 0.29 |
-| clock | Tick (no rollups) | 137,022 | 1 | 21.18 / 21.57 ± 0.41 |
-| ata | Create | 175,056 | 1 | 23.64 / 24.94 ± 1.09 |
-| amm | SwapExactInput | 508,634 | 1 | 34.21 / 34.77 ± 0.55 |
-| amm | AddLiquidity | 642,774 | 1 | 37.59 / 37.87 ± 0.28 |
+| Program | Instruction | user_cycles | segments | exec_ms (best / mean ± stdev) | calib_ms | net_ms |
+|---|---|---:|---:|---|---:|---:|
+| authenticated_transfer | Initialize | 43,818 | 1 | 30.69 / 31.93 ± 1.03 | 1.31 | 0.29 |
+| authenticated_transfer | Transfer | 79,958 | 1 | 31.02 / 32.35 ± 0.59 | 2.38 | 0.61 |
+| token | Burn | 116,546 | 1 | 36.08 / 37.18 ± 0.60 | 3.47 | 5.67 |
+| token | Mint | 116,862 | 1 | 35.67 / 37.73 ± 2.54 | 3.48 | 5.26 |
+| token | Transfer | 127,726 | 1 | 35.49 / 36.86 ± 0.90 | 3.81 | 5.08 |
+| clock | Tick (no rollups) | 137,022 | 1 | 32.12 / 33.16 ± 0.89 | 4.08 | 1.72 |
+| ata | Create | 174,515 | 1 | 35.41 / 36.49 ± 0.65 | 5.20 | 5.00 |
+| amm | SwapExactInput | 508,904 | 1 | 46.71 / 48.06 ± 0.86 | 15.17 | 16.30 |
+| amm | AddLiquidity | 643,464 | 1 | 48.57 / 50.28 ± 0.98 | 19.18 | 18.16 |
+
+### Public-execution ms calibration
+
+The binary fits `best_ms = intercept + slope · user_cycles` by ordinary least squares across the nine cases (best-of-N, not mean, so one OS scheduling spike cannot tilt the slope). On the machine above:
+
+| Field | Value |
+|---|---|
+| throughput (1 / slope) | 33,546 cycles/ms |
+| fixed overhead (intercept) | 30.41 ms per call |
+| R² | 0.935 |
+
+- `calib_ms = user_cycles / throughput` is the compute-only time, a pure function of the deterministic cycle count and the one pinned-hardware constant, so it reproduces run to run where raw wall-time does not. This is the number to put on the common public/private ms axis.
+- `net_ms = best exec_ms − fixed overhead` is the measured compute with the host-side overhead stripped; it agrees with `calib_ms` to within the per-program overhead scatter (the intercept is an ELF-size-averaged constant, so this decomposition is first-order, not mechanistic).
+- The `fixed overhead` is host-side per-call setup (ELF parse into a `MemoryImage`, `ExecutorEnv` build) that is outside the cycle count and does not scale with the instruction's work.
+
+The fixed overhead is paid per transaction in the current node, not amortized. The public-execution path at `lee/state_machine/src/program.rs:56-87` builds a fresh `ExecutorEnv` and calls `default_executor().execute(env, self.elf())` per call with the raw ELF bytes; no parsed image is cached across transactions. So today the real per-public-tx sequencer cost is the raw `exec_ms` (≈ 31 ms for the cheapest program), overhead-dominated. Caching the parsed `MemoryImage` per `ProgramId` would drop the per-tx cost to `calib_ms` (1–19 ms). Public execution is also cycle-capped at `MAX_NUM_CYCLES_PUBLIC_EXECUTION` (`program.rs:64`), which bounds the worst-case public-tx cost.
 
 ## Real proving (`--prove`)
 
@@ -85,7 +101,8 @@ The corresponding `proof_bytes` (S_agg) for the bench receipt is captured by `--
 ## Reproduce
 
 ```sh
-cargo run --release -p cycle_bench
+# Executor cycles + public-execution ms calibration (no proving). --exec-iters sets the sample count.
+cargo run --release -p cycle_bench -- --exec-iters 50
 cargo run --release -p cycle_bench --features prove -- --prove
 cargo run --release -p cycle_bench --features ppe -- --prove --ppe
 

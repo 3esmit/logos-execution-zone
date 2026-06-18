@@ -2,12 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use ml_kem::{Decapsulate as _, Encapsulate as _, KeyExport as _, Seed};
 use serde::{Deserialize, Serialize};
 
-use crate::SharedSecretKey;
-
-/// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
-/// former ECDH ephemeral public key.  Always 1088 bytes for ML-KEM-768.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct EphemeralPublicKey(pub Vec<u8>);
+use crate::{EphemeralPublicKey, SharedSecretKey};
 
 /// ML-KEM-768 encapsulation key bytes (1184 bytes, opaque to this crate).
 #[derive(

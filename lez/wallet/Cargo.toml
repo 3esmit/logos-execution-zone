@@ -14,15 +14,18 @@ common.workspace = true
 authenticated_transfer_core.workspace = true
 key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
-token_core.workspace = true
 amm_core.workspace = true
 testnet_initial_state.workspace = true
+token_core.workspace = true
 ata_core.workspace = true
+vault_core.workspace = true
+bridge_core.workspace = true
+keycard_wallet.workspace = true
+
 bip39.workspace = true
 pyo3.workspace = true
 rpassword = "7"
 zeroize.workspace = true
-keycard_wallet.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
