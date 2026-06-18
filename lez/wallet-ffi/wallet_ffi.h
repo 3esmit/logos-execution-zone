@@ -219,6 +219,20 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
+/**
+ * Result of a transfer operation.
+ */
+typedef struct FfiTransferResult {
+  /**
+   * Transaction hash (null-terminated string, or null on failure).
+   */
+  char *tx_hash;
+  /**
+   * Whether the transfer succeeded.
+   */
+  bool success;
+} FfiTransferResult;
+
 typedef struct FfiInstructionWords {
   uint32_t *instruction_words;
   uintptr_t instruction_words_size;
@@ -284,20 +298,6 @@ typedef struct FfiTransactionResult {
 typedef struct FfiPublicAccountKey {
   struct FfiBytes32 public_key;
 } FfiPublicAccountKey;
-
-/**
- * Result of a transfer operation.
- */
-typedef struct FfiTransferResult {
-  /**
-   * Transaction hash (null-terminated string, or null on failure).
-   */
-  char *tx_hash;
-  /**
-   * Whether the transfer succeeded.
-   */
-  bool success;
-} FfiTransferResult;
 
 /**
  * Create a new public account.
@@ -531,6 +531,38 @@ enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handl
                                                       const char *chain_index,
                                                       const struct FfiU128 *identifier,
                                                       const char *account_state_json);
+
+/**
+ * Withdraw native tokens from a public account to Bedrock (L1) through the bridge.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `from`: Source public account ID (must be owned by this wallet). Bridge withdrawals only
+ *   support public sender accounts.
+ * - `amount`: Amount of native tokens to withdraw
+ * - `bedrock_account_pk`: Recipient's Bedrock (L1) public key, 32 bytes
+ * - `out_result`: Output pointer for the withdraw result
+ *
+ * # Returns
+ * - `Success` if the withdraw transaction was submitted successfully
+ * - `InsufficientFunds` if the source account doesn't have enough balance
+ * - `KeyNotFound` if the source account's signing key is not in this wallet
+ * - Error code on other failures
+ *
+ * # Memory
+ * The result must be freed with `wallet_ffi_free_transfer_result()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `from` must be a valid pointer to a `FfiBytes32` struct
+ * - `bedrock_account_pk` must be a valid pointer to a `FfiBytes32` struct
+ * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+ */
+enum WalletFfiError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
+                                               const struct FfiBytes32 *from,
+                                               uint64_t amount,
+                                               const struct FfiBytes32 *bedrock_account_pk,
+                                               struct FfiTransferResult *out_result);
 
 /**
  * Serialize sequence of bytes into RISC0 readable words.
