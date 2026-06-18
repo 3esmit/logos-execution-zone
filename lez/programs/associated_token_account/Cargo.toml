@@ -1,5 +1,5 @@
 [package]
-name = "associated_token_account"
+name = "associated_token_account_program"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }

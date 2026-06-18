@@ -1,8 +1,13 @@
 [package]
-name = "privacy_preserving_circuit"
+name = "privacy_preserving_circuit_program"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
+
+# Renaming binary to privacy_preserving_circuit for better looking.
+[[bin]]
+name = "privacy_preserving_circuit"
+path = "src/main.rs"
 
 [lints]
 workspace = true

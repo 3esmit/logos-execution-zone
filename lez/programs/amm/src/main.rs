@@ -41,7 +41,7 @@ fn main() {
             ] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
-            amm::new_definition::new_definition(
+            amm_program::new_definition::new_definition(
                 pool,
                 vault_a,
                 vault_b,
@@ -70,7 +70,7 @@ fn main() {
             ] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
-            amm::add::add_liquidity(
+            amm_program::add::add_liquidity(
                 pool,
                 vault_a,
                 vault_b,
@@ -100,7 +100,7 @@ fn main() {
             ] = pre_states
                 .try_into()
                 .expect("Transfer instruction requires exactly seven accounts");
-            amm::remove::remove_liquidity(
+            amm_program::remove::remove_liquidity(
                 pool,
                 vault_a,
                 vault_b,
@@ -122,7 +122,7 @@ fn main() {
             let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
                 .try_into()
                 .expect("SwapExactInput instruction requires exactly five accounts");
-            amm::swap::swap_exact_input(
+            amm_program::swap::swap_exact_input(
                 pool,
                 vault_a,
                 vault_b,
@@ -141,7 +141,7 @@ fn main() {
             let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
                 .try_into()
                 .expect("SwapExactOutput instruction requires exactly five accounts");
-            amm::swap::swap_exact_output(
+            amm_program::swap::swap_exact_output(
                 pool,
                 vault_a,
                 vault_b,

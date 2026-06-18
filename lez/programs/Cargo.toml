@@ -67,9 +67,9 @@ artifacts = ["dep:build_utils", "dep:lee"]
 programs = [
   "dep:lee_core",
   "dep:risc0-zkvm",
-  "dep:amm",
-  "dep:associated_token_account",
-  "dep:token",
+  "dep:amm_program",
+  "dep:associated_token_account_program",
+  "dep:token_program",
   "dep:amm_core",
   "dep:associated_token_account_core",
   "dep:authenticated_transfer_core",
@@ -93,9 +93,9 @@ faucet_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
 vault_core = { workspace = true, optional = true }
 
-amm = { path = "amm", optional = true }
-associated_token_account = { path = "associated_token_account", optional = true }
-token = { path = "token", optional = true }
+amm_program = { path = "amm", optional = true }
+associated_token_account_program = { path = "associated_token_account", optional = true }
+token_program = { path = "token", optional = true }
 
 [build-dependencies]
 build_utils = { workspace = true, optional = true }
