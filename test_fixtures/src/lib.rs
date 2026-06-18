@@ -307,9 +307,10 @@ impl TestContextBuilder {
             .context("Failed to setup Bedrock node")?;
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr)
-                .await
-                .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) =
+                setup_indexer(bedrock_addr, config::bedrock_channel_id())
+                    .await
+                    .context("Failed to setup Indexer")?;
             let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
                 .context("Failed to convert indexer addr to URL")?;
             let indexer_client = IndexerClient::new(&indexer_url)
@@ -342,6 +343,7 @@ impl TestContextBuilder {
             sequencer_partial_config.unwrap_or_default(),
             bedrock_addr,
             genesis,
+            config::bedrock_channel_id(),
         )
         .await
         .context("Failed to setup Sequencer")?;

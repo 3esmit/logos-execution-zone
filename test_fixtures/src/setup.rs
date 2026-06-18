@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use indexer_service::IndexerHandle;
+use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use sequencer_service::{GenesisAction, SequencerHandle};
@@ -89,7 +89,10 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
     Ok((compose, addr))
 }
 
-pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, TempDir)> {
+pub async fn setup_indexer(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -98,8 +101,9 @@ pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, T
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned())
-        .context("Failed to create Indexer config")?;
+    let indexer_config =
+        config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned(), channel_id)
+            .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(indexer_config, 0)
         .await
@@ -111,6 +115,7 @@ pub async fn setup_sequencer(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    channel_id: ChannelId,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -125,6 +130,7 @@ pub async fn setup_sequencer(
         temp_sequencer_dir.path().to_owned(),
         bedrock_addr,
         genesis_transactions,
+        channel_id,
     )
     .context("Failed to create Sequencer config")?;
 

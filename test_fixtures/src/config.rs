@@ -67,6 +67,7 @@ pub fn sequencer_config(
     home: PathBuf,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    channel_id: ChannelId,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -85,7 +86,7 @@ pub fn sequencer_config(
         genesis: genesis_transactions,
         signing_key: [37; 32],
         bedrock_config: BedrockConfig {
-            channel_id: bedrock_channel_id(),
+            channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
@@ -163,7 +164,11 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     })
 }
 
-pub fn indexer_config(bedrock_addr: SocketAddr, home: PathBuf) -> Result<IndexerConfig> {
+pub fn indexer_config(
+    bedrock_addr: SocketAddr,
+    home: PathBuf,
+    channel_id: ChannelId,
+) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         home,
         consensus_info_polling_interval: Duration::from_secs(1),
@@ -172,7 +177,7 @@ pub fn indexer_config(bedrock_addr: SocketAddr, home: PathBuf) -> Result<Indexer
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
-        channel_id: bedrock_channel_id(),
+        channel_id,
     })
 }
 
@@ -192,6 +197,18 @@ pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
 #[must_use]
 pub fn bedrock_channel_id() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 1]
+        .repeat(16)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}
+
+/// Second channel on the same Bedrock node, for two-zone tests.
+/// Distinct from [`bedrock_channel_id`] so two zones settle independently on
+/// one shared L1.
+#[must_use]
+pub fn bedrock_channel_id_b() -> ChannelId {
+    let channel_id: [u8; 32] = [0_u8, 2]
         .repeat(16)
         .try_into()
         .unwrap_or_else(|_| unreachable!());
