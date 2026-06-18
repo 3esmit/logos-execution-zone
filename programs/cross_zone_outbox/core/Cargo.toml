@@ -11,3 +11,4 @@ workspace = true
 lee_core.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 risc0-zkvm.workspace = true
+borsh.workspace = true

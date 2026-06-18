@@ -1,3 +1,4 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
@@ -19,17 +20,43 @@ pub enum Instruction {
         target_zone: ZoneId,
         target_program_id: ProgramId,
         payload: Vec<u8>,
+        ordinal: u32,
     },
+}
+
+/// The message as stored in an outbox PDA. The destination zone's watcher reads
+/// this from the inscribed block; the source coordinates are filled by the
+/// watcher, not stored here.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct OutboxRecord {
+    pub target_zone: ZoneId,
+    pub target_program_id: ProgramId,
+    pub payload: Vec<u8>,
+}
+
+impl OutboxRecord {
+    /// Borsh-encoded form stored in the outbox PDA's account data.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("OutboxRecord serializes")
+    }
+
+    /// Decodes an [`OutboxRecord`] from account data.
+    pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
+        borsh::from_slice(bytes)
+    }
 }
 
 /// PDA holding one emitted message, keyed by destination zone and a per-zone
 /// ordinal.
 #[must_use]
 pub fn outbox_pda(outbox_id: ProgramId, target_zone: &ZoneId, ordinal: u32) -> AccountId {
-    AccountId::for_public_pda(&outbox_id, &outbox_seed(target_zone, ordinal))
+    AccountId::for_public_pda(&outbox_id, &outbox_pda_seed(target_zone, ordinal))
 }
 
-fn outbox_seed(target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
+/// Seed of an outbox message PDA, exposed so the guest can claim the account.
+#[must_use]
+pub fn outbox_pda_seed(target_zone: &ZoneId, ordinal: u32) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = Vec::with_capacity(OUTBOX_SEED_DOMAIN.len() + target_zone.len() + 4);

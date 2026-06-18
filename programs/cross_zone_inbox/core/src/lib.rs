@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::AccountId,
     program::{PdaSeed, ProgramId},
@@ -37,11 +38,56 @@ pub struct CrossZoneMessage {
     pub l1_inclusion_witness: Option<Vec<u8>>,
 }
 
-/// Peer and per-peer target allowlists.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Peer and per-peer target allowlists, plus this inbox's own zone id.
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
 pub struct InboxConfig {
+    pub self_zone: ZoneId,
     pub allowed_peers: BTreeMap<ZoneId, ExpectedPubkey>,
     pub allowed_targets: BTreeMap<ZoneId, Vec<ProgramId>>,
+}
+
+impl InboxConfig {
+    /// Borsh-encoded form stored in the inbox config account.
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("InboxConfig serializes")
+    }
+
+    /// Decodes an [`InboxConfig`] from account data.
+    pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
+        borsh::from_slice(bytes)
+    }
+}
+
+/// The replay keys seen for one `(src_zone, epoch)` shard.
+#[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct SeenShard(pub BTreeSet<MessageKey>);
+
+impl SeenShard {
+    /// Decodes a shard from account data; empty data is an empty shard.
+    pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
+        if bytes.is_empty() {
+            return Ok(Self::default());
+        }
+        borsh::from_slice(bytes)
+    }
+
+    #[must_use]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).expect("SeenShard serializes")
+    }
+
+    #[must_use]
+    pub fn contains(&self, key: &MessageKey) -> bool {
+        self.0.contains(key)
+    }
+
+    /// Inserts a key; returns true if it was newly inserted.
+    pub fn insert(&mut self, key: MessageKey) -> bool {
+        self.0.insert(key)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,10 +128,12 @@ pub fn inbox_seen_shard_account_id(
     src_zone: &ZoneId,
     src_block_id: u64,
 ) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &seen_shard_seed(src_zone, src_block_id))
+    AccountId::for_public_pda(&inbox_id, &inbox_seen_shard_seed(src_zone, src_block_id))
 }
 
-fn seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
+/// Seed of the seen-shard PDA, exposed so the guest can claim the account.
+#[must_use]
+pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let src_epoch = src_block_id / EPOCH_BLOCKS;

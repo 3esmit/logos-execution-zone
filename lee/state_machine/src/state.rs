@@ -197,6 +197,8 @@ impl V03State {
         this.insert_program(Program::vault());
         this.insert_program(Program::faucet());
         this.insert_program(Program::bridge());
+        this.insert_program(Program::cross_zone_outbox());
+        this.insert_program(Program::cross_zone_inbox());
 
         this
     }

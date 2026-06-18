@@ -1800,6 +1800,7 @@ checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee",
  "lee_core",
  "risc0-zkvm",
@@ -1810,6 +1811,7 @@ dependencies = [
 name = "cross_zone_outbox_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -7403,6 +7405,8 @@ dependencies = [
  "authenticated_transfer_core",
  "bridge_core",
  "clock_core",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
  "faucet_core",
  "lee_core",
  "risc0-zkvm",
