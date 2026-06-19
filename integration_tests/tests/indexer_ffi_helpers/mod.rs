@@ -84,3 +84,28 @@ pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
     let (indexer_ffi, indexer_dir) = setup_indexer_ffi(&runtime, ctx.ctx().bedrock_addr())?;
     Ok((ctx, indexer_ffi, indexer_dir))
 }
+
+/// Poll the indexer FFI until its last finalized block id reaches `min_block_id`
+/// or until [`integration_tests::L2_TO_L1_TIMEOUT`] elapses.
+///
+/// This avoids blindly sleeping for the full timeout: the indexer typically
+/// catches up in a fraction of that time, so we return as soon as it does and
+/// only use the timeout as a ceiling. Returns the last observed block id.
+pub fn wait_for_indexer_ffi_block(indexer: &IndexerServiceFFI, min_block_id: u64) -> Result<u64> {
+    let start = std::time::Instant::now();
+    loop {
+        // SAFETY: `indexer` is a valid reference for the duration of the call.
+        let res = unsafe { query_last_block(std::ptr::from_ref(indexer)) };
+        if res.error.is_ok() && res.is_some && res.block_id >= min_block_id {
+            return Ok(res.block_id);
+        }
+        if start.elapsed() >= integration_tests::L2_TO_L1_TIMEOUT {
+            anyhow::bail!(
+                "Indexer FFI did not reach block {min_block_id} within {:?}. Last observed block id: {}",
+                integration_tests::L2_TO_L1_TIMEOUT,
+                res.block_id
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
