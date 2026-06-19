@@ -156,7 +156,11 @@ async fn import_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account_id = lee::AccountId::from((
+        &key_chain.nullifier_public_key,
+        &key_chain.viewing_public_key,
+        0,
+    ));
     let account = lee::Account {
         program_owner: Program::authenticated_transfer_program().id(),
         balance: 777,
@@ -213,7 +217,11 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account_id = lee::AccountId::from((
+        &key_chain.nullifier_public_key,
+        &key_chain.viewing_public_key,
+        0,
+    ));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 

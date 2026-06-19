@@ -23,7 +23,11 @@ pub struct InitialPrivateAccountForWallet {
 impl InitialPrivateAccountForWallet {
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from((&self.key_chain.nullifier_public_key, self.identifier))
+        AccountId::from((
+            &self.key_chain.nullifier_public_key,
+            &self.key_chain.viewing_public_key,
+            self.identifier,
+        ))
     }
 }
 

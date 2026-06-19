@@ -277,6 +277,7 @@ impl KeyTree<ChildKeysPrivate> {
         let node = self.key_map.get(cci)?;
         let account_id = lee::AccountId::for_regular_private_account(
             &node.value.0.nullifier_public_key,
+            &node.value.0.viewing_public_key,
             identifier,
         );
         if self.account_id_map.contains_key(&account_id) {

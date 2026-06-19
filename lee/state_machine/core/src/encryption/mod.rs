@@ -80,16 +80,6 @@ impl EncryptedAccountData {
             view_tag,
         }
     }
-
-    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || npk || vpk).
-    #[must_use]
-    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"/LEE/v0.3/ViewTag/");
-        bytes.extend_from_slice(&npk.to_byte_array());
-        bytes.extend_from_slice(vpk.to_bytes());
-        Impl::hash_bytes(&bytes).as_bytes()[0]
-    }
 }
 
 impl EncryptionScheme {

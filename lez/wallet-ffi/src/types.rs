@@ -601,9 +601,10 @@ mod tests {
         let identifier = u128::from_le_bytes([45; 16]);
 
         let private_reg_acc_id =
-            AccountId::for_private_account(&npk, &PrivateAccountKind::Regular(identifier));
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
         let private_pda_acc_id = AccountId::for_private_account(
             &npk,
+            &vpk,
             &PrivateAccountKind::Pda {
                 program_id: [46; 8],
                 seed: PdaSeed::new([47; 32]),

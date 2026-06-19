@@ -819,8 +819,7 @@ mod tests {
     };
     use key_protocol::key_management::KeyChain;
     use lee::{
-        Account, AccountId, Data, EphemeralPublicKey, PrivacyPreservingTransaction,
-        SharedSecretKey, V03State,
+        Account, AccountId, Data, PrivacyPreservingTransaction, V03State,
         error::LeeError,
         execute_and_prove,
         privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
@@ -828,7 +827,7 @@ mod tests {
         system_bridge_account_id,
     };
     use lee_core::{
-        Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
+        Commitment, InputAccountIdentity, Nullifier,
         account::{AccountWithMetadata, Nonce},
     };
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -1605,8 +1604,11 @@ mod tests {
     #[test]
     fn private_bridge_withdraw_invocation_is_dropped() {
         let sender_keys = KeyChain::new_os_random();
-        let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.nullifier_public_key, 0);
+        let sender_account_id = AccountId::for_regular_private_account(
+            &sender_keys.nullifier_public_key,
+            &sender_keys.viewing_public_key,
+            0,
+        );
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
@@ -1629,15 +1631,17 @@ mod tests {
         let sender_pre = AccountWithMetadata::new(
             sender_private_account,
             true,
-            (&sender_keys.nullifier_public_key, 0),
+            (
+                &sender_keys.nullifier_public_key,
+                &sender_keys.viewing_public_key,
+                0,
+            ),
         );
         let bridge_pre = AccountWithMetadata::new(
             state.get_account_by_id(bridge_account_id),
             false,
             bridge_account_id,
         );
-
-        let shared_secret = SharedSecretKey::encapsulate(&sender_keys.viewing_public_key).0;
 
         let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
             amount: 1,
@@ -1659,12 +1663,8 @@ mod tests {
             instruction,
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(vec![12_u8; 1088]),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.nullifier_public_key,
-                        &sender_keys.viewing_public_key,
-                    ),
-                    ssk: shared_secret,
+                    vpk: sender_keys.viewing_public_key,
+                    esk: [0; 32],
                     nsk: sender_keys.private_key_holder.nullifier_secret_key,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)

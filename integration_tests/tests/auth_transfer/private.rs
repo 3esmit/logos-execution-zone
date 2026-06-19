@@ -7,13 +7,12 @@ use integration_tests::{
     public_mention, verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, SharedSecretKey, execute_and_prove,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    AccountId, execute_and_prove, privacy_preserving_transaction::circuit::ProgramWithDependencies,
+    program::Program,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
-    account::AccountWithMetadata,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    InputAccountIdentity, NullifierPublicKey, account::AccountWithMetadata,
+    encryption::ViewingPublicKey,
 };
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
@@ -600,14 +599,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     .await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = AccountId::for_regular_private_account(&npk, identifier_1);
+    let account_id_1 = AccountId::for_regular_private_account(&npk, &vpk, identifier_1);
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.balance, 100);
 
-    let account_id_2 = AccountId::for_regular_private_account(&npk, identifier_2);
+    let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
@@ -666,11 +665,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let ssk = SharedSecretKey([55_u8; 32]);
-    let epk = EphemeralPublicKey(vec![55_u8; 1088]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)
+        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -712,10 +709,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivatePdaInit {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
+                vpk,
+                esk: [0; 32],
                 npk,
-                ssk,
                 identifier: 1337,
                 seed: None,
             },

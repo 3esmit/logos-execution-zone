@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_public_victim() {
         use lee_core::{
-            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
+            Commitment, InputAccountIdentity,
             account::{Account, AccountWithMetadata},
         };
 
@@ -602,8 +602,8 @@ mod tests {
 
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
-        let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
+        let attacker_id =
+            AccountId::for_regular_private_account(&attacker_keys.npk(), &attacker_keys.vpk(), 0);
 
         let victim_id = AccountId::new([20_u8; 32]);
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -659,12 +659,8 @@ mod tests {
         //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: attacker_epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &attacker_keys.npk(),
-                    &attacker_keys.vpk(),
-                ),
-                ssk: attacker_ssk,
+                vpk: attacker_keys.vpk(),
+                esk: [0; 32],
                 nsk: attacker_keys.nsk,
                 membership_proof,
                 identifier: 0,
@@ -727,7 +723,7 @@ mod tests {
     #[test]
     fn privacy_malicious_programs_cannot_drain_private_victim() {
         use lee_core::{
-            Commitment, EncryptedAccountData, InputAccountIdentity, SharedSecretKey,
+            Commitment, InputAccountIdentity,
             account::{Account, AccountWithMetadata},
         };
 
@@ -757,12 +753,13 @@ mod tests {
 
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
-        let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
+        let attacker_id =
+            AccountId::for_regular_private_account(&attacker_keys.npk(), &attacker_keys.vpk(), 0);
 
         // Victim is a private account — not registered in public chain state.
         let victim_keys = test_private_account_keys_2();
-        let victim_id = AccountId::for_regular_private_account(&victim_keys.npk(), 0);
+        let victim_id =
+            AccountId::for_regular_private_account(&victim_keys.npk(), &victim_keys.vpk(), 0);
         let victim_balance = 5_000_u128;
 
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -819,12 +816,8 @@ mod tests {
         // so PrivateAuthorizedUpdate is not an option.
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: attacker_epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &attacker_keys.npk(),
-                    &attacker_keys.vpk(),
-                ),
-                ssk: attacker_ssk,
+                vpk: attacker_keys.vpk(),
+                esk: [0; 32],
                 nsk: attacker_keys.nsk,
                 membership_proof,
                 identifier: 0,

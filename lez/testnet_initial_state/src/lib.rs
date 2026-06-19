@@ -85,6 +85,7 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
     pub npk: lee_core::NullifierPublicKey,
+    pub vpk: lee_core::encryption::ViewingPublicKey,
     pub account: lee_core::account::Account,
 }
 
@@ -107,6 +108,7 @@ impl PrivateAccountPrivateInitialData {
     pub fn account_id(&self) -> lee::AccountId {
         lee::AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
+            &self.key_chain.viewing_public_key,
             self.identifier,
         )
     }
@@ -184,6 +186,7 @@ pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifier_public_key,
+            vpk: data.key_chain.viewing_public_key.clone(),
             account: data.account,
         })
         .collect()
@@ -215,7 +218,8 @@ pub fn initial_state() -> V03State {
             .iter()
             .map(|init_comm_data| {
                 let npk = &init_comm_data.npk;
-                let account_id = lee::AccountId::for_regular_private_account(npk, 0);
+                let account_id =
+                    lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
 
                 let mut acc = init_comm_data.account.clone();
 
@@ -390,6 +394,10 @@ mod tests {
             init_comms[0],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_A),
+                vpk: init_private_accs_keys[0]
+                    .key_chain
+                    .viewing_public_key
+                    .clone(),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -403,6 +411,10 @@ mod tests {
             init_comms[1],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_B),
+                vpk: init_private_accs_keys[1]
+                    .key_chain
+                    .viewing_public_key
+                    .clone(),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_B_INITIAL_BALANCE,

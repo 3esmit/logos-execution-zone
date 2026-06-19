@@ -418,10 +418,10 @@ pub mod tests {
 
     use authenticated_transfer_core::Instruction as AuthTransferInstruction;
     use lee_core::{
-        BlockId, Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
-        NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
+        BlockId, Commitment, InputAccountIdentity, Nullifier, NullifierPublicKey,
+        NullifierSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-        encryption::{EphemeralPublicKey, ViewingPublicKey},
+        encryption::ViewingPublicKey,
         program::{
             BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
             TimestampValidityWindow, WrappedBalanceSum,
@@ -517,7 +517,7 @@ pub mod tests {
 
         #[must_use]
         pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-            let account_id = AccountId::for_regular_private_account(&keys.npk(), 0);
+            let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
             let commitment = Commitment::new(&account_id, account);
             self.private_state.0.extend(&[commitment]);
             self
@@ -729,8 +729,8 @@ pub mod tests {
             ..Account::default()
         };
 
-        let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), 0);
-        let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), 0);
+        let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), 0);
+        let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), 0);
 
         let init_commitment1 = Commitment::new(&account_id1, &account);
         let init_commitment2 = Commitment::new(&account_id2, &account);
@@ -1403,11 +1403,11 @@ pub mod tests {
 
         let sender_nonce = sender.account.nonce;
 
-        let recipient =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0);
+        let recipient = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        );
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender, recipient],
@@ -1418,13 +1418,9 @@ pub mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: shared_secret,
                     identifier: 0,
                 },
             ],
@@ -1451,21 +1447,19 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
-        let recipient_pre =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        let (shared_secret_1, epk_1) =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
-
-        let (shared_secret_2, epk_2) =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 1);
+        let recipient_pre = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        );
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
@@ -1475,12 +1469,8 @@ pub mod tests {
             .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: epk_1,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: shared_secret_1,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -1488,13 +1478,9 @@ pub mod tests {
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: epk_2,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: shared_secret_2,
                     identifier: 0,
                 },
             ],
@@ -1517,21 +1503,19 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let recipient_pre = AccountWithMetadata::new(
             state.get_account_by_id(*recipient_account_id),
             false,
             *recipient_account_id,
         );
-
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
@@ -1541,12 +1525,8 @@ pub mod tests {
             .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: shared_secret,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -1634,8 +1614,10 @@ pub mod tests {
             &state,
         );
 
-        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
-        let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+        let recipient_account_id =
+            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
         let expected_new_commitment_1 = Commitment::new(
             &sender_account_id,
             &Account {
@@ -1786,7 +1768,8 @@ pub mod tests {
             &state,
         );
 
-        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
         let expected_new_commitment = Commitment::new(
             &sender_account_id,
             &Account {
@@ -2098,10 +2081,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
+        let private_account_2 = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        );
 
         // Setting the recipient nsk to authorize the sender.
         // This should be set to the sender private account in a normal circumstance.
@@ -2112,34 +2098,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: recipient_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2161,7 +2129,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2170,7 +2138,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), 0),
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2178,34 +2146,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2227,7 +2177,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2236,7 +2186,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), 0),
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2244,34 +2194,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2293,7 +2225,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2302,7 +2234,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), 0),
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2310,34 +2242,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2359,7 +2273,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2368,7 +2282,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), 0),
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2376,34 +2290,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2426,13 +2322,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account::default(),
             // This should be set to false in normal circumstances
             true,
-            (&recipient_keys.npk(), 0),
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2440,34 +2336,16 @@ pub mod tests {
             Program::serialize_instruction(10_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &sender_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     npk: recipient_keys.npk(),
-                    ssk: SharedSecretKey::encapsulate_deterministic(
-                        &recipient_keys.vpk(),
-                        &[0_u8; 32],
-                        0,
-                    )
-                    .0,
                     identifier: 0,
                 },
             ],
@@ -2486,8 +2364,6 @@ pub mod tests {
         let program = Program::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2506,10 +2382,9 @@ pub mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivatePdaInit {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
+                    vpk: keys.vpk(),
+                    esk: [0; 32],
                     npk,
-                    ssk: shared_secret,
                     identifier: u128::MAX,
                     seed: None,
                 },
@@ -2531,20 +2406,18 @@ pub mod tests {
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
 
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
+                vpk: keys.vpk(),
+                esk: [0; 32],
                 npk,
-                ssk: shared_secret,
                 identifier: u128::MAX,
                 seed: None,
             }],
@@ -2571,23 +2444,21 @@ pub mod tests {
         let npk_a = keys_a.npk();
         let npk_b = keys_b.npk();
         let seed = PdaSeed::new([42; 32]);
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys_b.vpk(), &[0_u8; 32], 0).0;
 
         // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
         // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
         // the circuit must reject.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&program.id(), &seed, &npk_a, &keys_a.vpk(), u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk_b, &keys_b.vpk()),
+                vpk: keys_b.vpk(),
+                esk: [0; 32],
                 npk: npk_b,
-                ssk: shared_secret,
                 identifier: u128::MAX,
                 seed: None,
             }],
@@ -2609,10 +2480,9 @@ pub mod tests {
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([77; 32]);
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2623,10 +2493,9 @@ pub mod tests {
             vec![pre_state],
             Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
+                vpk: keys.vpk(),
+                esk: [0; 32],
                 npk,
-                ssk: shared_secret,
                 identifier: u128::MAX,
                 seed: None,
             }],
@@ -2651,10 +2520,9 @@ pub mod tests {
         let npk = keys.npk();
         let claim_seed = PdaSeed::new([77; 32]);
         let wrong_delegated_seed = PdaSeed::new([88; 32]);
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2665,10 +2533,9 @@ pub mod tests {
             vec![pre_state],
             Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
+                vpk: keys.vpk(),
+                esk: [0; 32],
                 npk,
-                ssk: shared_secret,
                 identifier: u128::MAX,
                 seed: None,
             }],
@@ -2692,11 +2559,21 @@ pub mod tests {
         let keys_a = test_private_account_keys_1();
         let keys_b = test_private_account_keys_2();
         let seed = PdaSeed::new([55; 32]);
-        let shared_a = SharedSecretKey::encapsulate_deterministic(&keys_a.vpk(), &[0_u8; 32], 0).0;
-        let shared_b = SharedSecretKey::encapsulate_deterministic(&keys_b.vpk(), &[0_u8; 32], 0).0;
 
-        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk(), u128::MAX);
-        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk(), u128::MAX);
+        let account_a = AccountId::for_private_pda(
+            &program.id(),
+            &seed,
+            &keys_a.npk(),
+            &keys_a.vpk(),
+            u128::MAX,
+        );
+        let account_b = AccountId::for_private_pda(
+            &program.id(),
+            &seed,
+            &keys_b.npk(),
+            &keys_b.vpk(),
+            u128::MAX,
+        );
 
         let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
         let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -2706,18 +2583,16 @@ pub mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![
                 InputAccountIdentity::PrivatePdaInit {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys_a.npk(), &keys_a.vpk()),
+                    vpk: keys_a.vpk(),
+                    esk: [0; 32],
                     npk: keys_a.npk(),
-                    ssk: shared_a,
                     identifier: u128::MAX,
                     seed: None,
                 },
                 InputAccountIdentity::PrivatePdaInit {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys_b.npk(), &keys_b.vpk()),
+                    vpk: keys_b.vpk(),
+                    esk: [0; 32],
                     npk: keys_b.npk(),
-                    ssk: shared_b,
                     identifier: u128::MAX,
                     seed: None,
                 },
@@ -2738,13 +2613,12 @@ pub mod tests {
         let program = Program::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
         let seed = PdaSeed::new([99; 32]);
 
         // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
         // true, account_id derived via the private formula.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
+        let account_id =
+            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
         let owned_pre_state = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2758,10 +2632,9 @@ pub mod tests {
             vec![owned_pre_state],
             Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &keys.vpk()),
+                vpk: keys.vpk(),
+                esk: [0; 32],
                 npk,
-                ssk: shared_secret,
                 identifier: u128::MAX,
                 seed: None,
             }],
@@ -2838,33 +2711,23 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), 0),
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
         );
 
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0).0;
         let result = execute_and_prove(
             vec![private_account_1.clone(), private_account_1],
             Program::serialize_instruction(100_u128).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: shared_secret,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: shared_secret,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
                     identifier: 0,
@@ -3181,7 +3044,8 @@ pub mod tests {
             balance: 100,
             ..Account::default()
         };
-        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+        let sender_account_id =
+            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
         let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
         let mut state = V03State::new_with_genesis_accounts(
@@ -3189,15 +3053,16 @@ pub mod tests {
             vec![(sender_commitment.clone(), sender_init_nullifier)],
             0,
         );
-        let sender_pre =
-            AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
+        let sender_pre = AccountWithMetadata::new(
+            sender_private_account,
+            true,
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        );
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
             AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
         let recipient_pre =
             AccountWithMetadata::new(Account::default(), true, recipient_account_id);
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
 
         let balance = 37;
 
@@ -3209,12 +3074,8 @@ pub mod tests {
             .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &sender_keys.npk(),
-                        &sender_keys.vpk(),
-                    ),
-                    ssk: shared_secret,
+                    vpk: sender_keys.vpk(),
+                    esk: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -3268,7 +3129,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&from_keys.npk(), 0),
+            (&from_keys.npk(), &from_keys.vpk(), 0),
         );
         let to_account = AccountWithMetadata::new(
             Account {
@@ -3276,11 +3137,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&to_keys.npk(), 0),
+            (&to_keys.npk(), &to_keys.vpk(), 0),
         );
 
-        let from_account_id = AccountId::for_regular_private_account(&from_keys.npk(), 0);
-        let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), 0);
+        let from_account_id =
+            AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), 0);
+        let to_account_id =
+            AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), 0);
         let from_commitment = Commitment::new(&from_account_id, &from_account.account);
         let to_commitment = Commitment::new(&to_account_id, &to_account.account);
         let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
@@ -3301,12 +3164,6 @@ pub mod tests {
             number_of_calls,
             None,
         );
-
-        let (from_ss, from_epk) =
-            SharedSecretKey::encapsulate_deterministic(&from_keys.vpk(), &[0_u8; 32], 0);
-
-        let (to_ss, to_epk) =
-            SharedSecretKey::encapsulate_deterministic(&to_keys.vpk(), &[0_u8; 32], 1);
 
         let mut dependencies = HashMap::new();
 
@@ -3336,12 +3193,8 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: to_epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &to_keys.npk(),
-                        &to_keys.vpk(),
-                    ),
-                    ssk: to_ss,
+                    vpk: to_keys.vpk(),
+                    esk: [0; 32],
                     nsk: from_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&from_commitment)
@@ -3349,12 +3202,8 @@ pub mod tests {
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: from_epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &from_keys.npk(),
-                        &from_keys.vpk(),
-                    ),
-                    ssk: from_ss,
+                    vpk: from_keys.vpk(),
+                    esk: [0; 32],
                     nsk: to_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
@@ -3598,14 +3447,15 @@ pub mod tests {
         let private_keys = test_private_account_keys_1();
 
         // Create an authorized private account with default values (new account being initialized)
-        let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
+        let authorized_account = AccountWithMetadata::new(
+            Account::default(),
+            true,
+            (&private_keys.npk(), &private_keys.vpk(), 0),
+        );
 
         let program = Program::authenticated_transfer_program();
 
         // Set up parameters for the new account
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
         let instruction = authenticated_transfer_core::Instruction::Initialize;
 
@@ -3614,12 +3464,8 @@ pub mod tests {
             vec![authorized_account],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &private_keys.npk(),
-                    &private_keys.vpk(),
-                ),
-                ssk: shared_secret,
+                vpk: private_keys.vpk(),
+                esk: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3636,7 +3482,8 @@ pub mod tests {
         let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
         assert!(result.is_ok());
 
-        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
+        let account_id =
+            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3650,24 +3497,21 @@ pub mod tests {
         // especially PDAs. Private PDAs are not useful in practice because there is no way to
         // operate them without the corresponding private keys, so unauthorized private claiming
         // remains allowed.
-        let unauthorized_account =
-            AccountWithMetadata::new(Account::default(), false, (&private_keys.npk(), 0));
+        let unauthorized_account = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&private_keys.npk(), &private_keys.vpk(), 0),
+        );
 
         let program = Program::claimer();
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
         let (output, proof) = execute_and_prove(
             vec![unauthorized_account],
             Program::serialize_instruction(0_u128).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &private_keys.npk(),
-                    &private_keys.vpk(),
-                ),
+                vpk: private_keys.vpk(),
+                esk: [0; 32],
                 npk: private_keys.npk(),
-                ssk: shared_secret,
                 identifier: 0,
             }],
             &program.into(),
@@ -3683,7 +3527,8 @@ pub mod tests {
             .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
-        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
+        let account_id =
+            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3696,14 +3541,15 @@ pub mod tests {
         let private_keys = test_private_account_keys_1();
 
         // Step 1: Create a new private account with authorization
-        let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
+        let authorized_account = AccountWithMetadata::new(
+            Account::default(),
+            true,
+            (&private_keys.npk(), &private_keys.vpk(), 0),
+        );
 
         let claimer_program = Program::claimer();
 
         // Set up parameters for claiming the new account
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
         let instruction = authenticated_transfer_core::Instruction::Initialize;
 
@@ -3712,12 +3558,8 @@ pub mod tests {
             vec![authorized_account.clone()],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &private_keys.npk(),
-                    &private_keys.vpk(),
-                ),
-                ssk: shared_secret,
+                vpk: private_keys.vpk(),
+                esk: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3738,7 +3580,8 @@ pub mod tests {
         );
 
         // Verify the account is now initialized (nullifier exists)
-        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
+        let account_id =
+            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
 
@@ -3750,20 +3593,14 @@ pub mod tests {
         };
 
         let noop_program = Program::noop();
-        let shared_secret2 =
-            SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0).0;
 
         // Step 3: Try to execute noop program with authentication but without initialization
         let res = execute_and_prove(
             vec![account_metadata],
             Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &private_keys.npk(),
-                    &private_keys.vpk(),
-                ),
-                ssk: shared_secret2,
+                vpk: private_keys.vpk(),
+                esk: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3831,8 +3668,11 @@ pub mod tests {
     fn private_changer_claimer_no_data_change_no_claim_succeeds() {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
-        let private_account =
-            AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
+        let private_account = AccountWithMetadata::new(
+            Account::default(),
+            true,
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        );
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -3840,13 +3680,8 @@ pub mod tests {
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.npk(),
-                    &sender_keys.vpk(),
-                ),
-                ssk: SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0)
-                    .0,
+                vpk: sender_keys.vpk(),
+                esk: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -3862,8 +3697,11 @@ pub mod tests {
     fn private_changer_claimer_data_change_no_claim_fails() {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
-        let private_account =
-            AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
+        let private_account = AccountWithMetadata::new(
+            Account::default(),
+            true,
+            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        );
         // Change data but don't claim (false) - should fail
         let new_data = vec![1, 2, 3, 4, 5];
         let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
@@ -3872,13 +3710,8 @@ pub mod tests {
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.npk(),
-                    &sender_keys.vpk(),
-                ),
-                ssk: SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0)
-                    .0,
+                vpk: sender_keys.vpk(),
+                esk: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -3907,10 +3740,14 @@ pub mod tests {
             false,
             sender_keys.account_id(),
         );
-        let recipient_account =
-            AccountWithMetadata::new(Account::default(), true, (&recipient_keys.npk(), 0));
+        let recipient_account = AccountWithMetadata::new(
+            Account::default(),
+            true,
+            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        );
 
-        let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
+        let recipient_account_id =
+            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
         let recipient_commitment =
             Commitment::new(&recipient_account_id, &recipient_account.account);
         let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
@@ -3924,9 +3761,6 @@ pub mod tests {
         let balance_to_transfer = 10_u128;
         let instruction = (balance_to_transfer, auth_transfers.id());
 
-        let recipient =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0).0;
-
         let mut dependencies = HashMap::new();
         dependencies.insert(auth_transfers.id(), auth_transfers);
         let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
@@ -3938,12 +3772,8 @@ pub mod tests {
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &recipient_keys.npk(),
-                        &recipient_keys.vpk(),
-                    ),
-                    ssk: recipient,
+                    vpk: recipient_keys.vpk(),
+                    esk: [0; 32],
                     nsk: recipient_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&recipient_commitment)
@@ -4083,12 +3913,13 @@ pub mod tests {
         let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
+        let pre = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&account_keys.npk(), &account_keys.vpk(), 0),
+        );
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
-            let (shared_secret, epk) =
-                SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
-
             let instruction = (
                 block_validity_window,
                 TimestampValidityWindow::new_unbounded(),
@@ -4097,13 +3928,9 @@ pub mod tests {
                 vec![pre],
                 Program::serialize_instruction(instruction).unwrap(),
                 vec![InputAccountIdentity::PrivateUnauthorized {
-                    epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &account_keys.npk(),
-                        &account_keys.vpk(),
-                    ),
+                    vpk: account_keys.vpk(),
+                    esk: [0; 32],
                     npk: account_keys.npk(),
-                    ssk: shared_secret,
                     identifier: 0,
                 }],
                 &validity_window_program.into(),
@@ -4151,12 +3978,13 @@ pub mod tests {
             validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
+        let pre = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            (&account_keys.npk(), &account_keys.vpk(), 0),
+        );
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
-            let (shared_secret, epk) =
-                SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
-
             let instruction = (
                 BlockValidityWindow::new_unbounded(),
                 timestamp_validity_window,
@@ -4165,13 +3993,9 @@ pub mod tests {
                 vec![pre],
                 Program::serialize_instruction(instruction).unwrap(),
                 vec![InputAccountIdentity::PrivateUnauthorized {
-                    epk,
-                    view_tag: EncryptedAccountData::compute_view_tag(
-                        &account_keys.npk(),
-                        &account_keys.vpk(),
-                    ),
+                    vpk: account_keys.vpk(),
+                    esk: [0; 32],
                     npk: account_keys.npk(),
-                    ssk: shared_secret,
                     identifier: 0,
                 }],
                 &validity_window_program.into(),
@@ -4688,8 +4512,10 @@ pub mod tests {
             ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer.clone())].into());
 
         let funder_id = funder_keys.account_id();
-        let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
-        let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 1);
+        let alice_pda_0_id =
+            AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 0);
+        let alice_pda_1_id =
+            AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 1);
         let recipient_id = test_public_account_keys_2().account_id();
         let recipient_signing_key = test_public_account_keys_2().signing_key;
 
@@ -4708,11 +4534,6 @@ pub mod tests {
             ..Account::default()
         };
 
-        let (alice_shared_0, alice_epk_0) =
-            SharedSecretKey::encapsulate_deterministic(&alice_keys.vpk(), &[0_u8; 32], 0);
-        let (alice_shared_1, alice_epk_1) =
-            SharedSecretKey::encapsulate_deterministic(&alice_keys.vpk(), &[0_u8; 32], 1);
-
         // Fund alice_pda_0 via authenticated_transfer directly.
         {
             let funder_account = state.get_account_by_id(funder_id);
@@ -4727,13 +4548,9 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
-                        epk: alice_epk_0.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(
-                            &alice_npk,
-                            &alice_keys.vpk(),
-                        ),
+                        vpk: alice_keys.vpk(),
+                        esk: [0; 32],
                         npk: alice_npk,
-                        ssk: alice_shared_0,
                         identifier: 0,
                         seed: Some((seed, proxy_id)),
                     },
@@ -4768,13 +4585,9 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
-                        epk: alice_epk_1.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(
-                            &alice_npk,
-                            &alice_keys.vpk(),
-                        ),
+                        vpk: alice_keys.vpk(),
+                        esk: [0; 32],
                         npk: alice_npk,
-                        ssk: alice_shared_1,
                         identifier: 1,
                         seed: Some((seed, proxy_id)),
                     },
@@ -4812,12 +4625,8 @@ pub mod tests {
                 Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
-                        epk: alice_epk_0,
-                        view_tag: EncryptedAccountData::compute_view_tag(
-                            &alice_npk,
-                            &alice_keys.vpk(),
-                        ),
-                        ssk: alice_shared_0,
+                        vpk: alice_keys.vpk(),
+                        esk: [0; 32],
                         nsk: alice_keys.nsk,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_0)
@@ -4854,12 +4663,8 @@ pub mod tests {
                 Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
-                        epk: alice_epk_1,
-                        view_tag: EncryptedAccountData::compute_view_tag(
-                            &alice_npk,
-                            &alice_keys.vpk(),
-                        ),
-                        ssk: alice_shared_1,
+                        vpk: alice_keys.vpk(),
+                        esk: [0; 32],
                         nsk: alice_keys.nsk,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1)
@@ -4898,7 +4703,6 @@ pub mod tests {
         };
         let commitment_pda_1_after_spend =
             Commitment::new(&alice_pda_1_id, &alice_pda_1_account_after_spend);
-        let alice_shared_1_refund = SharedSecretKey([12; 32]);
         {
             let recipient_account = state.get_account_by_id(recipient_id);
             let recipient_nonce = recipient_account.nonce;
@@ -4916,13 +4720,9 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaUpdate {
-                        epk: EphemeralPublicKey(vec![12_u8; 1088]),
-                        view_tag: EncryptedAccountData::compute_view_tag(
-                            &alice_npk,
-                            &alice_keys.vpk(),
-                        ),
+                        vpk: alice_keys.vpk(),
+                        esk: [0; 32],
                         nsk: alice_keys.nsk,
-                        ssk: alice_shared_1_refund,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1_after_spend)
                             .expect("pda_1 after spend must be in state"),
