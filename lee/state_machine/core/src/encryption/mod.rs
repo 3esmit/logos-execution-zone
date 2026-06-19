@@ -125,12 +125,12 @@ impl EncryptionScheme {
         commitment: &Commitment,
         output_index: u32,
     ) -> [u8; 32] {
-        let mut bytes = Vec::new();
-
-        bytes.extend_from_slice(b"LEE/v0.2/KDF-SHA256/");
-        bytes.extend_from_slice(&shared_secret.0);
-        bytes.extend_from_slice(&commitment.to_byte_array());
-        bytes.extend_from_slice(&output_index.to_le_bytes());
+        const PREFIX: &[u8; 20] = b"LEE/v0.2/KDF-SHA256/";
+        let mut bytes = [0_u8; 20 + 32 + 32 + 4];
+        bytes[0..20].copy_from_slice(PREFIX);
+        bytes[20..52].copy_from_slice(&shared_secret.0);
+        bytes[52..84].copy_from_slice(&commitment.to_byte_array());
+        bytes[84..88].copy_from_slice(&output_index.to_le_bytes());
 
         Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
     }

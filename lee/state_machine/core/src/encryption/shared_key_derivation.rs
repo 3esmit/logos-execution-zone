@@ -97,9 +97,9 @@ impl SharedSecretKey {
     ) -> (Self, EphemeralPublicKey) {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
 
-        let mut input = Vec::with_capacity(36);
-        input.extend_from_slice(message_hash);
-        input.extend_from_slice(&output_index.to_le_bytes());
+        let mut input = [0_u8; 32 + 4];
+        input[0..32].copy_from_slice(message_hash);
+        input[32..36].copy_from_slice(&output_index.to_le_bytes());
         let hash = Impl::hash_bytes(&input);
         let m: ml_kem::B32 =
             ml_kem::array::Array::try_from(hash.as_bytes()).expect("SHA-256 output is 32 bytes");
