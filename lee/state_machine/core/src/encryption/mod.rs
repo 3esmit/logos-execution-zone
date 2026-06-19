@@ -5,14 +5,14 @@ use chacha20::{
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "host")]
 pub use shared_key_derivation::{MlKem768EncapsulationKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account, program::PrivateAccountKind};
-#[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
+
+pub type EphemeralSecretKey = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
@@ -50,6 +50,18 @@ pub struct EncryptedAccountData {
     pub ciphertext: Ciphertext,
     pub epk: EphemeralPublicKey,
     pub view_tag: ViewTag,
+}
+
+impl EncryptedAccountData {
+    #[must_use]
+    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
+        const PREFIX: &[u8; 18] = b"/LEE/v0.3/ViewTag/";
+        let mut bytes = [0_u8; 18 + 32 + ViewingPublicKey::LEN];
+        bytes[0..18].copy_from_slice(PREFIX);
+        bytes[18..50].copy_from_slice(&npk.to_byte_array());
+        bytes[50..].copy_from_slice(vpk.to_bytes());
+        Impl::hash_bytes(&bytes).as_bytes()[0]
+    }
 }
 
 #[cfg(feature = "host")]

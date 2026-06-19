@@ -1,5 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use ml_kem::{Decapsulate as _, Encapsulate as _, KeyExport as _, Seed};
+#[cfg(feature = "host")]
+use ml_kem::Encapsulate as _;
+use ml_kem::{Decapsulate as _, KeyExport as _, Seed};
 use serde::{Deserialize, Serialize};
 
 use crate::{EphemeralPublicKey, SharedSecretKey};
@@ -26,6 +28,7 @@ impl MlKem768EncapsulationKey {
     pub const LEN: usize = 1184;
 
     /// Construct from raw bytes, returning an error if the length is not [`Self::LEN`].
+    #[cfg(feature = "host")]
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, crate::error::LeeCoreError> {
         if bytes.len() != Self::LEN {
             return Err(crate::error::LeeCoreError::DeserializationError(format!(
@@ -59,6 +62,7 @@ impl SharedSecretKey {
     /// Returns `(shared_secret, ciphertext)`.  The ciphertext must be included in the transaction
     /// as the `EphemeralPublicKey`; the receiver recovers the same shared secret via
     /// [`Self::decapsulate`].
+    #[cfg(feature = "host")]
     #[must_use]
     pub fn encapsulate(ek: &MlKem768EncapsulationKey) -> (Self, EphemeralPublicKey) {
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
@@ -85,7 +89,6 @@ impl SharedSecretKey {
     /// avoid EPK collisions across multiple outputs in the same test.
     ///
     /// For production use [`Self::encapsulate`], which draws randomness from the OS.
-    #[cfg(any(test, feature = "test_utils"))]
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
