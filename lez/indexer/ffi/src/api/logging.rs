@@ -1,14 +1,33 @@
-/// Initializes the FFI's logger.
+use std::ffi::{CStr, c_char};
+
+use log::LevelFilter;
+
+/// Initializes logging for the indexer at `level`.
 ///
-/// Wires up `env_logger`, so the library's `log::*` output is controlled by the
-/// `RUST_LOG` environment variable (e.g. `RUST_LOG=info`). Without this, the
-/// FFI's log calls go nowhere — and since failures are otherwise reported only
-/// as numeric [`OperationStatus`](crate::errors::OperationStatus) codes, there
-/// is no other way to see *why* a call failed.
+/// - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
+///   case-insensitive); null or unparseable falls back to `info`.
 ///
-/// Safe to call multiple times and from any consumer: if a global logger is
-/// already set, the call is a no-op.
+/// Only the `indexer_ffi` and `indexer_core` targets are enabled!
+///
+/// # Safety
+/// - `level` must be a valid null-terminated C string, or null.
+/// - First call to this function wins; subsequent calls are no-ops.
 #[unsafe(no_mangle)]
-pub extern "C" fn init_logger() {
-    let _ignore_me = env_logger::try_init();
+pub unsafe extern "C" fn init_logger(level: *const c_char) {
+    let level = if level.is_null() {
+        LevelFilter::Info
+    } else {
+        unsafe { CStr::from_ptr(level) }
+            .to_str()
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(LevelFilter::Info)
+    };
+
+    env_logger::Builder::new()
+        .filter_level(LevelFilter::Off)
+        .filter_module("indexer_ffi", level)
+        .filter_module("indexer_core", level)
+        .try_init()
+        .ok();
 }

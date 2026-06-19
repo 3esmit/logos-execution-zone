@@ -464,18 +464,18 @@ struct PointerResult_Runtime__OperationStatus new_runtime(void);
 enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
 
 /**
- * Initializes the FFI's logger.
+ * Initializes logging for the indexer at `level`.
  *
- * Wires up `env_logger`, so the library's `log::*` output is controlled by the
- * `RUST_LOG` environment variable (e.g. `RUST_LOG=info`). Without this, the
- * FFI's log calls go nowhere — and since failures are otherwise reported only
- * as numeric [`OperationStatus`](crate::errors::OperationStatus) codes, there
- * is no other way to see *why* a call failed.
+ * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
+ *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Safe to call multiple times and from any consumer: if a global logger is
- * already set, the call is a no-op.
+ * Only the `indexer_ffi` and `indexer_core` targets are enabled!
+ *
+ * # Safety
+ * - `level` must be a valid null-terminated C string, or null.
+ * - First call to this function wins; subsequent calls are no-ops.
  */
-void init_logger(void);
+void init_logger(const char *level);
 
 /**
  * # Safety
