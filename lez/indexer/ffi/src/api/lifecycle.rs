@@ -15,6 +15,9 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 /// - `runtime`: A runtime for the indexer to run on, or null to have the indexer create and own
 ///   one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
+/// - `storage_dir`: A pointer to a string naming the directory under which the indexer stores its
+///   state (`RocksDB`), or null/empty to use the current directory. The host (e.g. a Logos module's
+///   instance persistence path) owns this location.
 ///
 /// # Returns
 ///
@@ -25,13 +28,15 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 /// The caller must ensure that:
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
+/// - `storage_dir` is either null or a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn start_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
+    storage_dir: *const c_char,
 ) -> InitializedIndexerServiceFFIResult {
-    // SAFETY: The caller must ensure the validness of the `runtime` and `config_path` pointers.
-    unsafe { setup_indexer(runtime, config_path) }.map_or_else(
+    // SAFETY: The caller must ensure the validness of the pointer arguments.
+    unsafe { setup_indexer(runtime, config_path, storage_dir) }.map_or_else(
         InitializedIndexerServiceFFIResult::from_error,
         InitializedIndexerServiceFFIResult::from_value,
     )
@@ -44,6 +49,7 @@ pub unsafe extern "C" fn start_indexer(
 ///
 /// - `runtime`: A runtime for the indexer to run on, or null to create and own one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
+/// - `storage_dir`: A pointer to a string naming the storage directory, or null/empty for `.`.
 ///
 /// # Returns
 ///
@@ -54,9 +60,11 @@ pub unsafe extern "C" fn start_indexer(
 /// The caller must ensure that:
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
+/// - `storage_dir` is either null or a valid pointer to a null-terminated C string.
 unsafe fn setup_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
+    storage_dir: *const c_char,
 ) -> Result<IndexerServiceFFI, OperationStatus> {
     let user_config_path = PathBuf::from(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
@@ -70,6 +78,25 @@ unsafe fn setup_indexer(
         log::error!("Failed to read config: {e}");
         OperationStatus::InitializationError
     })?;
+
+    // The host owns where state lives. An empty/null `storage_dir` falls back to
+    // the current directory (matches the standalone service's `--data-dir`
+    // default), but a Logos module passes its instance persistence path.
+    let storage_dir = if storage_dir.is_null() {
+        PathBuf::from(".")
+    } else {
+        let storage_dir = unsafe { std::ffi::CStr::from_ptr(storage_dir) }
+            .to_str()
+            .map_err(|e| {
+                log::error!("Could not convert the storage dir to string: {e}");
+                OperationStatus::InitializationError
+            })?;
+        if storage_dir.is_empty() {
+            PathBuf::from(".")
+        } else {
+            PathBuf::from(storage_dir)
+        }
+    };
 
     // Use the caller's runtime if one was supplied, otherwise create (and own)
     // our own. The `Runtime` wrapper drops the underlying tokio runtime only
@@ -85,7 +112,7 @@ unsafe fn setup_indexer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let core = IndexerCore::new(config).map_err(|e| {
+    let core = IndexerCore::new(config, &storage_dir).map_err(|e| {
         log::error!("Could not initialize indexer core: {e}");
         OperationStatus::InitializationError
     })?;

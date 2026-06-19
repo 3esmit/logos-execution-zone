@@ -12,6 +12,9 @@ struct Args {
     config_path: PathBuf,
     #[clap(short, long, default_value = "8779")]
     port: u16,
+    /// Directory under which the indexer stores its `RocksDB` state.
+    #[clap(short, long, default_value = ".")]
+    data_dir: PathBuf,
 }
 
 #[tokio::main]
@@ -22,12 +25,16 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args { config_path, port } = Args::parse();
+    let Args {
+        config_path,
+        port,
+        data_dir,
+    } = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
 
     let config = indexer_service::IndexerConfig::from_path(&config_path)?;
-    let indexer_handle = indexer_service::run_server(config, port).await?;
+    let indexer_handle = indexer_service::run_server(config, data_dir.as_path(), port).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {

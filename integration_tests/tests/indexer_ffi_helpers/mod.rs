@@ -37,6 +37,7 @@ unsafe extern "C" {
     pub unsafe fn start_indexer(
         runtime: *const Runtime,
         config_path: *const c_char,
+        storage_dir: *const c_char,
     ) -> InitializedIndexerServiceFFIResult;
 }
 
@@ -49,9 +50,8 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config =
-        integration_tests::config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned())
-            .context("Failed to create Indexer config")?;
+    let indexer_config = integration_tests::config::indexer_config(bedrock_addr)
+        .context("Failed to create Indexer config")?;
 
     let config_json = serde_json::to_vec(&indexer_config)?;
     let config_path = temp_indexer_dir.path().join("indexer_config.json");
@@ -59,10 +59,13 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
     file.write_all(&config_json)?;
     file.flush()?;
 
+    let config_path_c = CString::new(config_path.to_str().unwrap())?;
+    let storage_dir_c = CString::new(temp_indexer_dir.path().to_str().unwrap())?;
     let res =
         // SAFETY: null runtime → the FFI creates and owns its own tokio runtime,
-        // so there is no external runtime whose address we must keep stable.
-        unsafe { start_indexer(std::ptr::null(), CString::new(config_path.to_str().unwrap())?.as_ptr()) };
+        // so there is no external runtime whose address we must keep stable. The
+        // temp dir is the indexer's storage location.
+        unsafe { start_indexer(std::ptr::null(), config_path_c.as_ptr(), storage_dir_c.as_ptr()) };
 
     if res.error.is_error() {
         anyhow::bail!("Indexer FFI error {:?}", res.error);

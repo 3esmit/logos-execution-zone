@@ -416,6 +416,9 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  * - `runtime`: A runtime for the indexer to run on, or null to have the indexer create and own
  *   one.
  * - `config_path`: A pointer to a string representing the path to the configuration file.
+ * - `storage_dir`: A pointer to a string naming the directory under which the indexer stores its
+ *   state (`RocksDB`), or null/empty to use the current directory. The host (e.g. a Logos module's
+ *   instance persistence path) owns this location.
  *
  * # Returns
  *
@@ -426,9 +429,11 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  * The caller must ensure that:
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
  * - `config_path` is a valid pointer to a null-terminated C string.
+ * - `storage_dir` is either null or a valid pointer to a null-terminated C string.
  */
 InitializedIndexerServiceFFIResult start_indexer(const struct Runtime *runtime,
-                                                 const char *config_path);
+                                                 const char *config_path,
+                                                 const char *storage_dir);
 
 /**
  * Stops and frees the resources associated with the given indexer service.

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use common::block::Block;
@@ -23,8 +23,8 @@ pub struct IndexerCore {
 }
 
 impl IndexerCore {
-    pub fn new(config: IndexerConfig) -> Result<Self> {
-        let home = config.home.join("rocksdb");
+    pub fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+        let home = storage_dir.join("rocksdb");
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(

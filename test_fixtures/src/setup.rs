@@ -98,10 +98,10 @@ pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, T
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned())
-        .context("Failed to create Indexer config")?;
+    let indexer_config =
+        config::indexer_config(bedrock_addr).context("Failed to create Indexer config")?;
 
-    indexer_service::run_server(indexer_config, 0)
+    indexer_service::run_server(indexer_config, temp_indexer_dir.path(), 0)
         .await
         .context("Failed to run Indexer Service")
         .map(|handle| (handle, temp_indexer_dir))
