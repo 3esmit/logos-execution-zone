@@ -40,10 +40,7 @@ unsafe extern "C" {
     ) -> InitializedIndexerServiceFFIResult;
 }
 
-pub fn setup_indexer_ffi(
-    runtime: &Runtime,
-    bedrock_addr: SocketAddr,
-) -> Result<(IndexerServiceFFI, TempDir)> {
+pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -63,8 +60,9 @@ pub fn setup_indexer_ffi(
     file.flush()?;
 
     let res =
-        // SAFETY: lib function ensures validity of value.
-        unsafe { start_indexer(std::ptr::from_ref(runtime), CString::new(config_path.to_str().unwrap())?.as_ptr()) };
+        // SAFETY: null runtime → the FFI creates and owns its own tokio runtime,
+        // so there is no external runtime whose address we must keep stable.
+        unsafe { start_indexer(std::ptr::null(), CString::new(config_path.to_str().unwrap())?.as_ptr()) };
 
     if res.error.is_error() {
         anyhow::bail!("Indexer FFI error {:?}", res.error);
@@ -79,9 +77,11 @@ pub fn setup_indexer_ffi(
 
 pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
     let ctx = TestContext::builder().disable_indexer().build_blocking()?;
-    // Safety: ctx runtime is valid for the lifetime of the returned Runtime
-    let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
-    let (indexer_ffi, indexer_dir) = setup_indexer_ffi(&runtime, ctx.ctx().bedrock_addr())?;
+    // Don't borrow `ctx.runtime()`: `ctx` (and its by-value tokio runtime) is
+    // moved into the returned tuple, which would leave any pointer into it
+    // dangling. Pass a null runtime so the FFI owns its own — the same path the
+    // production module uses.
+    let (indexer_ffi, indexer_dir) = setup_indexer_ffi(ctx.ctx().bedrock_addr())?;
     Ok((ctx, indexer_ffi, indexer_dir))
 }
 
