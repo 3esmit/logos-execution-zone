@@ -24,10 +24,9 @@ pub unsafe extern "C" fn init_logger(level: *const c_char) {
             .unwrap_or(LevelFilter::Info)
     };
 
-    env_logger::Builder::new()
+    let _dontcare = env_logger::Builder::new()
         .filter_level(LevelFilter::Off)
         .filter_module("indexer_ffi", level)
         .filter_module("indexer_core", level)
-        .try_init()
-        .ok();
+        .try_init();
 }

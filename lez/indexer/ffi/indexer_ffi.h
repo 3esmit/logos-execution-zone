@@ -31,12 +31,13 @@ typedef enum FfiBedrockStatus {
  * - An [`IndexerCore`] used to answer queries
  * - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
  *   store stays populated)
- * - A [`Handle`] to the runtime they live on.
+ * - The [`Runtime`] they run on. It owns the underlying tokio runtime when we created it (and
+ *   drops it on teardown) and merely borrows it when the caller supplied one.
  */
 typedef struct IndexerServiceFFI {
   void *core;
   void *ingest_handle;
-  void *runtime_handle;
+  void *runtime;
 } IndexerServiceFFI;
 
 /**
@@ -80,17 +81,6 @@ typedef struct Pointer_Runtime {
 typedef struct Runtime {
   struct Pointer_Runtime inner;
 } Runtime;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_Runtime__OperationStatus {
-  struct Runtime *value;
-  enum OperationStatus error;
-} PointerResult_Runtime__OperationStatus;
 
 /**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
@@ -423,6 +413,8 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  *
  * # Arguments
  *
+ * - `runtime`: A runtime for the indexer to run on, or null to have the indexer create and own
+ *   one.
  * - `config_path`: A pointer to a string representing the path to the configuration file.
  *
  * # Returns
@@ -432,16 +424,11 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  *
  * # Safety
  * The caller must ensure that:
- * - `runtime` is a valid pointer to a `tokio::runtime::Runtime` instance.
+ * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
  * - `config_path` is a valid pointer to a null-terminated C string.
  */
 InitializedIndexerServiceFFIResult start_indexer(const struct Runtime *runtime,
                                                  const char *config_path);
-
-/**
- * Creates a new [`tokio::runtime::Runtime`].
- */
-struct PointerResult_Runtime__OperationStatus new_runtime(void);
 
 /**
  * Stops and frees the resources associated with the given indexer service.

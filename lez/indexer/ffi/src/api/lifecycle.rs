@@ -12,6 +12,8 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 ///
 /// # Arguments
 ///
+/// - `runtime`: A runtime for the indexer to run on, or null to have the indexer create and own
+///   one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
 ///
 /// # Returns
@@ -21,7 +23,7 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 ///
 /// # Safety
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a `tokio::runtime::Runtime` instance.
+/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn start_indexer(
@@ -35,20 +37,12 @@ pub unsafe extern "C" fn start_indexer(
     )
 }
 
-/// Creates a new [`tokio::runtime::Runtime`].
-#[unsafe(no_mangle)]
-pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
-    Runtime::new().map_or_else(
-        |_e| PointerResult::from_error(OperationStatus::InitializationError),
-        PointerResult::from_value,
-    )
-}
-
 /// Initializes and starts an indexer based on the provided
 /// configuration file path.
 ///
 /// # Arguments
 ///
+/// - `runtime`: A runtime for the indexer to run on, or null to create and own one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
 ///
 /// # Returns
@@ -58,7 +52,7 @@ pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
 ///
 /// # Safety
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a `tokio::runtime::Runtime` instance.
+/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
 unsafe fn setup_indexer(
     runtime: *const Runtime,
@@ -77,9 +71,19 @@ unsafe fn setup_indexer(
         OperationStatus::InitializationError
     })?;
 
-    // SAFETY: The caller must ensure that `runtime` is a valid pointer to a
-    // `tokio::runtime::Runtime` instance.
-    let runtime = unsafe { &*runtime };
+    // Use the caller's runtime if one was supplied, otherwise create (and own)
+    // our own. The `Runtime` wrapper drops the underlying tokio runtime only
+    // when we own it; a borrowed one is left to its external owner.
+    let runtime = if runtime.is_null() {
+        Runtime::new().map_err(|e| {
+            log::error!("Could not create tokio runtime: {e}");
+            OperationStatus::InitializationError
+        })?
+    } else {
+        // SAFETY: the caller guarantees `runtime` is valid and outlives the indexer.
+        let caller = unsafe { &*runtime };
+        unsafe { Runtime::from_borrowed(caller.as_ref()) }
+    };
 
     let core = IndexerCore::new(config).map_err(|e| {
         log::error!("Could not initialize indexer core: {e}");
@@ -100,11 +104,7 @@ unsafe fn setup_indexer(
         log::warn!("Indexer block stream ended");
     });
 
-    Ok(IndexerServiceFFI::new(
-        core,
-        ingest_handle,
-        runtime.handle().clone(),
-    ))
+    Ok(IndexerServiceFFI::new(core, ingest_handle, runtime))
 }
 
 /// Stops and frees the resources associated with the given indexer service.

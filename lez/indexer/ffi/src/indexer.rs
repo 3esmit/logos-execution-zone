@@ -1,7 +1,9 @@
 use std::ffi::c_void;
 
 use indexer_core::IndexerCore;
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::task::JoinHandle;
+
+use crate::Runtime;
 
 /// FFI-owned indexer.
 ///
@@ -9,21 +11,22 @@ use tokio::{runtime::Handle, task::JoinHandle};
 /// - An [`IndexerCore`] used to answer queries
 /// - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
 ///   store stays populated)
-/// - A [`Handle`] to the runtime they live on.
+/// - The [`Runtime`] they run on. It owns the underlying tokio runtime when we created it (and
+///   drops it on teardown) and merely borrows it when the caller supplied one.
 #[repr(C)]
 pub struct IndexerServiceFFI {
     core: *mut c_void,
     ingest_handle: *mut c_void,
-    runtime_handle: *mut c_void,
+    runtime: *mut c_void,
 }
 
 impl IndexerServiceFFI {
     #[must_use]
-    pub fn new(core: IndexerCore, ingest_handle: JoinHandle<()>, runtime_handle: Handle) -> Self {
+    pub fn new(core: IndexerCore, ingest_handle: JoinHandle<()>, runtime: Runtime) -> Self {
         Self {
             core: Box::into_raw(Box::new(core)).cast::<c_void>(),
             ingest_handle: Box::into_raw(Box::new(ingest_handle)).cast::<c_void>(),
-            runtime_handle: Box::into_raw(Box::new(runtime_handle)).cast::<c_void>(),
+            runtime: Box::into_raw(Box::new(runtime)).cast::<c_void>(),
         }
     }
 
@@ -38,14 +41,14 @@ impl IndexerServiceFFI {
         }
     }
 
-    /// Borrow the runtime handle to `block_on` an async store query.
+    /// Borrow the runtime to `block_on` an async store query.
     #[must_use]
-    pub const fn runtime_handle(&self) -> &Handle {
+    pub const fn runtime(&self) -> &Runtime {
         unsafe {
-            self.runtime_handle
-                .cast::<Handle>()
+            self.runtime
+                .cast::<Runtime>()
                 .as_ref()
-                .expect("Runtime handle must be a non-null pointer")
+                .expect("Runtime must be a non-null pointer")
         }
     }
 }
@@ -56,7 +59,7 @@ impl Drop for IndexerServiceFFI {
         let Self {
             core,
             ingest_handle,
-            runtime_handle,
+            runtime,
         } = self;
 
         if !ingest_handle.is_null() {
@@ -68,8 +71,11 @@ impl Drop for IndexerServiceFFI {
         if !core.is_null() {
             drop(unsafe { Box::from_raw(core.cast::<IndexerCore>()) });
         }
-        if !runtime_handle.is_null() {
-            drop(unsafe { Box::from_raw(runtime_handle.cast::<Handle>()) });
+        // Dropping the `Runtime` shuts down the tokio runtime only if we own it
+        // (a borrowed one is left for its external owner). Done last, and from
+        // the consumer thread, so it never drops from within a runtime worker.
+        if !runtime.is_null() {
+            drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
         }
     }
 }

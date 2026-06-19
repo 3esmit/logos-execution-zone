@@ -209,7 +209,7 @@ pub unsafe extern "C" fn query_account(
         value: account_id.data,
     };
     indexer
-        .runtime_handle()
+        .runtime()
         .block_on(
             indexer
                 .core()
