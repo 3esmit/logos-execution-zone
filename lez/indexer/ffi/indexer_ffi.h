@@ -1,3 +1,5 @@
+#pragma once
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -22,11 +24,19 @@ typedef enum FfiBedrockStatus {
   Finalized,
 } FfiBedrockStatus;
 
-typedef struct Option_u64 Option_u64;
-
+/**
+ * FFI-owned indexer.
+ *
+ * Has three fields behind `c_void` (so that cbindgen never needs to see their Rust layout):
+ * - An [`IndexerCore`] used to answer queries
+ * - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
+ *   store stays populated)
+ * - A [`Handle`] to the runtime they live on.
+ */
 typedef struct IndexerServiceFFI {
-  void *indexer_handle;
-  void *indexer_client;
+  void *core;
+  void *ingest_handle;
+  void *runtime_handle;
 } IndexerServiceFFI;
 
 /**
@@ -83,15 +93,18 @@ typedef struct PointerResult_Runtime__OperationStatus {
 } PointerResult_Runtime__OperationStatus;
 
 /**
- * Simple wrapper around a pointer to a value or an error.
+ * Result of [`query_last_block`], returned **inline** (no heap allocation, so
+ * there is no corresponding `free_*` to call).
  *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
+ * `block_id` is only meaningful when `error` is `Ok` *and* `is_some` is
+ * `true`. An `Ok` result with `is_some == false` means the indexer has no
+ * finalized block yet (an empty chain) — which is distinct from an error.
  */
-typedef struct PointerResult_Option_u64_____OperationStatus {
-  struct Option_u64 *value;
+typedef struct LastBlockIdResult {
+  uint64_t block_id;
+  bool is_some;
   enum OperationStatus error;
-} PointerResult_Option_u64_____OperationStatus;
+} LastBlockIdResult;
 
 typedef uint64_t FfiBlockId;
 
@@ -411,7 +424,6 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  * # Arguments
  *
  * - `config_path`: A pointer to a string representing the path to the configuration file.
- * - `port`: Number representing a port, on which indexers RPC will start.
  *
  * # Returns
  *
@@ -424,8 +436,7 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
  * - `config_path` is a valid pointer to a null-terminated C string.
  */
 InitializedIndexerServiceFFIResult start_indexer(const struct Runtime *runtime,
-                                                 const char *config_path,
-                                                 uint16_t port);
+                                                 const char *config_path);
 
 /**
  * Creates a new [`tokio::runtime::Runtime`].
@@ -453,6 +464,20 @@ struct PointerResult_Runtime__OperationStatus new_runtime(void);
 enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
 
 /**
+ * Initializes the FFI's logger.
+ *
+ * Wires up `env_logger`, so the library's `log::*` output is controlled by the
+ * `RUST_LOG` environment variable (e.g. `RUST_LOG=info`). Without this, the
+ * FFI's log calls go nowhere — and since failures are otherwise reported only
+ * as numeric [`OperationStatus`](crate::errors::OperationStatus) codes, there
+ * is no other way to see *why* a call failed.
+ *
+ * Safe to call multiple times and from any consumer: if a global logger is
+ * already set, the call is a no-op.
+ */
+void init_logger(void);
+
+/**
  * # Safety
  * It's up to the caller to pass a proper pointer, if somehow from c/c++ side
  * this is called with a type which doesn't come from a returned `CString` it
@@ -469,16 +494,15 @@ void free_cstring(char *block);
  *
  * # Returns
  *
- * A `PointerResult<Option<u64>, OperationStatus>` indicating success or failure.
+ * A [`LastBlockIdResult`] indicating success or failure. The block id is
+ * returned inline; nothing needs to be freed.
  *
  * # Safety
  *
  * The caller must ensure that:
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
-struct PointerResult_Option_u64_____OperationStatus query_last_block(const struct Runtime *runtime,
-                                                                     const struct IndexerServiceFFI *indexer);
+struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexer);
 
 /**
  * Query the block by id from indexer.
@@ -495,15 +519,13 @@ struct PointerResult_Option_u64_____OperationStatus query_last_block(const struc
  * # Safety
  *
  * The caller must ensure that:
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct Runtime *runtime,
-                                                              const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct IndexerServiceFFI *indexer,
                                                               FfiBlockId block_id);
 
 /**
- * Query the block by id from indexer.
+ * Query the block by hash from indexer.
  *
  * # Arguments
  *
@@ -517,11 +539,9 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct Runti
  * # Safety
  *
  * The caller must ensure that:
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
-struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const struct Runtime *runtime,
-                                                                      const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const struct IndexerServiceFFI *indexer,
                                                                       FfiHashType hash);
 
 /**
@@ -539,15 +559,13 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const stru
  * # Safety
  *
  * The caller must ensure that:
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
-struct PointerResult_FfiAccount__OperationStatus query_account(const struct Runtime *runtime,
-                                                               const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiAccount__OperationStatus query_account(const struct IndexerServiceFFI *indexer,
                                                                FfiAccountId account_id);
 
 /**
- * Query the trasnaction by hash from indexer.
+ * Query the transaction by hash from indexer.
  *
  * # Arguments
  *
@@ -562,10 +580,8 @@ struct PointerResult_FfiAccount__OperationStatus query_account(const struct Runt
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  */
-struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct Runtime *runtime,
-                                                                                    const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct IndexerServiceFFI *indexer,
                                                                                     FfiHashType hash);
 
 /**
@@ -585,10 +601,8 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  */
-struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct Runtime *runtime,
-                                                                         const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct IndexerServiceFFI *indexer,
                                                                          struct FfiOption_u64 before,
                                                                          uint64_t limit);
 
@@ -604,16 +618,14 @@ struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const s
  *
  * # Returns
  *
- * A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiVec<FfiTransaction>, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
- * - `runtime` is a valid pointer to a [`Runtime`] instance.
  */
-struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transactions_by_account(const struct Runtime *runtime,
-                                                                                             const struct IndexerServiceFFI *indexer,
+struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transactions_by_account(const struct IndexerServiceFFI *indexer,
                                                                                              FfiAccountId account_id,
                                                                                              uint64_t offset,
                                                                                              uint64_t limit);
@@ -621,9 +633,14 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
 /**
  * Frees the resources associated with the given ffi account.
  *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiAccount>` (the `PointerResult.value` pointer) *and* its inner
+ * data buffer. Passing the struct by value previously freed only the inner
+ * buffer and leaked the outer box.
+ *
  * # Arguments
  *
- * - `val`: An instance of `FfiAccount`.
+ * - `val`: The `*mut FfiAccount` returned in `PointerResult.value`.
  *
  * # Returns
  *
@@ -632,12 +649,18 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiAccount`.
+ * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
  */
-void free_ffi_account(struct FfiAccount val);
+void free_ffi_account(struct FfiAccount *val);
 
 /**
- * Frees the resources associated with the given ffi block.
+ * Frees the resources owned by an `FfiBlock` value.
+ *
+ * This frees the block's transaction bodies (the only heap-owning field); the
+ * header/status fields are `Copy`. It operates on the struct by value because
+ * it is an element-level helper, used both for the vector path
+ * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
+ * neither case is an `FfiBlock` itself wrapped in its own outer box.
  *
  * # Arguments
  *
@@ -650,16 +673,20 @@ void free_ffi_account(struct FfiAccount val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiBlock`.
+ * - `val` is a valid instance of `FfiBlock` produced by this library and not yet freed.
  */
 void free_ffi_block(struct FfiBlock val);
 
 /**
  * Frees the resources associated with the given ffi block option.
  *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiBlockOpt>` (the `PointerResult.value` pointer), the inner
+ * `Box<FfiBlock>` (when present), and that block's transaction bodies.
+ *
  * # Arguments
  *
- * - `val`: An instance of `FfiBlockOpt`.
+ * - `val`: The `*mut FfiBlockOpt` returned in `PointerResult.value`.
  *
  * # Returns
  *
@@ -668,16 +695,20 @@ void free_ffi_block(struct FfiBlock val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiBlockOpt`.
+ * - `val` is a pointer to an `FfiBlockOpt` produced by this library and not yet freed.
  */
-void free_ffi_block_opt(FfiBlockOpt val);
+void free_ffi_block_opt(FfiBlockOpt *val);
 
 /**
  * Frees the resources associated with the given ffi block vector.
  *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiVec<FfiBlock>>` (the `PointerResult.value` pointer), the
+ * vector's backing buffer, and every block within it.
+ *
  * # Arguments
  *
- * - `val`: An instance of `FfiVec<FfiBlock>`.
+ * - `val`: The `*mut FfiVec<FfiBlock>` returned in `PointerResult.value`.
  *
  * # Returns
  *
@@ -686,9 +717,9 @@ void free_ffi_block_opt(FfiBlockOpt val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiVec<FfiBlock>`.
+ * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
-void free_ffi_block_vec(struct FfiVec_FfiBlock val);
+void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.
@@ -711,9 +742,13 @@ void free_ffi_transaction(struct FfiTransaction val);
 /**
  * Frees the resources associated with the given ffi transaction option.
  *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiOption<FfiTransaction>>` (the `PointerResult.value` pointer),
+ * the inner `Box<FfiTransaction>` (when present), and its body.
+ *
  * # Arguments
  *
- * - `val`: An instance of `FfiOption<FfiTransaction>`.
+ * - `val`: The `*mut FfiOption<FfiTransaction>` returned in `PointerResult.value`.
  *
  * # Returns
  *
@@ -722,16 +757,21 @@ void free_ffi_transaction(struct FfiTransaction val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiOption<FfiTransaction>`.
+ * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
+ *   freed.
  */
-void free_ffi_transaction_opt(struct FfiOption_FfiTransaction val);
+void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
 
 /**
  * Frees the resources associated with the given vector of ffi transactions.
  *
+ * Takes ownership of the whole allocation produced by a `query_*` call: the
+ * outer `Box<FfiVec<FfiTransaction>>` (the `PointerResult.value` pointer), the
+ * vector's backing buffer, and every transaction within it.
+ *
  * # Arguments
  *
- * - `val`: An instance of `FfiVec<FfiTransaction>`.
+ * - `val`: The `*mut FfiVec<FfiTransaction>` returned in `PointerResult.value`.
  *
  * # Returns
  *
@@ -740,9 +780,9 @@ void free_ffi_transaction_opt(struct FfiOption_FfiTransaction val);
  * # Safety
  *
  * The caller must ensure that:
- * - `val` is a valid instance of `FfiVec<FfiTransaction>`.
+ * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
-void free_ffi_transaction_vec(struct FfiVec_FfiTransaction val);
+void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 bool is_ok(const enum OperationStatus *self);
 

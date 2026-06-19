@@ -1,95 +1,75 @@
-use std::{ffi::c_void, net::SocketAddr};
+use std::ffi::c_void;
 
-use indexer_service::IndexerHandle;
+use indexer_core::IndexerCore;
+use tokio::{runtime::Handle, task::JoinHandle};
 
-use crate::client::IndexerClient;
-
+/// FFI-owned indexer.
+///
+/// Has three fields behind `c_void` (so that cbindgen never needs to see their Rust layout):
+/// - An [`IndexerCore`] used to answer queries
+/// - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
+///   store stays populated)
+/// - A [`Handle`] to the runtime they live on.
 #[repr(C)]
 pub struct IndexerServiceFFI {
-    indexer_handle: *mut c_void,
-    indexer_client: *mut c_void,
+    core: *mut c_void,
+    ingest_handle: *mut c_void,
+    runtime_handle: *mut c_void,
 }
 
 impl IndexerServiceFFI {
     #[must_use]
-    pub fn new(
-        indexer_handle: indexer_service::IndexerHandle,
-        indexer_client: IndexerClient,
-    ) -> Self {
+    pub fn new(core: IndexerCore, ingest_handle: JoinHandle<()>, runtime_handle: Handle) -> Self {
         Self {
-            // Box the complex types and convert to opaque pointers
-            indexer_handle: Box::into_raw(Box::new(indexer_handle)).cast::<c_void>(),
-            indexer_client: Box::into_raw(Box::new(indexer_client)).cast::<c_void>(),
+            core: Box::into_raw(Box::new(core)).cast::<c_void>(),
+            ingest_handle: Box::into_raw(Box::new(ingest_handle)).cast::<c_void>(),
+            runtime_handle: Box::into_raw(Box::new(runtime_handle)).cast::<c_void>(),
         }
     }
 
-    /// Helper to take ownership back.
+    /// Borrow the [`IndexerCore`] to run a query against its store.
     #[must_use]
-    pub fn into_parts(mut self) -> (Box<IndexerHandle>, Box<IndexerClient>) {
-        let Self {
-            indexer_handle,
-            indexer_client,
-        } = &mut self;
-
-        let indexer_handle_boxed = unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) };
-        let indexer_client_boxed = unsafe { Box::from_raw(indexer_client.cast::<IndexerClient>()) };
-
-        // Assigning nulls to prevent double free on drop, since ownership is transferred to caller
-        *indexer_handle = std::ptr::null_mut();
-        *indexer_client = std::ptr::null_mut();
-
-        (indexer_handle_boxed, indexer_client_boxed)
-    }
-
-    /// Helper to get indexer handle addr.
-    #[must_use]
-    pub const fn addr(&self) -> SocketAddr {
-        let indexer_handle = unsafe {
-            self.indexer_handle
-                .cast::<IndexerHandle>()
-                .as_ref()
-                .expect("Indexer Handle must be non-null pointer")
-        };
-
-        indexer_handle.addr()
-    }
-
-    /// Helper to get indexer handle ref.
-    #[must_use]
-    pub const fn handle(&self) -> &IndexerHandle {
+    pub const fn core(&self) -> &IndexerCore {
         unsafe {
-            self.indexer_handle
-                .cast::<IndexerHandle>()
+            self.core
+                .cast::<IndexerCore>()
                 .as_ref()
-                .expect("Indexer Handle must be non-null pointer")
+                .expect("IndexerCore must be a non-null pointer")
         }
     }
 
-    /// Helper to get indexer client ref.
+    /// Borrow the runtime handle to `block_on` an async store query.
     #[must_use]
-    pub const fn client(&self) -> &IndexerClient {
+    pub const fn runtime_handle(&self) -> &Handle {
         unsafe {
-            self.indexer_client
-                .cast::<IndexerClient>()
+            self.runtime_handle
+                .cast::<Handle>()
                 .as_ref()
-                .expect("Indexer Client must be non-null pointer")
+                .expect("Runtime handle must be a non-null pointer")
         }
     }
 }
 
-// Implement Drop to prevent memory leaks
+// Implement Drop to stop ingestion and free the boxed resources.
 impl Drop for IndexerServiceFFI {
     fn drop(&mut self) {
         let Self {
-            indexer_handle,
-            indexer_client,
+            core,
+            ingest_handle,
+            runtime_handle,
         } = self;
 
-        if !indexer_handle.is_null() {
-            drop(unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) });
+        if !ingest_handle.is_null() {
+            // Stop the background ingestion task before tearing down the core.
+            let handle = unsafe { Box::from_raw(ingest_handle.cast::<JoinHandle<()>>()) };
+            handle.abort();
+            drop(handle);
         }
-        if !indexer_client.is_null() {
-            drop(unsafe { Box::from_raw(indexer_client.cast::<IndexerClient>()) });
+        if !core.is_null() {
+            drop(unsafe { Box::from_raw(core.cast::<IndexerCore>()) });
+        }
+        if !runtime_handle.is_null() {
+            drop(unsafe { Box::from_raw(runtime_handle.cast::<Handle>()) });
         }
     }
 }

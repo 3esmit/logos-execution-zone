@@ -1,8 +1,7 @@
-use indexer_service_protocol::{AccountId, HashType};
-use indexer_service_rpc::RpcClient as _;
+use indexer_service_protocol::AccountId;
 
 use crate::{
-    IndexerServiceFFI, Runtime,
+    IndexerServiceFFI,
     api::{
         PointerResult,
         types::{
@@ -15,6 +14,45 @@ use crate::{
     errors::OperationStatus,
 };
 
+/// Result of [`query_last_block`], returned **inline** (no heap allocation, so
+/// there is no corresponding `free_*` to call).
+///
+/// `block_id` is only meaningful when `error` is `Ok` *and* `is_some` is
+/// `true`. An `Ok` result with `is_some == false` means the indexer has no
+/// finalized block yet (an empty chain) — which is distinct from an error.
+#[repr(C)]
+pub struct LastBlockIdResult {
+    pub block_id: u64,
+    pub is_some: bool,
+    pub error: OperationStatus,
+}
+
+impl LastBlockIdResult {
+    const fn error(error: OperationStatus) -> Self {
+        Self {
+            block_id: 0,
+            is_some: false,
+            error,
+        }
+    }
+
+    const fn none() -> Self {
+        Self {
+            block_id: 0,
+            is_some: false,
+            error: OperationStatus::Ok,
+        }
+    }
+
+    const fn some(block_id: u64) -> Self {
+        Self {
+            block_id,
+            is_some: true,
+            error: OperationStatus::Ok,
+        }
+    }
+}
+
 /// Query the last block id from indexer.
 ///
 /// # Arguments
@@ -23,34 +61,29 @@ use crate::{
 ///
 /// # Returns
 ///
-/// A `PointerResult<Option<u64>, OperationStatus>` indicating success or failure.
+/// A [`LastBlockIdResult`] indicating success or failure. The block id is
+/// returned inline; nothing needs to be freed.
 ///
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn query_last_block(
-    runtime: *const Runtime,
-    indexer: *const IndexerServiceFFI,
-) -> PointerResult<Option<u64>, OperationStatus> {
+pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> LastBlockIdResult {
     if indexer.is_null() {
         log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
-        return PointerResult::from_error(OperationStatus::NullPointer);
+        return LastBlockIdResult::error(OperationStatus::NullPointer);
     }
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
-    runtime
-        .block_on(client.get_last_finalized_block_id())
-        .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
-            PointerResult::from_value,
-        )
+    indexer.core().store.get_last_block_id().map_or_else(
+        |e| {
+            log::error!("Failed to query last block id: {e:#}");
+            LastBlockIdResult::error(OperationStatus::ClientError)
+        },
+        |opt| opt.map_or_else(LastBlockIdResult::none, LastBlockIdResult::some),
+    )
 }
 
 /// Query the block by id from indexer.
@@ -67,11 +100,9 @@ pub unsafe extern "C" fn query_last_block(
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_block(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     block_id: FfiBlockId,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
@@ -82,24 +113,23 @@ pub unsafe extern "C" fn query_block(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
+    indexer.core().store.get_block_at_id(block_id).map_or_else(
+        |e| {
+            log::error!("Failed to query block by id: {e:#}");
+            PointerResult::from_error(OperationStatus::ClientError)
+        },
+        |block_opt| {
+            let block_ffi = block_opt.map_or_else(FfiBlockOpt::from_none, |block| {
+                let block: indexer_service_protocol::Block = block.into();
+                FfiBlockOpt::from_value(block.into())
+            });
 
-    runtime
-        .block_on(client.get_block_by_id(block_id))
-        .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
-            |block_opt| {
-                let block_ffi = block_opt.map_or_else(FfiBlockOpt::from_none, |block| {
-                    FfiBlockOpt::from_value(block.into())
-                });
-
-                PointerResult::from_value(block_ffi)
-            },
-        )
+            PointerResult::from_value(block_ffi)
+        },
+    )
 }
 
-/// Query the block by id from indexer.
+/// Query the block by hash from indexer.
 ///
 /// # Arguments
 ///
@@ -113,11 +143,9 @@ pub unsafe extern "C" fn query_block(
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_block_by_hash(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     hash: FfiHashType,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
@@ -128,15 +156,18 @@ pub unsafe extern "C" fn query_block_by_hash(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
-    runtime
-        .block_on(client.get_block_by_hash(HashType(hash.data)))
+    indexer
+        .core()
+        .store
+        .get_block_by_hash(hash.data)
         .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
+            |e| {
+                log::error!("Failed to query block by hash: {e:#}");
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
             |block_opt| {
                 let block_ffi = block_opt.map_or_else(FfiBlockOpt::from_none, |block| {
+                    let block: indexer_service_protocol::Block = block.into();
                     FfiBlockOpt::from_value(block.into())
                 });
 
@@ -159,11 +190,9 @@ pub unsafe extern "C" fn query_block_by_hash(
 /// # Safety
 ///
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_account(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     account_id: FfiAccountId,
 ) -> PointerResult<FfiAccount, OperationStatus> {
@@ -174,23 +203,29 @@ pub unsafe extern "C" fn query_account(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
-    runtime
-        .block_on(client.get_account(AccountId {
-            value: account_id.data,
-        }))
+    // `account_current_state` is the only async store call; drive it on the
+    // runtime the indexer was started on.
+    let account_id = AccountId {
+        value: account_id.data,
+    };
+    indexer
+        .runtime_handle()
+        .block_on(
+            indexer
+                .core()
+                .store
+                .account_current_state(&account_id.into()),
+        )
         .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
-            |acc| {
-                let acc_lee: lee::Account = acc.try_into().expect("Source is in blocks, must fit");
-                PointerResult::from_value(acc_lee.into())
+            |e| {
+                log::error!("Failed to query account: {e:#}");
+                PointerResult::from_error(OperationStatus::ClientError)
             },
+            |account| PointerResult::from_value(account.into()),
         )
 }
 
-/// Query the trasnaction by hash from indexer.
+/// Query the transaction by hash from indexer.
 ///
 /// # Arguments
 ///
@@ -205,10 +240,8 @@ pub unsafe extern "C" fn query_account(
 ///
 /// The caller must ensure that:
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_transaction(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     hash: FfiHashType,
 ) -> PointerResult<FfiOption<FfiTransaction>, OperationStatus> {
@@ -219,15 +252,18 @@ pub unsafe extern "C" fn query_transaction(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
-    runtime
-        .block_on(client.get_transaction(HashType(hash.data)))
+    indexer
+        .core()
+        .store
+        .get_transaction_by_hash(hash.data)
         .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
+            |e| {
+                log::error!("Failed to query transaction: {e:#}");
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
             |tx_opt| {
                 let tx_ffi = tx_opt.map_or_else(FfiOption::<FfiTransaction>::from_none, |tx| {
+                    let tx: indexer_service_protocol::Transaction = tx.into();
                     FfiOption::<FfiTransaction>::from_value(tx.into())
                 });
 
@@ -252,10 +288,8 @@ pub unsafe extern "C" fn query_transaction(
 ///
 /// The caller must ensure that:
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_block_vec(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     before: FfiOption<u64>,
     limit: u64,
@@ -267,21 +301,26 @@ pub unsafe extern "C" fn query_block_vec(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
     let before_std = before.is_some.then(|| unsafe { *before.value });
 
-    runtime
-        .block_on(client.get_blocks(before_std, limit))
+    indexer
+        .core()
+        .store
+        .get_block_batch(before_std, limit)
         .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
+            |e| {
+                log::error!("Failed to query block batch: {e:#}");
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
             |block_vec| {
                 PointerResult::from_value(
                     block_vec
                         .into_iter()
-                        .map(Into::into)
-                        .collect::<Vec<_>>()
+                        .map(|block| {
+                            let block: indexer_service_protocol::Block = block.into();
+                            block.into()
+                        })
+                        .collect::<Vec<FfiBlock>>()
                         .into(),
                 )
             },
@@ -299,16 +338,14 @@ pub unsafe extern "C" fn query_block_vec(
 ///
 /// # Returns
 ///
-/// A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+/// A `PointerResult<FfiVec<FfiTransaction>, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
 /// The caller must ensure that:
 /// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
-/// - `runtime` is a valid pointer to a [`Runtime`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_transactions_by_account(
-    runtime: *const Runtime,
     indexer: *const IndexerServiceFFI,
     account_id: FfiAccountId,
     offset: u64,
@@ -321,25 +358,24 @@ pub unsafe extern "C" fn query_transactions_by_account(
 
     let indexer = unsafe { &*indexer };
 
-    let client = indexer.client();
-    let runtime = unsafe { &*runtime };
-
-    runtime
-        .block_on(client.get_transactions_by_account(
-            AccountId {
-                value: account_id.data,
-            },
-            offset,
-            limit,
-        ))
+    indexer
+        .core()
+        .store
+        .get_transactions_by_account(account_id.data, offset, limit)
         .map_or_else(
-            |_| PointerResult::from_error(OperationStatus::ClientError),
+            |e| {
+                log::error!("Failed to query transactions by account: {e:#}");
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
             |tx_vec| {
                 PointerResult::from_value(
                     tx_vec
                         .into_iter()
-                        .map(Into::into)
-                        .collect::<Vec<_>>()
+                        .map(|tx| {
+                            let tx: indexer_service_protocol::Transaction = tx.into();
+                            tx.into()
+                        })
+                        .collect::<Vec<FfiTransaction>>()
                         .into(),
                 )
             },

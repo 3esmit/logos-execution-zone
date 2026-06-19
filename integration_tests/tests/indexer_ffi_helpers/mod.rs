@@ -13,6 +13,7 @@ use indexer_ffi::{
     api::{
         PointerResult,
         lifecycle::InitializedIndexerServiceFFIResult,
+        query::LastBlockIdResult,
         types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
     },
 };
@@ -20,20 +21,15 @@ use integration_tests::{BlockingTestContext, TestContext};
 use tempfile::TempDir;
 
 unsafe extern "C" {
-    pub unsafe fn query_last_block(
-        runtime: *const Runtime,
-        indexer: *const IndexerServiceFFI,
-    ) -> PointerResult<u64, OperationStatus>;
+    pub unsafe fn query_last_block(indexer: *const IndexerServiceFFI) -> LastBlockIdResult;
 
     pub unsafe fn query_block_vec(
-        runtime: *const Runtime,
         indexer: *const IndexerServiceFFI,
         before: FfiOption<u64>,
         limit: u64,
     ) -> PointerResult<FfiVec<FfiBlock>, OperationStatus>;
 
     pub unsafe fn query_account(
-        runtime: *const Runtime,
         indexer: *const IndexerServiceFFI,
         account_id: FfiAccountId,
     ) -> PointerResult<FfiAccount, OperationStatus>;
@@ -41,7 +37,6 @@ unsafe extern "C" {
     pub unsafe fn start_indexer(
         runtime: *const Runtime,
         config_path: *const c_char,
-        port: u16,
     ) -> InitializedIndexerServiceFFIResult;
 }
 
@@ -69,7 +64,7 @@ pub fn setup_indexer_ffi(
 
     let res =
         // SAFETY: lib function ensures validity of value.
-        unsafe { start_indexer(std::ptr::from_ref(runtime), CString::new(config_path.to_str().unwrap())?.as_ptr(), 0) };
+        unsafe { start_indexer(std::ptr::from_ref(runtime), CString::new(config_path.to_str().unwrap())?.as_ptr()) };
 
     if res.error.is_error() {
         anyhow::bail!("Indexer FFI error {:?}", res.error);

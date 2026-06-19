@@ -1,7 +1,7 @@
 pub use result::PointerResult;
 
-pub mod client;
 pub mod lifecycle;
+pub mod logging;
 pub mod memory;
 pub mod query;
 pub mod result;

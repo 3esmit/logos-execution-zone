@@ -1,14 +1,9 @@
 use std::{ffi::c_char, path::PathBuf};
 
-use crate::{
-    IndexerServiceFFI, Runtime,
-    api::{
-        PointerResult,
-        client::{UrlProtocol, addr_to_url},
-    },
-    client::{IndexerClient, IndexerClientTrait as _},
-    errors::OperationStatus,
-};
+use futures::StreamExt as _;
+use indexer_core::{IndexerCore, config::IndexerConfig};
+
+use crate::{IndexerServiceFFI, Runtime, api::PointerResult, errors::OperationStatus};
 
 pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, OperationStatus>;
 
@@ -18,7 +13,6 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 /// # Arguments
 ///
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
-/// - `port`: Number representing a port, on which indexers RPC will start.
 ///
 /// # Returns
 ///
@@ -33,10 +27,9 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 pub unsafe extern "C" fn start_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
-    port: u16,
 ) -> InitializedIndexerServiceFFIResult {
     // SAFETY: The caller must ensure the validness of the `runtime` and `config_path` pointers.
-    unsafe { setup_indexer(runtime, config_path, port) }.map_or_else(
+    unsafe { setup_indexer(runtime, config_path) }.map_or_else(
         InitializedIndexerServiceFFIResult::from_error,
         InitializedIndexerServiceFFIResult::from_value,
     )
@@ -57,7 +50,6 @@ pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
 /// # Arguments
 ///
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
-/// - `port`: Number representing a port, on which indexers RPC will start.
 ///
 /// # Returns
 ///
@@ -71,7 +63,6 @@ pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
 unsafe fn setup_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
-    port: u16,
 ) -> Result<IndexerServiceFFI, OperationStatus> {
     let user_config_path = PathBuf::from(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
@@ -81,7 +72,7 @@ unsafe fn setup_indexer(
                 OperationStatus::InitializationError
             })?,
     );
-    let config = indexer_service::IndexerConfig::from_path(&user_config_path).map_err(|e| {
+    let config = IndexerConfig::from_path(&user_config_path).map_err(|e| {
         log::error!("Failed to read config: {e}");
         OperationStatus::InitializationError
     })?;
@@ -90,22 +81,30 @@ unsafe fn setup_indexer(
     // `tokio::runtime::Runtime` instance.
     let runtime = unsafe { &*runtime };
 
-    let indexer_handle = runtime
-        .block_on(indexer_service::run_server(config, port))
-        .map_err(|e| {
-            log::error!("Could not start indexer service: {e}");
-            OperationStatus::InitializationError
-        })?;
+    let core = IndexerCore::new(config).map_err(|e| {
+        log::error!("Could not initialize indexer core: {e}");
+        OperationStatus::InitializationError
+    })?;
 
-    let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())?;
-    let indexer_client = runtime
-        .block_on(IndexerClient::new(&indexer_url))
-        .map_err(|e| {
-            log::error!("Could not start indexer client: {e}");
-            OperationStatus::InitializationError
-        })?;
+    // The block stream writes each parsed block into the store as a side effect
+    // of being polled, so we spawn a task that simply drains it. There are no
+    // subscribers — queries read the store directly via `core()`.
+    let ingest_core = core.clone();
+    let ingest_handle = runtime.spawn(async move {
+        let mut block_stream = std::pin::pin!(ingest_core.subscribe_parse_block_stream());
+        while let Some(result) = block_stream.next().await {
+            if let Err(e) = result {
+                log::error!("Indexer ingestion error: {e:#}");
+            }
+        }
+        log::warn!("Indexer block stream ended");
+    });
 
-    Ok(IndexerServiceFFI::new(indexer_handle, indexer_client))
+    Ok(IndexerServiceFFI::new(
+        core,
+        ingest_handle,
+        runtime.handle().clone(),
+    ))
 }
 
 /// Stops and frees the resources associated with the given indexer service.

@@ -3823,16 +3823,14 @@ dependencies = [
 name = "indexer_ffi"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cbindgen",
- "indexer_service",
+ "env_logger",
+ "futures",
+ "indexer_core",
  "indexer_service_protocol",
- "indexer_service_rpc",
- "jsonrpsee",
  "lee",
  "log",
  "tokio",
- "url",
 ]
 
 [[package]]
