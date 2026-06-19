@@ -4524,6 +4524,7 @@ dependencies = [
  "borsh",
  "bridge_core",
  "clock_core",
+ "cross_zone_inbox_core",
  "env_logger",
  "faucet_core",
  "hex",
@@ -4531,6 +4532,7 @@ dependencies = [
  "k256",
  "lee_core",
  "log",
+ "ping_core",
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-build",
@@ -7134,6 +7136,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "ping_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "serde",
+]
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7409,6 +7419,7 @@ dependencies = [
  "cross_zone_outbox_core",
  "faucet_core",
  "lee_core",
+ "ping_core",
  "risc0-zkvm",
  "serde",
  "token_core",

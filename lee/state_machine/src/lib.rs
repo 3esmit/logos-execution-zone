@@ -33,6 +33,9 @@ mod signature;
 mod state;
 mod validated_state_diff;
 
+#[cfg(test)]
+mod cross_zone_dispatch_tests;
+
 pub mod program_methods {
     include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));
 }

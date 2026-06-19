@@ -12,8 +12,8 @@ use crate::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
         AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID, CLOCK_ELF,
         CLOCK_ID, CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF,
-        CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, TOKEN_ELF, TOKEN_ID,
-        VAULT_ELF, VAULT_ID,
+        CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, PING_RECEIVER_ELF,
+        PING_RECEIVER_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID,
     },
 };
 
@@ -188,6 +188,14 @@ impl Program {
         Self {
             id: CROSS_ZONE_INBOX_ID,
             elf: CROSS_ZONE_INBOX_ELF.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn ping_receiver() -> Self {
+        Self {
+            id: PING_RECEIVER_ID,
+            elf: PING_RECEIVER_ELF.to_vec(),
         }
     }
 }

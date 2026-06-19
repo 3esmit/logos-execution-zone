@@ -711,6 +711,11 @@ pub mod tests {
             this.insert(Program::vault().id(), Program::vault());
             this.insert(Program::faucet().id(), Program::faucet());
             this.insert(Program::bridge().id(), Program::bridge());
+            this.insert(
+                Program::cross_zone_outbox().id(),
+                Program::cross_zone_outbox(),
+            );
+            this.insert(Program::cross_zone_inbox().id(), Program::cross_zone_inbox());
             this
         };
 

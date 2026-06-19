@@ -22,5 +22,6 @@ bridge_core.workspace = true
 vault_core.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
+ping_core.workspace = true
 risc0-zkvm.workspace = true
 serde = { workspace = true, default-features = false }

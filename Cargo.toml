@@ -26,6 +26,7 @@ members = [
   "programs/vault/core",
   "programs/cross_zone_outbox/core",
   "programs/cross_zone_inbox/core",
+  "programs/ping/core",
   "lez/sequencer/core",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
@@ -84,6 +85,7 @@ bridge_core = { path = "programs/bridge/core" }
 vault_core = { path = "programs/vault/core" }
 cross_zone_outbox_core = { path = "programs/cross_zone_outbox/core" }
 cross_zone_inbox_core = { path = "programs/cross_zone_inbox/core" }
+ping_core = { path = "programs/ping/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
 keycard_wallet = { path = "lez/keycard_wallet" }
