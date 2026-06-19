@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{Commitment, account::AccountId};
+use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
@@ -16,12 +16,16 @@ impl AccountId {
     /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
     /// key and identifier.
     #[must_use]
-    pub fn for_regular_private_account(npk: &NullifierPublicKey, identifier: Identifier) -> Self {
-        // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
-        let mut bytes = [0; 80];
+    pub fn for_regular_private_account(
+        npk: &NullifierPublicKey,
+        vpk: &ViewingPublicKey,
+        identifier: Identifier,
+    ) -> Self {
+        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
-        bytes[64..80].copy_from_slice(&identifier.to_le_bytes());
+        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -32,9 +36,9 @@ impl AccountId {
     }
 }
 
-impl From<(&NullifierPublicKey, Identifier)> for AccountId {
-    fn from((npk, identifier): (&NullifierPublicKey, Identifier)) -> Self {
-        Self::for_regular_private_account(npk, identifier)
+impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
+    fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
+        Self::for_regular_private_account(npk, vpk, identifier)
     }
 }
 
@@ -158,12 +162,13 @@ mod tests {
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let npk = NullifierPublicKey::from(&nsk);
+        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
             165, 52, 40, 32, 231, 171, 113, 10, 65, 241, 156, 72, 154, 207, 122, 192, 15, 46, 50,
             253, 105, 164, 89, 84, 40, 191, 182, 119, 64, 255, 67, 142,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, 0);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -175,12 +180,13 @@ mod tests {
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let npk = NullifierPublicKey::from(&nsk);
+        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
             203, 201, 109, 245, 40, 54, 195, 12, 55, 33, 0, 86, 245, 65, 70, 156, 24, 249, 26, 95,
             56, 247, 99, 121, 165, 182, 234, 255, 19, 127, 191, 72,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, 1);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -193,12 +199,13 @@ mod tests {
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let npk = NullifierPublicKey::from(&nsk);
+        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
             178, 16, 226, 206, 217, 38, 38, 45, 155, 240, 226, 253, 168, 87, 146, 70, 72, 32, 174,
             19, 245, 25, 214, 162, 209, 135, 252, 82, 27, 2, 174, 196,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, identifier);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
 
         assert_eq!(account_id, expected_account_id);
     }
