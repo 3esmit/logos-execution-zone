@@ -17,8 +17,7 @@ fn indexer_test_run_ffi() -> Result<()> {
 
     // RUN OBSERVATION: poll until the indexer has finalized at least one block,
     // returning early instead of sleeping for the full timeout.
-    let last_block_indexer_ffi =
-        indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 1)?;
+    let last_block_indexer_ffi = indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 1)?;
 
     info!("Last block on indexer FFI now is {last_block_indexer_ffi}");
 
