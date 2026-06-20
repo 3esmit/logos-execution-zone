@@ -10775,6 +10775,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "vault_core",
  "wallet",
 ]
 
