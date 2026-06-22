@@ -93,7 +93,7 @@ clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf lez/sequencer/service/bedrock_signing_key
     rm -rf lez/sequencer/service/rocksdb
-    rm -rf lez/indexer/service/rocksdb
+    rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
-    rm -rf rocksdb
+    rm -rf rocksdb*
     cd bedrock && docker compose down -v

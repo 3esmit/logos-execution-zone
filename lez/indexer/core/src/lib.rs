@@ -24,7 +24,9 @@ pub struct IndexerCore {
 
 impl IndexerCore {
     pub fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
-        let home = storage_dir.join("rocksdb");
+        // Namespace the DB by channel so indexers on different channels can
+        // share a storage dir without their RocksDB state colliding.
+        let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(
