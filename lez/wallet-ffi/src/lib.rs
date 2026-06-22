@@ -42,6 +42,7 @@ pub use types::*;
 use crate::error::print_error;
 
 pub mod account;
+pub mod bridge;
 pub mod error;
 pub mod generic_transaction;
 pub mod keys;

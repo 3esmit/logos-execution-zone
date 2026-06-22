@@ -166,6 +166,14 @@ unsafe extern "C" {
 
     fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult);
 
+    fn wallet_ffi_bridge_withdraw(
+        handle: *mut WalletHandle,
+        from: *const FfiBytes32,
+        amount: u64,
+        bedrock_account_pk: *const FfiBytes32,
+        out_result: *mut FfiTransferResult,
+    ) -> error::WalletFfiError;
+
     fn wallet_ffi_register_public_account(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
@@ -1448,6 +1456,69 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_2_balance, 103);
 
     info!("Accounts restored");
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_bridge_withdraw() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletResult {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let bridge_account: FfiBytes32 = lee::system_bridge_account_id().into();
+    let bedrock_account_pk = FfiBytes32::from_bytes([0x42; 32]);
+    let amount = 100_u64;
+
+    let mut transfer_result = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_bridge_withdraw(
+            wallet_ffi_handle,
+            &raw const from,
+            amount,
+            &raw const bedrock_account_pk,
+            &raw mut transfer_result,
+        )
+        .unwrap();
+    }
+
+    info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let from_balance = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const from,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
+    let bridge_balance = unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const bridge_account,
+            true,
+            &raw mut out_balance,
+        )
+        .unwrap();
+        u128::from_le_bytes(out_balance)
+    };
+
+    assert_eq!(from_balance, 9900);
+    assert_eq!(bridge_balance, 1_000_100);
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
 
     Ok(())
 }
