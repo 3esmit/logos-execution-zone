@@ -1,4 +1,7 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use common::block::Block;
@@ -10,16 +13,23 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 
-use crate::{block_store::IndexerStore, config::IndexerConfig};
+use crate::{
+    block_store::IndexerStore,
+    config::IndexerConfig,
+    status::{IndexerStatus, SyncState},
+};
 
 pub mod block_store;
 pub mod config;
+pub mod status;
 
 #[derive(Clone)]
 pub struct IndexerCore {
     pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
+    /// Live ingestion status; updated by the ingest stream, read by `status`.
+    pub status: Arc<Mutex<IndexerStatus>>,
 }
 
 impl IndexerCore {
@@ -39,7 +49,29 @@ impl IndexerCore {
             zone_indexer: Arc::new(zone_indexer),
             config,
             store: IndexerStore::open_db(&home)?,
+            status: Arc::new(Mutex::new(IndexerStatus::starting())),
         })
+    }
+
+    /// Snapshot of the current ingestion status (sync state + indexed tip).
+    ///
+    /// Combines the ingest loop's live state with the L2 tip read fresh from the
+    /// store, so callers (FFI/RPC) can tell "catching up" from "failed".
+    #[must_use]
+    pub fn status(&self) -> IndexerStatus {
+        let mut snapshot = self
+            .status
+            .lock()
+            .expect("indexer status mutex poisoned")
+            .clone();
+        snapshot.indexed_block_id = self.store.get_last_block_id().ok().flatten();
+        snapshot
+    }
+
+    /// Apply a short, non-blocking update to the shared status.
+    fn set_status(&self, update: impl FnOnce(&mut IndexerStatus)) {
+        let mut status = self.status.lock().expect("indexer status mutex poisoned");
+        update(&mut status);
     }
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
@@ -62,14 +94,34 @@ impl IndexerCore {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
                     Ok(s) => s,
                     Err(err) => {
+                        // `next_messages` reads L1 consensus info internally, so
+                        // this also covers an unreachable/misconfigured L1 node.
                         error!("Failed to start zone-sdk next_messages stream: {err}");
+                        self.set_status(|s| {
+                            s.state = SyncState::Error;
+                            s.last_error = Some(format!("cannot reach L1 / read channel: {err}"));
+                        });
                         tokio::time::sleep(poll_interval).await;
                         continue;
                     }
                 };
                 let mut stream = std::pin::pin!(stream);
 
+                // Flip to Syncing on the first message of this cycle (not merely on
+                // a successful poll) so the steady-state CaughtUp status doesn't
+                // flicker. Until then the state stays Starting (cold-start scan of
+                // empty L1 history) or CaughtUp (idle).
+                let mut announced_syncing = false;
+
                 while let Some((msg, slot)) = stream.next().await {
+                    if !announced_syncing {
+                        self.set_status(|s| {
+                            s.state = SyncState::Syncing;
+                            s.last_error = None;
+                        });
+                        announced_syncing = true;
+                    }
+
                     let zone_block = match msg {
                         ZoneMessage::Block(b) => b,
                         // Non-block messages don't carry a cursor position; the
@@ -107,7 +159,8 @@ impl IndexerCore {
                     yield Ok(block);
                 }
 
-                // Stream ended (caught up to LIB). Sleep then poll again.
+                // Stream drained: caught up to LIB as of this cycle. Sleep then poll again.
+                self.set_status(|s| s.state = SyncState::CaughtUp);
                 tokio::time::sleep(poll_interval).await;
             }
         }

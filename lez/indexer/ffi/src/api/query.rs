@@ -1,3 +1,5 @@
+use std::ffi::{CString, c_char};
+
 use indexer_service_protocol::AccountId;
 
 use crate::{
@@ -83,6 +85,56 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
             LastBlockIdResult::error(OperationStatus::ClientError)
         },
         |opt| opt.map_or_else(LastBlockIdResult::none, LastBlockIdResult::some),
+    )
+}
+
+/// Query the indexer's current sync status as a JSON C-string.
+///
+/// The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
+/// `state` (`starting`/`syncing`/`caught_up`/`error`), `indexedBlockId`, and
+/// `lastError`. Lets a client distinguish "still catching up" from "something
+/// went wrong".
+///
+/// # Arguments
+///
+/// - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+///
+/// # Returns
+///
+/// A heap-allocated, null-terminated JSON string that the caller MUST free with
+/// `free_cstring`. Returns null on error (null `indexer` pointer or a
+/// serialization failure).
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn query_status(indexer: *const IndexerServiceFFI) -> *mut c_char {
+    if indexer.is_null() {
+        log::error!(
+            "Attempted to query status on a null indexer pointer. This is a bug. Aborting."
+        );
+        return std::ptr::null_mut();
+    }
+
+    let indexer = unsafe { &*indexer };
+    let status = indexer.core().status();
+
+    let json = match serde_json::to_string(&status) {
+        Ok(json) => json,
+        Err(e) => {
+            log::error!("Failed to serialize indexer status: {e}");
+            return std::ptr::null_mut();
+        }
+    };
+
+    CString::new(json).map_or_else(
+        |e| {
+            log::error!("Indexer status JSON contained an interior nul byte: {e}");
+            std::ptr::null_mut()
+        },
+        CString::into_raw,
     )
 }
 

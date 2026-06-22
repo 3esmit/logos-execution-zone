@@ -497,6 +497,31 @@ void free_cstring(char *block);
 struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexer);
 
 /**
+ * Query the indexer's current sync status as a JSON C-string.
+ *
+ * The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
+ * `state` (`starting`/`syncing`/`caught_up`/`error`), `indexedBlockId`, and
+ * `lastError`. Lets a client distinguish "still catching up" from "something
+ * went wrong".
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+ *
+ * # Returns
+ *
+ * A heap-allocated, null-terminated JSON string that the caller MUST free with
+ * `free_cstring`. Returns null on error (null `indexer` pointer or a
+ * serialization failure).
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+ */
+char *query_status(const struct IndexerServiceFFI *indexer);
+
+/**
  * Query the block by id from indexer.
  *
  * # Arguments
