@@ -19,6 +19,10 @@ pub enum Instruction {
     Emit {
         target_zone: ZoneId,
         target_program_id: ProgramId,
+        /// Accounts the destination inbox must hand to the target program's
+        /// chained call. The emitter specifies them; the watcher forwards them
+        /// verbatim so the inbox stays target-agnostic.
+        target_accounts: Vec<[u8; 32]>,
         payload: Vec<u8>,
         ordinal: u32,
     },
@@ -31,6 +35,7 @@ pub enum Instruction {
 pub struct OutboxRecord {
     pub target_zone: ZoneId,
     pub target_program_id: ProgramId,
+    pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
 }
 

@@ -20,13 +20,20 @@ fn main() {
         "Outbox is only callable through a chain call from a user program"
     );
 
-    let (target_zone, target_program_id, payload, ordinal) = match instruction {
+    let (target_zone, target_program_id, target_accounts, payload, ordinal) = match instruction {
         Instruction::Emit {
             target_zone,
             target_program_id,
+            target_accounts,
             payload,
             ordinal,
-        } => (target_zone, target_program_id, payload, ordinal),
+        } => (
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+            ordinal,
+        ),
     };
 
     let [outbox] =
@@ -42,6 +49,7 @@ fn main() {
     post_account.data = OutboxRecord {
         target_zone,
         target_program_id,
+        target_accounts,
         payload,
     }
     .to_bytes()

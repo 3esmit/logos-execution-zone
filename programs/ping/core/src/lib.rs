@@ -12,6 +12,19 @@ pub enum ReceiverInstruction {
     Record { payload: Vec<u8> },
 }
 
+/// Instruction to `ping_sender`: forwarded verbatim into `cross_zone_outbox::Instruction::Emit`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SenderInstruction {
+    Send {
+        outbox_program_id: ProgramId,
+        target_zone: [u8; 32],
+        target_program_id: ProgramId,
+        target_accounts: Vec<[u8; 32]>,
+        payload: Vec<u8>,
+        ordinal: u32,
+    },
+}
+
 /// The account a `ping_receiver` records the latest delivered payload into.
 #[must_use]
 pub fn ping_record_pda(receiver_id: ProgramId) -> AccountId {
