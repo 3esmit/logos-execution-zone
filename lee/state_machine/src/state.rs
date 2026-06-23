@@ -3193,7 +3193,7 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    vpk: to_keys.vpk(),
+                    vpk: from_keys.vpk(),
                     esk: [0; 32],
                     nsk: from_keys.nsk,
                     membership_proof: state
@@ -3202,7 +3202,7 @@ pub mod tests {
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateAuthorizedUpdate {
-                    vpk: from_keys.vpk(),
+                    vpk: to_keys.vpk(),
                     esk: [0; 32],
                     nsk: to_keys.nsk,
                     membership_proof: state
