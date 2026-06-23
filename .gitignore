@@ -8,7 +8,7 @@ data/
 .idea/
 .vscode/
 
-rocksdb
+rocksdb*
 sequencer/service/data/
 storage.json
 
