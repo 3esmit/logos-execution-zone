@@ -8,4 +8,4 @@ services:
     environment:
       INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8779}
     ports:
-      - "8081:8080"
+      - "8080:8080"
