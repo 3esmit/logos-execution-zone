@@ -7,17 +7,16 @@ use crate::Runtime;
 
 /// FFI-owned indexer.
 ///
-/// Has three fields behind `c_void` (so that cbindgen never needs to see their Rust layout):
 /// - An [`IndexerCore`] used to answer queries
 /// - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
 ///   store stays populated)
-/// - The [`Runtime`] they run on. It owns the underlying tokio runtime when we created it (and
-///   drops it on teardown) and merely borrows it when the caller supplied one.
+/// - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
+///   already FFI-safe.
 #[repr(C)]
 pub struct IndexerServiceFFI {
     core: *mut c_void,
     ingest_handle: *mut c_void,
-    runtime: *mut c_void,
+    runtime: Runtime,
 }
 
 impl IndexerServiceFFI {
@@ -26,7 +25,7 @@ impl IndexerServiceFFI {
         Self {
             core: Box::into_raw(Box::new(core)).cast::<c_void>(),
             ingest_handle: Box::into_raw(Box::new(ingest_handle)).cast::<c_void>(),
-            runtime: Box::into_raw(Box::new(runtime)).cast::<c_void>(),
+            runtime,
         }
     }
 
@@ -44,38 +43,24 @@ impl IndexerServiceFFI {
     /// Borrow the runtime to `block_on` an async store query.
     #[must_use]
     pub const fn runtime(&self) -> &Runtime {
-        unsafe {
-            self.runtime
-                .cast::<Runtime>()
-                .as_ref()
-                .expect("Runtime must be a non-null pointer")
-        }
+        &self.runtime
     }
 }
 
-// Implement Drop to stop ingestion and free the boxed resources.
 impl Drop for IndexerServiceFFI {
     fn drop(&mut self) {
-        let Self {
-            core,
-            ingest_handle,
-            runtime,
-        } = self;
-
-        if !ingest_handle.is_null() {
-            // Stop the background ingestion task before tearing down the core.
-            let handle = unsafe { Box::from_raw(ingest_handle.cast::<JoinHandle<()>>()) };
+        if !self.ingest_handle.is_null() {
+            let handle = unsafe { Box::from_raw(self.ingest_handle.cast::<JoinHandle<()>>()) };
+            // stop the background ingestion task before tearing down the core.
             handle.abort();
             drop(handle);
         }
-        if !core.is_null() {
-            drop(unsafe { Box::from_raw(core.cast::<IndexerCore>()) });
+        if !self.core.is_null() {
+            drop(unsafe { Box::from_raw(self.core.cast::<IndexerCore>()) });
         }
-        // Dropping the `Runtime` shuts down the tokio runtime only if we own it
-        // (a borrowed one is left for its external owner). Done last, and from
-        // the consumer thread, so it never drops from within a runtime worker.
-        if !runtime.is_null() {
-            drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
-        }
+
+        // `runtime` field is dropped automatically on return here:
+        // - if runtime was owned, it is shutdown at this point
+        // - if it was borrowed, it continues to live within the external owner
     }
 }

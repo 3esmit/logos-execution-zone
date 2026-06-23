@@ -24,35 +24,6 @@ typedef enum FfiBedrockStatus {
   Finalized,
 } FfiBedrockStatus;
 
-/**
- * FFI-owned indexer.
- *
- * Has three fields behind `c_void` (so that cbindgen never needs to see their Rust layout):
- * - An [`IndexerCore`] used to answer queries
- * - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
- *   store stays populated)
- * - The [`Runtime`] they run on. It owns the underlying tokio runtime when we created it (and
- *   drops it on teardown) and merely borrows it when the caller supplied one.
- */
-typedef struct IndexerServiceFFI {
-  void *core;
-  void *ingest_handle;
-  void *runtime;
-} IndexerServiceFFI;
-
-/**
- * Simple wrapper around a pointer to a value or an error.
- *
- * Pointer is not guaranteed. You should check the error field before
- * dereferencing the pointer.
- */
-typedef struct PointerResult_IndexerServiceFFI__OperationStatus {
-  struct IndexerServiceFFI *value;
-  enum OperationStatus error;
-} PointerResult_IndexerServiceFFI__OperationStatus;
-
-typedef struct PointerResult_IndexerServiceFFI__OperationStatus InitializedIndexerServiceFFIResult;
-
 typedef enum PointerKind_Tag {
   Owned,
   Borrowed,
@@ -81,6 +52,34 @@ typedef struct Pointer_Runtime {
 typedef struct Runtime {
   struct Pointer_Runtime inner;
 } Runtime;
+
+/**
+ * FFI-owned indexer.
+ *
+ * - An [`IndexerCore`] used to answer queries
+ * - The background task [`JoinHandle`] that drives ingestion (consuming the block stream so the
+ *   store stays populated)
+ * - The [`Runtime`] used to run async queries against the store (either owned or borrowed),
+ *   already FFI-safe.
+ */
+typedef struct IndexerServiceFFI {
+  void *core;
+  void *ingest_handle;
+  struct Runtime runtime;
+} IndexerServiceFFI;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_IndexerServiceFFI__OperationStatus {
+  struct IndexerServiceFFI *value;
+  enum OperationStatus error;
+} PointerResult_IndexerServiceFFI__OperationStatus;
+
+typedef struct PointerResult_IndexerServiceFFI__OperationStatus InitializedIndexerServiceFFIResult;
 
 /**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
