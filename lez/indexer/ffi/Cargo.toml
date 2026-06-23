@@ -7,15 +7,12 @@ version = "0.1.0"
 [dependencies]
 lee.workspace = true
 indexer_core.workspace = true
-# `convert` brings in the LEE <-> protocol `From`/`TryFrom` impls the query
-# marshalling relies on (previously pulled in transitively via `indexer_service`).
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 
 env_logger.workspace = true
 log = { workspace = true }
 tokio = { features = ["rt-multi-thread"], workspace = true }
 futures.workspace = true
-# Serializes the indexer status snapshot to JSON for `query_status`.
 serde_json.workspace = true
 
 [build-dependencies]

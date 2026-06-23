@@ -407,6 +407,10 @@ typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiTransaction_____OperationStatus;
 
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+
 /**
  * Creates and starts an indexer based on the provided
  * configuration file path.
@@ -804,3 +808,7 @@ void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 bool is_ok(const enum OperationStatus *self);
 
 bool is_error(const enum OperationStatus *self);
+
+#ifdef __cplusplus
+}  // extern "C"
+#endif  // __cplusplus
