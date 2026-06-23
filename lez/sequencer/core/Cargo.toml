@@ -18,6 +18,8 @@ testnet_initial_state.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
+cross_zone_inbox_core = { workspace = true, features = ["host"] }
+ping_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true

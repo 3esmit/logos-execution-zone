@@ -36,13 +36,13 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let channel_b = config::bedrock_channel_id_b();
 
     // Empty genesis is enough: the clock transaction drives block production.
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a)
+    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
     let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a)
         .await
         .context("Failed to set up zone A indexer")?;
-    let (seq_b, _seq_b_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_b)
+    let (seq_b, _seq_b_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_b, None)
         .await
         .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b)

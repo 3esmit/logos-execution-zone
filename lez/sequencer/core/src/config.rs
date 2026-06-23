@@ -10,6 +10,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 use humantime_serde;
 use lee::AccountId;
+use lee_core::program::ProgramId;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -25,6 +26,22 @@ pub enum GenesisAction {
     SupplyBridgeAccount {
         balance: u128,
     },
+}
+
+/// A peer zone whose outbox this zone watches for inbound cross-zone messages.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CrossZonePeer {
+    /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
+    pub channel_id: [u8; 32],
+    /// Programs on this zone a message from this peer is allowed to target.
+    pub allowed_targets: Vec<ProgramId>,
+}
+
+/// Cross-zone watcher configuration: the peers this zone reads from Bedrock and,
+/// per peer, the local programs they may deliver to. `None` disables the watcher.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CrossZoneConfig {
+    pub peers: Vec<CrossZonePeer>,
 }
 
 // TODO: Provide default values
@@ -53,6 +70,9 @@ pub struct SequencerConfig {
     /// Genesis configuration.
     #[serde(default)]
     pub genesis: Vec<GenesisAction>,
+    /// Cross-zone messaging configuration. `None` disables the watcher.
+    #[serde(default)]
+    pub cross_zone: Option<CrossZoneConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

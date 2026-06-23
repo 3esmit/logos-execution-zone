@@ -6,7 +6,7 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::KeyChain;
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use sequencer_core::config::{BedrockConfig, GenesisAction, SequencerConfig};
+use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
 use wallet::config::WalletConfig;
 
@@ -68,6 +68,7 @@ pub fn sequencer_config(
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
     channel_id: ChannelId,
+    cross_zone: Option<CrossZoneConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -91,6 +92,7 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
+        cross_zone,
     })
 }
 

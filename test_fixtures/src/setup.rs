@@ -116,6 +116,7 @@ pub async fn setup_sequencer(
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
     channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -131,6 +132,7 @@ pub async fn setup_sequencer(
         bedrock_addr,
         genesis_transactions,
         channel_id,
+        cross_zone,
     )
     .context("Failed to create Sequencer config")?;
 

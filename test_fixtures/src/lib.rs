@@ -344,6 +344,7 @@ impl TestContextBuilder {
             bedrock_addr,
             genesis,
             config::bedrock_channel_id(),
+            None,
         )
         .await
         .context("Failed to setup Sequencer")?;

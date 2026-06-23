@@ -199,6 +199,8 @@ impl V03State {
         this.insert_program(Program::bridge());
         this.insert_program(Program::cross_zone_outbox());
         this.insert_program(Program::cross_zone_inbox());
+        this.insert_program(Program::ping_sender());
+        this.insert_program(Program::ping_receiver());
 
         this
     }
@@ -373,6 +375,13 @@ impl V03State {
                 ..Account::default()
             },
         );
+    }
+
+    /// Inserts an account directly into genesis state, bypassing execution.
+    /// Genesis-only: used to seed configuration accounts that are not produced by
+    /// any transaction. Must never be reachable from transaction processing.
+    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
+        self.public_state.insert(account_id, account);
     }
 }
 
@@ -716,6 +725,8 @@ pub mod tests {
                 Program::cross_zone_outbox(),
             );
             this.insert(Program::cross_zone_inbox().id(), Program::cross_zone_inbox());
+            this.insert(Program::ping_sender().id(), Program::ping_sender());
+            this.insert(Program::ping_receiver().id(), Program::ping_receiver());
             this
         };
 

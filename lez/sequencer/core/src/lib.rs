@@ -31,6 +31,7 @@ use crate::{
 pub mod block_publisher;
 pub mod block_store;
 pub mod config;
+pub mod cross_zone_watcher;
 
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -156,6 +157,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .publish_block(&genesis_block, vec![])
                 .await
                 .expect("Failed to publish genesis block");
+        }
+
+        // Cross-zone messaging: start a watcher per configured peer. The inbox
+        // config account is seeded into genesis state in `build_genesis_state`.
+        if let Some(cross_zone) = &config.cross_zone {
+            cross_zone_watcher::spawn_watchers(
+                &config.bedrock_config,
+                cross_zone,
+                config.block_create_timeout,
+                mempool_handle.clone(),
+            );
         }
 
         let sequencer_core = Self {
@@ -609,6 +621,15 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         .map(LeeTransaction::Public)
         .collect();
 
+    // Seed this zone's cross-zone inbox config so the inbox guest can authorize
+    // inbound peer messages (zone-specific config, not produced by any tx).
+    if let Some(cross_zone) = &config.cross_zone {
+        let self_zone = *config.bedrock_config.channel_id.as_ref();
+        let (config_id, config_account) =
+            cross_zone_watcher::inbox_config_account(self_zone, cross_zone);
+        state.insert_genesis_account(config_id, config_account);
+    }
+
     (state, genesis_txs)
 }
 
@@ -868,6 +889,7 @@ mod tests {
             },
             retry_pending_blocks_timeout: Duration::from_mins(4),
             genesis: vec![],
+            cross_zone: None,
         }
     }
 
