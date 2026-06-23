@@ -678,6 +678,81 @@ mod tests {
         );
     }
 
+    /// Positive test to ensure that generating a cipher with
+    /// a viewing key allows to decrypt with it.
+    #[test]
+    fn circuit_note_is_decryptable_by_bound_viewing_key() {
+        let program = Program::authenticated_transfer_program();
+        let keys = test_private_account_keys_1();
+        let identifier: u128 = 99;
+        let account_id =
+            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+        let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+        let (output, _) = execute_and_prove(
+            vec![pre],
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Initialize)
+                .unwrap(),
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                vpk: keys.vpk(),
+                esk: [0; 32],
+                nsk: keys.nsk,
+                identifier,
+            }],
+            &program.into(),
+        )
+        .unwrap();
+
+        let note = &output.encrypted_private_post_states[0];
+        let shared_secret = SharedSecretKey::decapsulate(&note.epk, &keys.d, &keys.z)
+            .expect("Bound viewing key must decapsulate the in-circuit epk.");
+        let (kind, account) = EncryptionScheme::decrypt(
+            &note.ciphertext,
+            &shared_secret,
+            &output.new_commitments[0],
+            0,
+        )
+        .expect("Note must decrypt using the shared secret.");
+
+        assert_eq!(kind, PrivateAccountKind::Regular(identifier));
+        assert_eq!(
+            Commitment::new(&account_id, &account),
+            output.new_commitments[0]
+        );
+    }
+
+    /// If the viewing keys supplied for initialization differ to the ones
+    /// used for generating account ids for pre-states, the PPC will catch
+    /// the mismatch.
+    #[test]
+    fn circuit_rejects_note_bound_to_foreign_viewing_key() {
+        let program = Program::authenticated_transfer_program();
+        let keys = test_private_account_keys_1();
+        let foreign_keys = test_private_account_keys_2();
+        let identifier: u128 = 99;
+        // create an account id with one set of viewing keys
+        let account_id =
+            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+        let pre = AccountWithMetadata::new(Account::default(), true, account_id);
+
+        let result = execute_and_prove(
+            vec![pre],
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Initialize)
+                .unwrap(),
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                // use a different vpk
+                vpk: foreign_keys.vpk(),
+                esk: [0; 32],
+                // but the same nsk
+                nsk: keys.nsk,
+                identifier,
+            }],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    }
+
     /// `PrivateUnauthorized` with a non-default identifier produces a ciphertext that decrypts
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
