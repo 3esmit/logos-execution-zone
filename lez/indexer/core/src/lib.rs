@@ -124,7 +124,13 @@ impl IndexerCore {
                     // no longer requires it. Zone-sdk handles L1 tracking internally.
                     let placeholder_l1_header = HeaderId::from([0_u8; 32]);
                     if let Err(err) = self.store.put_block(block.clone(), placeholder_l1_header).await {
-                        error!("Failed to store block {}: {err:#}", block.header.block_id);
+                        // Do not advance the cursor past a block we failed to
+                        // apply: halt ingestion instead of silently desyncing.
+                        error!(
+                            "Failed to store block {}: {err:#}. Halting indexer ingestion.",
+                            block.header.block_id
+                        );
+                        return;
                     }
 
                     cursor = Some(slot);
