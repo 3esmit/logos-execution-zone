@@ -963,8 +963,8 @@ mod tests {
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let identifier: Identifier = u128::MAX;
         let expected = AccountId::new([
-            59, 239, 182, 97, 14, 220, 96, 115, 238, 133, 143, 33, 234, 82, 237, 255, 148, 110, 54,
-            124, 98, 159, 245, 101, 146, 182, 150, 54, 37, 62, 25, 17,
+            5, 87, 128, 244, 206, 244, 65, 130, 178, 88, 225, 183, 0, 159, 201, 201, 212, 206, 6,
+            156, 13, 55, 32, 139, 91, 222, 209, 83, 172, 148, 123, 179,
         ]);
         assert_eq!(
             AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),

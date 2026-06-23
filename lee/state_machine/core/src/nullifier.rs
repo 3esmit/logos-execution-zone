@@ -164,8 +164,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            165, 52, 40, 32, 231, 171, 113, 10, 65, 241, 156, 72, 154, 207, 122, 192, 15, 46, 50,
-            253, 105, 164, 89, 84, 40, 191, 182, 119, 64, 255, 67, 142,
+            242, 239, 57, 244, 89, 109, 65, 201, 223, 100, 43, 87, 205, 83, 148, 161, 176, 22, 208,
+            220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
@@ -182,8 +182,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            203, 201, 109, 245, 40, 54, 195, 12, 55, 33, 0, 86, 245, 65, 70, 156, 24, 249, 26, 95,
-            56, 247, 99, 121, 165, 182, 234, 255, 19, 127, 191, 72,
+            149, 125, 157, 109, 119, 81, 9, 163, 231, 181, 214, 43, 57, 113, 221, 72, 180, 149,
+            189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
@@ -201,8 +201,8 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let expected_account_id = AccountId::new([
-            178, 16, 226, 206, 217, 38, 38, 45, 155, 240, 226, 253, 168, 87, 146, 70, 72, 32, 174,
-            19, 245, 25, 214, 162, 209, 135, 252, 82, 27, 2, 174, 196,
+            30, 232, 222, 201, 233, 125, 124, 194, 58, 39, 121, 96, 185, 84, 168, 109, 80, 111,
+            159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
         ]);
 
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
