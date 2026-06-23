@@ -58,11 +58,11 @@ impl IndexerSyncStatus {
     }
 }
 
-/// Full status snapshot returned to callers (FFI/RPC): the live [`SyncStatus`]
+/// Full status snapshot returned to callers (FFI/RPC): the live [`IndexerSyncStatus`]
 /// plus the L2 tip (`indexed_block_id`) read fresh from the store at query time.
 ///
 /// The tip is tracked by the store, not the ingest loop, so it lives here on the
-/// returned snapshot rather than inside the shared [`SyncStatus`].
+/// returned snapshot rather than inside the shared [`IndexerSyncStatus`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexerStatus {
