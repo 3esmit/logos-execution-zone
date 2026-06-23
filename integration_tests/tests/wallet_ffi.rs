@@ -199,6 +199,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         mnemonic: *const c_char,
         password: *const c_char,
+        depth: u32,
     ) -> error::WalletFfiError;
 
     fn wallet_ffi_resolve_public_account(
@@ -1396,7 +1397,8 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_2_balance, 103);
 
     unsafe {
-        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), password.as_ptr()).unwrap();
+        wallet_ffi_restore_data(wallet_ffi_handle, mnemonic.as_ptr(), password.as_ptr(), 5)
+            .unwrap();
     }
 
     // Sync private account local storage with onchain encrypted state
