@@ -16,6 +16,7 @@ storage.workspace = true
 testnet_initial_state.workspace = true
 
 anyhow.workspace = true
+arc-swap.workspace = true
 log.workspace = true
 serde.workspace = true
 humantime-serde.workspace = true

@@ -1,9 +1,7 @@
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use common::block::Block;
 // ToDo: Remove after testnet
 use futures::StreamExt as _;
@@ -16,7 +14,7 @@ use logos_blockchain_zone_sdk::{
 use crate::{
     block_store::IndexerStore,
     config::IndexerConfig,
-    status::{IndexerStatus, SyncState},
+    status::{IndexerStatus, IndexerSyncStatus},
 };
 
 pub mod block_store;
@@ -29,7 +27,7 @@ pub struct IndexerCore {
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
-    pub status: Arc<Mutex<IndexerStatus>>,
+    pub status: Arc<ArcSwap<IndexerSyncStatus>>,
 }
 
 impl IndexerCore {
@@ -49,29 +47,27 @@ impl IndexerCore {
             zone_indexer: Arc::new(zone_indexer),
             config,
             store: IndexerStore::open_db(&home)?,
-            status: Arc::new(Mutex::new(IndexerStatus::starting())),
+            status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
         })
     }
 
     /// Snapshot of the current ingestion status (sync state + indexed tip).
     ///
-    /// Combines the ingest loop's live state with the L2 tip read fresh from the
+    /// Combines the ingest loop's live status with the L2 tip read fresh from the
     /// store, so callers (FFI/RPC) can tell "catching up" from "failed".
     #[must_use]
     pub fn status(&self) -> IndexerStatus {
-        let mut snapshot = self
-            .status
-            .lock()
-            .expect("indexer status mutex poisoned")
-            .clone();
-        snapshot.indexed_block_id = self.store.get_last_block_id().ok().flatten();
-        snapshot
+        let sync = IndexerSyncStatus::clone(&self.status.load());
+        let indexed_block_id = self.store.get_last_block_id().ok().flatten();
+        IndexerStatus {
+            sync,
+            indexed_block_id,
+        }
     }
 
-    /// Apply a short, non-blocking update to the shared status.
-    fn set_status(&self, update: impl FnOnce(&mut IndexerStatus)) {
-        let mut status = self.status.lock().expect("indexer status mutex poisoned");
-        update(&mut status);
+    /// Atomically publish a new ingestion status for readers of `status`.
+    fn set_status(&self, status: IndexerSyncStatus) {
+        self.status.store(Arc::new(status));
     }
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
@@ -97,10 +93,9 @@ impl IndexerCore {
                         // `next_messages` reads L1 consensus info internally, so
                         // this also covers an unreachable/misconfigured L1 node.
                         error!("Failed to start zone-sdk next_messages stream: {err}");
-                        self.set_status(|s| {
-                            s.state = SyncState::Error;
-                            s.last_error = Some(format!("cannot reach L1 / read channel: {err}"));
-                        });
+                        self.set_status(IndexerSyncStatus::error(format!(
+                            "cannot reach L1 / read channel: {err}"
+                        )));
                         tokio::time::sleep(poll_interval).await;
                         continue;
                     }
@@ -115,10 +110,7 @@ impl IndexerCore {
 
                 while let Some((msg, slot)) = stream.next().await {
                     if !announced_syncing {
-                        self.set_status(|s| {
-                            s.state = SyncState::Syncing;
-                            s.last_error = None;
-                        });
+                        self.set_status(IndexerSyncStatus::syncing());
                         announced_syncing = true;
                     }
 
@@ -159,8 +151,11 @@ impl IndexerCore {
                     yield Ok(block);
                 }
 
-                // Stream drained: caught up to LIB as of this cycle. Sleep then poll again.
-                self.set_status(|s| s.state = SyncState::CaughtUp);
+                // Stream drained: caught up to LIB as of this cycle. Clears any
+                // prior error (e.g. a transient L1 disconnect that left no
+                // backlog, so the `Syncing` branch above never ran). Sleep then
+                // poll again.
+                self.set_status(IndexerSyncStatus::caught_up());
                 tokio::time::sleep(poll_interval).await;
             }
         }
