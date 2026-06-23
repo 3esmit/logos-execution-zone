@@ -10765,6 +10765,7 @@ dependencies = [
 name = "wallet-ffi"
 version = "0.1.0"
 dependencies = [
+ "bip39",
  "cbindgen",
  "common",
  "key_protocol",

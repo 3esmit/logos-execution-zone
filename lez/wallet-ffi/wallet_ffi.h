@@ -299,13 +299,13 @@ typedef struct FfiPublicAccountKey {
   struct FfiBytes32 public_key;
 } FfiPublicAccountKey;
 
-typedef struct FfiCreateWalletResult {
+typedef struct FfiCreateWalletOutput {
   struct WalletHandle *wallet;
   /**
    * C compatible(null terminated) string.
    */
-  const char **mnemonic;
-} FfiCreateWalletResult;
+  char *mnemonic;
+} FfiCreateWalletOutput;
 
 /**
  * Create a new public account.
@@ -1387,7 +1387,7 @@ void wallet_ffi_free_transfer_result(struct FfiTransferResult *result);
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
  */
-struct FfiCreateWalletResult wallet_ffi_create_new(const char *config_path,
+struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
                                                    const char *password);
 
@@ -1444,8 +1444,9 @@ enum WalletFfiError wallet_ffi_save(struct WalletHandle *handle);
  *
  * # Parameters
  * - `handle`: Valid wallet handle
- * - `mnemonic`: Valid pointer to instance of `FfiMnemonic`, provided by `wallet_ffi_create_new`
+ * - `mnemonic`: Valid pointer to instance of `* char`, provided by `wallet_ffi_create_new`
  * - `password`: Valid pointer to C string.
+ * - `depth`: Depth of a reconstructed tree
  *
  * # Returns
  * - `Success` on successful restoration
@@ -1453,13 +1454,15 @@ enum WalletFfiError wallet_ffi_save(struct WalletHandle *handle);
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `mnemonic` must be a valid pointer to instance of `FfiMnemonic`, provided by
+ * - `mnemonic` must be a valid pointer to instance of `* char`, provided by
  *   `wallet_ffi_create_new`
  * - `password` must be a valid pointer to C string.
+ * - `depth` parameter induces exponential growth in execution time, be aware of it.
  */
 enum WalletFfiError wallet_ffi_restore_data(struct WalletHandle *handle,
                                             const char *mnemonic,
-                                            const char *password);
+                                            const char *password,
+                                            uint32_t depth);
 
 /**
  * Get the sequencer address from the wallet configuration.

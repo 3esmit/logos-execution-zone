@@ -199,8 +199,8 @@ impl WalletCore {
     }
 
     /// Restore storage from an existing mnemonic phrase.
-    pub fn restore_storage(&mut self, mnemonic: &str, password: &str) -> Result<()> {
-        self.storage.restore(&Mnemonic::parse(mnemonic)?, password)
+    pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
+        self.storage.restore(mnemonic, password)
     }
 
     /// Store persistent data at home.
@@ -875,10 +875,7 @@ impl WalletCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        ffi::{CStr, CString},
-        str::FromStr as _,
-    };
+    use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
 
@@ -888,14 +885,9 @@ mod tests {
             Mnemonic::from_entropy(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).unwrap();
 
         let c_mnemonic_string = CString::new(mnemonic.to_string()).unwrap();
-
-        let boxed_mnemonic_string = Box::new(c_mnemonic_string.as_ptr());
-        let raw_mnemonic_string_pointer = Box::into_raw(boxed_mnemonic_string);
-
+        let c_mnemonic_string_raw = c_mnemonic_string.into_raw();
         // Safety: Will be safe, pointer is created from CString
-        let c_str_pointer = unsafe { *raw_mnemonic_string_pointer };
-        // Safety: Will be safe, pointer is created from CString
-        let c_str = unsafe { CStr::from_ptr(c_str_pointer) };
+        let c_str = unsafe { CString::from_raw(c_mnemonic_string_raw) };
         let mn_string = c_str.to_str().unwrap();
 
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
