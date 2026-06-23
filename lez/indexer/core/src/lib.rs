@@ -10,16 +10,20 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 
-use crate::{block_store::IndexerStore, config::IndexerConfig};
+use crate::{
+    block_store::IndexerStore, config::IndexerConfig, cross_zone_verifier::CrossZoneVerifier,
+};
 
 pub mod block_store;
 pub mod config;
+pub mod cross_zone_verifier;
 
 #[derive(Clone)]
 pub struct IndexerCore {
     pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
+    verifier: Option<CrossZoneVerifier>,
 }
 
 impl IndexerCore {
@@ -33,10 +37,22 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node);
 
+        // Seed the inbox config so the indexer can replay cross-zone dispatch
+        // transactions, matching the account the sequencer seeds at genesis.
+        let inbox_config_seed = config.cross_zone.as_ref().map(|cross_zone| {
+            let self_zone: [u8; 32] = *config.channel_id.as_ref();
+            cross_zone_inbox_core::build_inbox_config_account(self_zone, cross_zone)
+        });
+
+        // Option B verifier: re-derives each cross-zone dispatch from the peer's
+        // finalized blocks. `None` when cross-zone messaging is disabled.
+        let verifier = CrossZoneVerifier::start(&config);
+
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
             config,
-            store: IndexerStore::open_db(&home)?,
+            store: IndexerStore::open_db(&home, inbox_config_seed)?,
+            verifier,
         })
     }
 
@@ -90,6 +106,19 @@ impl IndexerCore {
                     };
 
                     info!("Indexed L2 block {}", block.header.block_id);
+
+                    // Option B: re-derive and verify every cross-zone dispatch
+                    // before applying the block. A forged or replayed dispatch
+                    // halts ingestion rather than persisting an invalid state.
+                    if let Some(verifier) = &self.verifier {
+                        if let Err(err) = verifier.verify_block(&block).await {
+                            error!(
+                                "Cross-zone verification failed for block {}: {err:#}. Halting indexer ingestion.",
+                                block.header.block_id
+                            );
+                            return;
+                        }
+                    }
 
                     // TODO: Remove l1_header placeholder once storage layer
                     // no longer requires it. Zone-sdk handles L1 tracking internally.

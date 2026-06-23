@@ -7,6 +7,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
+use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
 pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,9 @@ pub struct IndexerConfig {
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
+    /// Cross-zone configuration. `None` disables the indexer's cross-zone handling.
+    #[serde(default)]
+    pub cross_zone: Option<CrossZoneConfig>,
 }
 
 impl IndexerConfig {

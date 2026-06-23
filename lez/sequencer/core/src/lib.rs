@@ -626,7 +626,7 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     if let Some(cross_zone) = &config.cross_zone {
         let self_zone = *config.bedrock_config.channel_id.as_ref();
         let (config_id, config_account) =
-            cross_zone_watcher::inbox_config_account(self_zone, cross_zone);
+            cross_zone_inbox_core::build_inbox_config_account(self_zone, cross_zone);
         state.insert_genesis_account(config_id, config_account);
     }
 

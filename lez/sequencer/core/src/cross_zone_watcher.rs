@@ -1,12 +1,10 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::time::Duration;
 
 use common::{block::Block, transaction::LeeTransaction};
-use cross_zone_inbox_core::{
-    CrossZoneMessage, InboxConfig, build_inbox_dispatch_tx, inbox_config_account_id,
-};
+use cross_zone_inbox_core::build_dispatch_from_emission;
 use futures::StreamExt as _;
-use lee::{AccountId, program::Program};
-use lee_core::{account::Account, program::ProgramId};
+use lee::program::Program;
+use lee_core::program::ProgramId;
 use log::{error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -19,35 +17,6 @@ use crate::{
     TransactionOrigin,
     config::{BedrockConfig, CrossZoneConfig},
 };
-
-/// The inbox config account this zone seeds at startup so the inbox guest can
-/// authorize inbound peer messages. The config is zone-specific (self zone plus
-/// per-peer target allowlists), so it cannot live in the shared genesis state.
-#[must_use]
-pub fn inbox_config_account(self_zone: [u8; 32], cross_zone: &CrossZoneConfig) -> (AccountId, Account) {
-    let inbox_id = Program::cross_zone_inbox().id();
-
-    let mut allowed_targets = BTreeMap::new();
-    for peer in &cross_zone.peers {
-        allowed_targets.insert(peer.channel_id, peer.allowed_targets.clone());
-    }
-    let config = InboxConfig {
-        self_zone,
-        allowed_peers: BTreeMap::new(),
-        allowed_targets,
-    };
-
-    let account = Account {
-        program_owner: inbox_id,
-        balance: 0,
-        data: config
-            .to_bytes()
-            .try_into()
-            .expect("inbox config fits in account data"),
-        nonce: 0_u128.into(),
-    };
-    (inbox_config_account_id(inbox_id), account)
-}
 
 /// Spawns one watcher task per configured peer. Each task reads the peer's
 /// finalized blocks from Bedrock, recognizes outbound messages addressed to this
@@ -188,17 +157,16 @@ async fn deliver_block(
             continue;
         }
 
-        let cross_zone_message = CrossZoneMessage {
-            src_zone: peer_zone,
-            src_block_id: block.header.block_id,
-            src_tx_index: u32::try_from(index).unwrap_or(u32::MAX),
-            src_program_id: emitter_id,
+        let dispatch = build_dispatch_from_emission(
+            inbox_id,
+            peer_zone,
+            block.header.block_id,
+            u32::try_from(index).unwrap_or(u32::MAX),
+            emitter_id,
             target_program_id,
+            &target_accounts,
             payload,
-            l1_inclusion_witness: None,
-        };
-        let target_ids: Vec<AccountId> = target_accounts.into_iter().map(AccountId::new).collect();
-        let dispatch = build_inbox_dispatch_tx(inbox_id, &cross_zone_message, target_ids);
+        );
 
         match mempool_handle
             .push((TransactionOrigin::Sequencer, LeeTransaction::Public(dispatch)))

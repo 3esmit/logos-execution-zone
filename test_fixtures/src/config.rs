@@ -170,6 +170,7 @@ pub fn indexer_config(
     bedrock_addr: SocketAddr,
     home: PathBuf,
     channel_id: ChannelId,
+    cross_zone: Option<CrossZoneConfig>,
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         home,
@@ -180,6 +181,7 @@ pub fn indexer_config(
             auth: None,
         },
         channel_id,
+        cross_zone,
     })
 }
 

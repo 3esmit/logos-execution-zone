@@ -61,6 +61,7 @@ pub fn setup_indexer_ffi(
         bedrock_addr,
         temp_indexer_dir.path().to_owned(),
         integration_tests::config::bedrock_channel_id(),
+        None,
     )
     .context("Failed to create Indexer config")?;
 

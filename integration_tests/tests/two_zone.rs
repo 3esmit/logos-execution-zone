@@ -39,13 +39,13 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a)
+    let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
         .await
         .context("Failed to set up zone A indexer")?;
     let (seq_b, _seq_b_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_b, None)
         .await
         .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b)
+    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, None)
         .await
         .context("Failed to set up zone B indexer")?;
 

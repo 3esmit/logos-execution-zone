@@ -23,6 +23,23 @@ const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00000/";
 const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/00/";
 
+/// A peer zone whose outbox a zone watches for inbound cross-zone messages.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CrossZonePeer {
+    /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
+    pub channel_id: ZoneId,
+    /// Programs on the local zone a message from this peer is allowed to target.
+    pub allowed_targets: Vec<ProgramId>,
+}
+
+/// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
+/// (verifier): the peers it reads from Bedrock and, per peer, the local programs
+/// they may deliver to.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CrossZoneConfig {
+    pub peers: Vec<CrossZonePeer>,
+}
+
 /// A finalized outbound message observed on a peer zone, addressed to a program
 /// on this zone. The watcher fills it from the peer's block; it is never
 /// self-reported by a user.
@@ -181,6 +198,67 @@ pub fn build_inbox_dispatch_tx(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+/// Builds the dispatch transaction for one peer emission. Both the sequencer's
+/// watcher and the indexer's verifier go through this so their transactions are
+/// byte-identical for the same emission (the basis of the Option B check).
+#[cfg(feature = "host")]
+#[must_use]
+pub fn build_dispatch_from_emission(
+    inbox_id: ProgramId,
+    src_zone: ZoneId,
+    src_block_id: u64,
+    src_tx_index: u32,
+    src_program_id: ProgramId,
+    target_program_id: ProgramId,
+    target_accounts: &[[u8; 32]],
+    payload: Vec<u8>,
+) -> lee::PublicTransaction {
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_tx_index,
+        src_program_id,
+        target_program_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+    let target_ids = target_accounts.iter().copied().map(AccountId::new).collect();
+    build_inbox_dispatch_tx(inbox_id, &msg, target_ids)
+}
+
+/// Builds the inbox config account a zone seeds into genesis state so the inbox
+/// guest can authorize inbound peer messages. The sequencer and indexer seed the
+/// same account from the same config, keeping their replayed state consistent.
+#[cfg(feature = "host")]
+#[must_use]
+pub fn build_inbox_config_account(
+    self_zone: ZoneId,
+    cross_zone: &CrossZoneConfig,
+) -> (AccountId, lee_core::account::Account) {
+    let inbox_id = lee::program::Program::cross_zone_inbox().id();
+
+    let mut allowed_targets = BTreeMap::new();
+    for peer in &cross_zone.peers {
+        allowed_targets.insert(peer.channel_id, peer.allowed_targets.clone());
+    }
+    let config = InboxConfig {
+        self_zone,
+        allowed_peers: BTreeMap::new(),
+        allowed_targets,
+    };
+
+    let account = lee_core::account::Account {
+        program_owner: inbox_id,
+        balance: 0,
+        data: config
+            .to_bytes()
+            .try_into()
+            .expect("inbox config fits in account data"),
+        nonce: 0_u128.into(),
+    };
+    (inbox_config_account_id(inbox_id), account)
 }
 
 #[cfg(test)]

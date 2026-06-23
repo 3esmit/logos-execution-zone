@@ -22,8 +22,13 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path) -> Result<Self> {
-        let initial_state = testnet_initial_state::initial_state();
+    pub fn open_db(location: &Path, genesis_seed: Option<(AccountId, Account)>) -> Result<Self> {
+        let mut initial_state = testnet_initial_state::initial_state();
+        // Seed any zone-specific genesis accounts (e.g. the cross-zone inbox
+        // config) so the indexer's replayed state matches the sequencer's.
+        if let Some((account_id, account)) = genesis_seed {
+            initial_state.insert_genesis_account(account_id, account);
+        }
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;
@@ -215,7 +220,7 @@ mod tests {
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
 
         let final_id = storage.get_last_block_id().unwrap();
 
@@ -226,7 +231,7 @@ mod tests {
     async fn state_transition() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -278,7 +283,7 @@ mod tests {
     async fn account_state_at_block() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
 
         let mut prev_hash = None;
 
