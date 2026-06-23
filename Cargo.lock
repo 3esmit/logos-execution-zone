@@ -3799,6 +3799,7 @@ name = "indexer_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arc-swap",
  "async-stream",
  "authenticated_transfer_core",
  "borsh",
@@ -3823,16 +3824,15 @@ dependencies = [
 name = "indexer_ffi"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "cbindgen",
- "indexer_service",
+ "env_logger",
+ "futures",
+ "indexer_core",
  "indexer_service_protocol",
- "indexer_service_rpc",
- "jsonrpsee",
  "lee",
  "log",
+ "serde_json",
  "tokio",
- "url",
 ]
 
 [[package]]

@@ -5,7 +5,6 @@ pub use indexer::IndexerServiceFFI;
 pub use runtime::Runtime;
 
 pub mod api;
-mod client;
 mod errors;
 mod indexer;
 mod runtime;

@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::Path};
 
 use anyhow::{Context as _, Result};
 pub use indexer_core::config::*;
@@ -65,9 +65,13 @@ impl Drop for IndexerHandle {
     }
 }
 
-pub async fn run_server(config: IndexerConfig, port: u16) -> Result<IndexerHandle> {
+pub async fn run_server(
+    config: IndexerConfig,
+    storage_dir: &Path,
+    port: u16,
+) -> Result<IndexerHandle> {
     #[cfg(feature = "mock-responses")]
-    let _ = config;
+    let _ = (config, storage_dir);
 
     let server = Server::builder()
         .build(SocketAddr::from(([0, 0, 0, 0], port)))
@@ -82,8 +86,8 @@ pub async fn run_server(config: IndexerConfig, port: u16) -> Result<IndexerHandl
 
     #[cfg(not(feature = "mock-responses"))]
     let handle = {
-        let service =
-            service::IndexerService::new(config).context("Failed to initialize indexer service")?;
+        let service = service::IndexerService::new(config, storage_dir)
+            .context("Failed to initialize indexer service")?;
         server.start(service.into_rpc())
     };
     #[cfg(feature = "mock-responses")]

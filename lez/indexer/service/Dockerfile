@@ -71,4 +71,4 @@ ENV RUST_LOG=info
 USER indexer_service_user
 
 WORKDIR /indexer_service
-CMD ["indexer_service", "/etc/indexer_service/indexer_config.json"]
+CMD ["indexer_service", "/etc/indexer_service/indexer_config.json", "--data-dir", "/var/lib/indexer_service"]

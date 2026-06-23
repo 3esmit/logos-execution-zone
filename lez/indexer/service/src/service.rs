@@ -1,4 +1,4 @@
-use std::{pin::pin, sync::Arc};
+use std::{path::Path, pin::pin, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwap;
@@ -19,8 +19,8 @@ pub struct IndexerService {
 }
 
 impl IndexerService {
-    pub fn new(config: IndexerConfig) -> Result<Self> {
-        let indexer = IndexerCore::new(config)?;
+    pub fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+        let indexer = IndexerCore::new(config, storage_dir)?;
         let subscription_service = SubscriptionService::spawn_new(indexer.clone());
 
         Ok(Self {
