@@ -2,10 +2,10 @@ services:
   explorer_service:
     image: lez/explorer_service
     build:
-      context: ..
-      dockerfile: explorer_service/Dockerfile
+      context: ../..
+      dockerfile: lez/explorer_service/Dockerfile
     container_name: explorer_service
     environment:
-      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://localhost:8779}
+      INDEXER_RPC_URL: ${INDEXER_RPC_URL:-http://host.docker.internal:8779}
     ports:
-      - "8080:8080"
+      - "8081:8080"

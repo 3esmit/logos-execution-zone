@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     curl \
+    unzip \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,11 +27,11 @@ RUN ARCH=$(uname -m); \
     else \
         echo "Using manual build for $ARCH"; \
         git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
-        git clone --depth 1 --branch r0.1.91.1 https://github.com/risc0/rust.git; \
+        git clone --depth 1 --branch risc0-1.94.1 https://github.com/risc0/rust.git; \
         cd /risc0; \
-        cargo install --path rzup; \
+        cargo install --locked --path rzup; \
         rzup build --path /rust rust --verbose; \
-        cargo install --path risc0/cargo-risczero; \
+        cargo install --locked --path risc0/cargo-risczero; \
     fi
 ENV PATH="/root/.cargo/bin:/root/.risc0/bin:${PATH}"
 RUN cp "$(which r0vm)" /usr/local/bin/r0vm
@@ -68,6 +69,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
 
 # Runtime stage - minimal image
 FROM debian:trixie-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN useradd -m -u 1000 -s /bin/bash indexer_service_user && \

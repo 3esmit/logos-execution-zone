@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ninja-build \
     curl \
+    unzip \
     git \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,11 +27,11 @@ RUN ARCH=$(uname -m); \
     else \
         echo "Using manual build for $ARCH"; \
         git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
-        git clone --depth 1 --branch r0.1.91.0 https://github.com/risc0/rust.git; \
+        git clone --depth 1 --branch risc0-1.94.1 https://github.com/risc0/rust.git; \
         cd /risc0; \
-        cargo install --path rzup; \
+        cargo install --locked --path rzup; \
         rzup build --path /rust rust --verbose; \
-        cargo install --path risc0/cargo-risczero; \
+        cargo install --locked --path risc0/cargo-risczero; \
     fi
 ENV PATH="/root/.cargo/bin:/root/.risc0/bin:${PATH}"
 RUN cp "$(which r0vm)" /usr/local/bin/r0vm
@@ -81,16 +82,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
 # Runtime stage - minimal image
 FROM debian:trixie-slim
 
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for security
-RUN useradd -m -u 1000 -s /bin/bash sequencer_user && \
+RUN useradd -m -u 1000 -s /bin/bash sequencer_service_user && \
     mkdir -p /sequencer_service /etc/sequencer_service /var/lib/sequencer_service && \
-    chown -R sequencer_user:sequencer_user /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
+    chown -R sequencer_service_user:sequencer_service_user /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
 
 # Copy binary from builder
-COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
+COPY --from=builder --chown=sequencer_service_user:sequencer_service_user /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
 
 # Copy r0vm binary from builder
-COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /usr/local/bin/r0vm
+COPY --from=builder --chown=sequencer_service_user:sequencer_service_user /usr/local/bin/r0vm /usr/local/bin/r0vm
 
 VOLUME /var/lib/sequencer_service
 
@@ -103,7 +109,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     -H "Content-Type: application/json" \
     -d "{ \
         \"jsonrpc\": \"2.0\", \
-        \"method\": \"hello\", \
+        \"method\": \"checkHealth\", \
         \"params\": {}, \
         \"id\": 1 \
     }" || exit 1
@@ -114,7 +120,7 @@ ENV RUST_LOG=info
 # Set explicit location for r0vm binary
 ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm
 
-USER sequencer_user
+USER sequencer_service_user
 
 WORKDIR /sequencer_service
 CMD ["sequencer_service", "/etc/sequencer_service/sequencer_config.json"]
