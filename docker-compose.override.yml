@@ -2,8 +2,6 @@
 
 services:
   logos-blockchain-node-0:
-    ports: !override
-      - "18080:18080/tcp"
     environment:
       - RUST_LOG=error
 
