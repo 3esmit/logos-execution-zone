@@ -94,6 +94,7 @@ impl Storage {
 
         self.key_chain = UserKeyChain::new_with_accounts(public_tree, private_tree);
         self.labels = BTreeMap::new();
+        self.last_synced_block = 0;
 
         Ok(())
     }

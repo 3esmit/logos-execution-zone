@@ -299,6 +299,14 @@ typedef struct FfiPublicAccountKey {
   struct FfiBytes32 public_key;
 } FfiPublicAccountKey;
 
+typedef struct FfiCreateWalletOutput {
+  struct WalletHandle *wallet;
+  /**
+   * C compatible(null terminated) string.
+   */
+  char *mnemonic;
+} FfiCreateWalletOutput;
+
 /**
  * Create a new public account.
  *
@@ -1452,15 +1460,15 @@ enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
  * - `password`: Password for encrypting the wallet seed
  *
  * # Returns
- * - Opaque wallet handle on success
- * - Null pointer on error (call `wallet_ffi_get_last_error()` for details)
+ * - Result, which contains opaque wallet handle and mnemonic words on success
+ * - Result with null pointers on error (call `wallet_ffi_get_last_error()` for details)
  *
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
  */
-struct WalletHandle *wallet_ffi_create_new(const char *config_path,
-                                           const char *storage_path,
-                                           const char *password);
+struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
+                                                   const char *storage_path,
+                                                   const char *password);
 
 /**
  * Open an existing wallet from storage.
@@ -1509,6 +1517,31 @@ void wallet_ffi_destroy(struct WalletHandle *handle);
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  */
 enum WalletFfiError wallet_ffi_save(struct WalletHandle *handle);
+
+/**
+ * Restore wallet data from mnemonic and password.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `mnemonic`: Valid pointer to instance of `* char`, provided by `wallet_ffi_create_new`
+ * - `password`: Valid pointer to C string.
+ * - `depth`: Depth of a reconstructed tree
+ *
+ * # Returns
+ * - `Success` on successful restoration
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `mnemonic` must be a valid pointer to instance of `* char`, provided by
+ *   `wallet_ffi_create_new`
+ * - `password` must be a valid pointer to C string.
+ * - `depth` parameter induces exponential growth in execution time, be aware of it.
+ */
+enum WalletFfiError wallet_ffi_restore_data(struct WalletHandle *handle,
+                                            const char *mnemonic,
+                                            const char *password,
+                                            uint32_t depth);
 
 /**
  * Get the sequencer address from the wallet configuration.
