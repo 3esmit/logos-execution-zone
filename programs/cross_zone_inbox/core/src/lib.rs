@@ -200,6 +200,63 @@ pub fn build_inbox_dispatch_tx(
     )
 }
 
+/// The cross-zone emission fields a watcher or verifier reads off a source
+/// transaction, common to every emitter program.
+#[cfg(feature = "host")]
+pub struct Emission {
+    pub target_zone: ZoneId,
+    pub target_program_id: ProgramId,
+    pub target_accounts: Vec<[u8; 32]>,
+    pub payload: Vec<u8>,
+}
+
+/// Extracts the cross-zone emission from a source transaction, recognizing the
+/// known emitter programs. Returns `None` for any other program. The watcher and
+/// verifier both use this so they agree on what a given source tx emits.
+///
+/// Option A: each emitter is decoded explicitly. The principled alternative is to
+/// read the outbox PDA write, which would need re-execution of the source tx.
+#[cfg(feature = "host")]
+#[must_use]
+pub fn extract_emission(
+    program_id: ProgramId,
+    instruction_data: &[u32],
+    ping_sender_id: ProgramId,
+    bridge_lock_id: ProgramId,
+) -> Option<Emission> {
+    if program_id == ping_sender_id {
+        let ping_core::SenderInstruction::Send {
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+            ..
+        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        Some(Emission {
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+        })
+    } else if program_id == bridge_lock_id {
+        let bridge_lock_core::Instruction::Lock {
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+            ..
+        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        Some(Emission {
+            target_zone,
+            target_program_id,
+            target_accounts,
+            payload,
+        })
+    } else {
+        None
+    }
+}
+
 /// Builds the dispatch transaction for one peer emission. Both the sequencer's
 /// watcher and the indexer's verifier go through this so their transactions are
 /// byte-identical for the same emission (the basis of the Option B check).

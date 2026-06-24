@@ -25,6 +25,11 @@ pub enum GenesisAction {
     SupplyBridgeAccount {
         balance: u128,
     },
+    /// Seeds a bridge-lock holder's initial bridgeable balance into genesis state.
+    SupplyBridgeLockHolding {
+        holder: AccountId,
+        amount: u128,
+    },
 }
 
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};

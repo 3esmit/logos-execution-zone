@@ -603,14 +603,16 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     let genesis_txs = config
         .genesis
         .iter()
-        .map(|genesis_tx| match genesis_tx {
+        .filter_map(|genesis_tx| match genesis_tx {
             GenesisAction::SupplyAccount {
                 account_id,
                 balance,
-            } => build_supply_account_genesis_transaction(account_id, *balance),
+            } => Some(build_supply_account_genesis_transaction(account_id, *balance)),
             GenesisAction::SupplyBridgeAccount { balance } => {
-                build_supply_bridge_account_genesis_transaction(*balance)
+                Some(build_supply_bridge_account_genesis_transaction(*balance))
             }
+            // Force-inserted below: bridge_lock has no mint transaction.
+            GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
@@ -620,6 +622,14 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         })
         .map(LeeTransaction::Public)
         .collect();
+
+    // Seed bridge-lock holder balances directly: they are not produced by any tx.
+    for action in &config.genesis {
+        if let GenesisAction::SupplyBridgeLockHolding { holder, amount } = action {
+            let (holder_id, account) = bridge_lock_core::build_holding_account(*holder, *amount);
+            state.insert_genesis_account(holder_id, account);
+        }
+    }
 
     // Seed this zone's cross-zone inbox config so the inbox guest can authorize
     // inbound peer messages (zone-specific config, not produced by any tx).

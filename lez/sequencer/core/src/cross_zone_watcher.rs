@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use common::{block::Block, transaction::LeeTransaction};
-use cross_zone_inbox_core::build_dispatch_from_emission;
+use cross_zone_inbox_core::{build_dispatch_from_emission, extract_emission};
 use futures::StreamExt as _;
 use lee::program::Program;
 use lee_core::program::ProgramId;
@@ -11,7 +11,6 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use mempool::MemPoolHandle;
-use ping_core::SenderInstruction;
 
 use crate::{
     TransactionOrigin,
@@ -30,7 +29,8 @@ pub fn spawn_watchers(
 ) {
     let self_zone: [u8; 32] = *bedrock_config.channel_id.as_ref();
     let inbox_id = Program::cross_zone_inbox().id();
-    let emitter_id = Program::ping_sender().id();
+    let ping_sender_id = Program::ping_sender().id();
+    let bridge_lock_id = Program::bridge_lock().id();
 
     for peer in cross_zone.peers.clone() {
         let node = NodeHttpClient::new(
@@ -43,7 +43,8 @@ pub fn spawn_watchers(
             peer.allowed_targets,
             self_zone,
             inbox_id,
-            emitter_id,
+            ping_sender_id,
+            bridge_lock_id,
             poll_interval,
             mempool_handle.clone(),
         ));
@@ -60,7 +61,8 @@ async fn watch_peer(
     allowed_targets: Vec<ProgramId>,
     self_zone: [u8; 32],
     inbox_id: ProgramId,
-    emitter_id: ProgramId,
+    ping_sender_id: ProgramId,
+    bridge_lock_id: ProgramId,
     poll_interval: Duration,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
@@ -93,7 +95,8 @@ async fn watch_peer(
                         peer_zone,
                         self_zone,
                         inbox_id,
-                        emitter_id,
+                        ping_sender_id,
+                        bridge_lock_id,
                         &allowed_targets,
                         &mempool_handle,
                     )
@@ -110,16 +113,17 @@ async fn watch_peer(
 }
 
 /// Scans one peer block for outbound messages and injects a dispatch per match.
-///
-/// Option A (M3): the watcher recognizes the demo emitter and reads the outbound
-/// message straight off its instruction. M4 replaces this with re-derivation
-/// from the outbox PDA write, which removes the emitter-specific decoding.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Each parameter is an independent piece of per-block delivery state"
+)]
 async fn deliver_block(
     block: &Block,
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
     inbox_id: ProgramId,
-    emitter_id: ProgramId,
+    ping_sender_id: ProgramId,
+    bridge_lock_id: ProgramId,
     allowed_targets: &[ProgramId],
     mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
@@ -128,28 +132,19 @@ async fn deliver_block(
             continue;
         };
         let message = public_tx.message();
-        if message.program_id != emitter_id {
+        let Some(emission) = extract_emission(
+            message.program_id,
+            &message.instruction_data,
+            ping_sender_id,
+            bridge_lock_id,
+        ) else {
             continue;
-        }
-
-        let SenderInstruction::Send {
-            target_zone,
-            target_program_id,
-            target_accounts,
-            payload,
-            ..
-        } = match risc0_zkvm::serde::from_slice(&message.instruction_data) {
-            Ok(send) => send,
-            Err(err) => {
-                warn!("Watcher could not decode emitter instruction: {err}");
-                continue;
-            }
         };
 
-        if target_zone != self_zone {
+        if emission.target_zone != self_zone {
             continue;
         }
-        if !allowed_targets.contains(&target_program_id) {
+        if !allowed_targets.contains(&emission.target_program_id) {
             warn!(
                 "Watcher dropping message to disallowed target from peer {}",
                 hex::encode(peer_zone)
@@ -162,10 +157,10 @@ async fn deliver_block(
             peer_zone,
             block.header.block_id,
             u32::try_from(index).unwrap_or(u32::MAX),
-            emitter_id,
-            target_program_id,
-            &target_accounts,
-            payload,
+            message.program_id,
+            emission.target_program_id,
+            &emission.target_accounts,
+            emission.payload,
         );
 
         match mempool_handle

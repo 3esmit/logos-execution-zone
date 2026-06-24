@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use common::{block::Block, transaction::LeeTransaction};
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId,
-    build_dispatch_from_emission, message_key,
+    build_dispatch_from_emission, extract_emission, message_key,
 };
 use futures::StreamExt as _;
 use lee::program::Program;
@@ -18,7 +18,6 @@ use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
-use ping_core::SenderInstruction;
 use tokio::sync::RwLock;
 
 use crate::config::IndexerConfig;
@@ -61,7 +60,8 @@ impl PeerBlocks {
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
     inbox_id: ProgramId,
-    emitter_id: ProgramId,
+    ping_sender_id: ProgramId,
+    bridge_lock_id: ProgramId,
     peers: PeerBlocks,
     seen: Arc<RwLock<HashSet<MessageKey>>>,
 }
@@ -90,7 +90,8 @@ impl CrossZoneVerifier {
         Some(Self {
             self_zone,
             inbox_id: Program::cross_zone_inbox().id(),
-            emitter_id: Program::ping_sender().id(),
+            ping_sender_id: Program::ping_sender().id(),
+            bridge_lock_id: Program::bridge_lock().id(),
             peers,
             seen: Arc::new(RwLock::new(HashSet::new())),
         })
@@ -161,7 +162,7 @@ impl CrossZoneVerifier {
                 )
             })?;
 
-        let emission = peer_block
+        let emission_tx = peer_block
             .body
             .transactions
             .get(msg.src_tx_index as usize)
@@ -169,23 +170,21 @@ impl CrossZoneVerifier {
                 anyhow::anyhow!("src_tx_index {} out of range in peer block", msg.src_tx_index)
             })?;
 
-        let LeeTransaction::Public(emission) = emission else {
+        let LeeTransaction::Public(emission_tx) = emission_tx else {
             bail!("peer emission transaction is not public");
         };
-        if emission.message().program_id != self.emitter_id {
-            bail!("peer transaction at src_tx_index is not an emitter transaction");
-        }
+        let message = emission_tx.message();
+        let emission = extract_emission(
+            message.program_id,
+            &message.instruction_data,
+            self.ping_sender_id,
+            self.bridge_lock_id,
+        )
+        .ok_or_else(|| {
+            anyhow::anyhow!("peer transaction at src_tx_index is not a recognized emitter")
+        })?;
 
-        let SenderInstruction::Send {
-            target_zone,
-            target_program_id,
-            target_accounts,
-            payload,
-            ..
-        } = risc0_zkvm::serde::from_slice(&emission.message().instruction_data)
-            .context("decode peer emission instruction")?;
-
-        if target_zone != self.self_zone {
+        if emission.target_zone != self.self_zone {
             bail!("peer emission targets a different zone");
         }
 
@@ -194,10 +193,10 @@ impl CrossZoneVerifier {
             msg.src_zone,
             msg.src_block_id,
             msg.src_tx_index,
-            self.emitter_id,
-            target_program_id,
-            &target_accounts,
-            payload,
+            message.program_id,
+            emission.target_program_id,
+            &emission.target_accounts,
+            emission.payload,
         ))
     }
 
@@ -269,7 +268,7 @@ mod tests {
         program::Program,
         public_transaction::{Message, WitnessSet},
     };
-    use ping_core::ping_record_pda;
+    use ping_core::{SenderInstruction, ping_record_pda};
 
     use super::*;
 
@@ -281,7 +280,8 @@ mod tests {
         CrossZoneVerifier {
             self_zone: SELF_ZONE,
             inbox_id: Program::cross_zone_inbox().id(),
-            emitter_id: Program::ping_sender().id(),
+            ping_sender_id: Program::ping_sender().id(),
+            bridge_lock_id: Program::bridge_lock().id(),
             peers: PeerBlocks::default(),
             seen: Arc::new(RwLock::new(HashSet::new())),
         }
