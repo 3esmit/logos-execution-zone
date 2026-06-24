@@ -44,6 +44,15 @@ pub enum TransactionOrigin {
     Sequencer,
 }
 
+/// Whether a program may only be invoked by sequencer-origin transactions. The
+/// cross-zone inbox is injected solely by the watcher; a user-submitted call
+/// must be rejected at ingress, because `TransactionOrigin` is not carried in
+/// the block and so cannot be re-checked later by the indexer.
+#[must_use]
+pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
+    program_id == Program::cross_zone_inbox().id()
+}
+
 #[derive(Clone, Debug, BorshDeserialize)]
 struct DepositMetadata {
     recipient_id: lee::AccountId,
@@ -1723,5 +1732,21 @@ mod tests {
             matches!(res, Err(LeeError::InvalidInput(_))),
             "Bridge withdraw invocation should be rejected in private execution"
         );
+    }
+}
+
+#[cfg(test)]
+mod sequencer_only_program_tests {
+    use lee::program::Program;
+
+    use super::is_sequencer_only_program;
+
+    #[test]
+    fn only_the_cross_zone_inbox_is_sequencer_only() {
+        assert!(is_sequencer_only_program(Program::cross_zone_inbox().id()));
+        assert!(!is_sequencer_only_program(Program::cross_zone_outbox().id()));
+        assert!(!is_sequencer_only_program(Program::wrapped_token().id()));
+        assert!(!is_sequencer_only_program(Program::ping_sender().id()));
+        assert!(!is_sequencer_only_program(Program::clock().id()));
     }
 }
