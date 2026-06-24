@@ -4,14 +4,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use common::{block::Block, transaction::LeeTransaction};
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId,
     build_dispatch_from_emission, extract_emission, message_key,
 };
 use futures::StreamExt as _;
-use lee::program::Program;
+use lee::{PublicKey, program::Program};
 use lee_core::program::ProgramId;
 use log::{error, info};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -22,9 +22,9 @@ use tokio::sync::RwLock;
 
 use crate::config::IndexerConfig;
 
-/// How long the verifier waits for a referenced peer block to finalize before
-/// rejecting the dispatch as referencing a nonexistent block.
-const PEER_BLOCK_WAIT: Duration = Duration::from_secs(60);
+/// How often the verifier logs that it is still waiting on a lagging peer reader,
+/// so a stuck wait is observable without rejecting a legitimate message.
+const LAG_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Cache of finalized peer-zone blocks, filled by per-peer reader tasks and read
 /// by the verifier to re-derive cross-zone dispatch transactions.
@@ -50,6 +50,17 @@ impl PeerBlocks {
             .get(&zone)
             .and_then(|chain| chain.get(&block_id).cloned())
     }
+
+    /// The highest block id this reader has finalized for `zone`, or `None` if it
+    /// has read nothing yet. Used to tell forgery (we have read past the
+    /// referenced block and it is absent) from lag (we simply have not caught up).
+    async fn highest_seen(&self, zone: ZoneId) -> Option<u64> {
+        self.chains
+            .read()
+            .await
+            .get(&zone)
+            .and_then(|chain| chain.keys().copied().max())
+    }
 }
 
 /// The indexer-side Option B verifier. For every cross-zone dispatch in a block
@@ -62,6 +73,8 @@ pub struct CrossZoneVerifier {
     inbox_id: ProgramId,
     ping_sender_id: ProgramId,
     bridge_lock_id: ProgramId,
+    /// Pinned block-signing key per peer zone, enforced during re-derivation.
+    peer_pubkeys: HashMap<ZoneId, PublicKey>,
     peers: PeerBlocks,
     seen: Arc<RwLock<HashSet<MessageKey>>>,
 }
@@ -73,12 +86,18 @@ impl CrossZoneVerifier {
         let cross_zone = config.cross_zone.as_ref()?;
         let self_zone: ZoneId = *config.channel_id.as_ref();
         let peers = PeerBlocks::default();
+        let mut peer_pubkeys = HashMap::new();
 
         for peer in &cross_zone.peers {
             let node = NodeHttpClient::new(
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
             );
+            if let Some(bytes) = peer.expected_block_signing_pubkey {
+                let pubkey = PublicKey::try_new(bytes)
+                    .expect("configured peer block-signing pubkey is a valid key");
+                peer_pubkeys.insert(peer.channel_id, pubkey);
+            }
             tokio::spawn(read_peer(
                 ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
                 peer.channel_id,
@@ -92,6 +111,7 @@ impl CrossZoneVerifier {
             inbox_id: Program::cross_zone_inbox().id(),
             ping_sender_id: Program::ping_sender().id(),
             bridge_lock_id: Program::bridge_lock().id(),
+            peer_pubkeys,
             peers,
             seen: Arc::new(RwLock::new(HashSet::new())),
         })
@@ -153,14 +173,19 @@ impl CrossZoneVerifier {
     async fn rederive(&self, msg: &CrossZoneMessage) -> Result<lee::PublicTransaction> {
         let peer_block = self
             .wait_for_peer_block(msg.src_zone, msg.src_block_id)
-            .await
-            .with_context(|| {
-                format!(
-                    "no peer block {} from zone {} to verify against",
-                    msg.src_block_id,
-                    hex::encode(msg.src_zone)
-                )
-            })?;
+            .await?;
+
+        // Equivocation defense: the source block must be signed by the peer's
+        // pinned block-signing key, not merely inscribed on the channel.
+        if let Some(expected) = self.peer_pubkeys.get(&msg.src_zone) {
+            if !peer_block.is_signed_by(expected) {
+                bail!(
+                    "forged cross-zone dispatch: peer zone {} block {} is not signed by the pinned block-signing key",
+                    hex::encode(msg.src_zone),
+                    msg.src_block_id
+                );
+            }
+        }
 
         let emission_tx = peer_block
             .body
@@ -200,20 +225,35 @@ impl CrossZoneVerifier {
         ))
     }
 
-    /// Polls the peer cache until the referenced block finalizes. A forged
-    /// reference to a never-finalized block times out and is rejected.
+    /// Resolves the referenced peer block, distinguishing forgery from lag.
+    ///
+    /// If the block is cached, return it. If our peer reader has already
+    /// finalized past `block_id` and we still do not have it, the reference is to
+    /// a block that does not exist on the peer chain, a forgery, so reject now.
+    /// Otherwise the reader simply has not caught up yet: keep waiting, since a
+    /// legitimate dispatch is only injected after its peer block finalized and
+    /// our reader of the same finalized chain will see it too. Rejecting on a
+    /// timeout here would turn a lagging reader into a permanent halt of an
+    /// honest message.
     async fn wait_for_peer_block(&self, zone: ZoneId, block_id: u64) -> Result<Block> {
         let mut waited = Duration::ZERO;
         loop {
             if let Some(block) = self.peers.get(zone, block_id).await {
                 return Ok(block);
             }
-            if waited >= PEER_BLOCK_WAIT {
+            if self.peers.highest_seen(zone).await.is_some_and(|h| h >= block_id) {
                 bail!(
-                    "peer block {} from zone {} did not finalize within {:?}",
-                    block_id,
+                    "forged cross-zone reference: peer zone {} finalized past block {} but it is absent",
                     hex::encode(zone),
-                    PEER_BLOCK_WAIT
+                    block_id
+                );
+            }
+            if !waited.is_zero() && waited.as_secs() % LAG_LOG_INTERVAL.as_secs() == 0 {
+                info!(
+                    "Waiting for peer zone {} to finalize block {} ({}s); reader is behind",
+                    hex::encode(zone),
+                    block_id,
+                    waited.as_secs()
                 );
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
@@ -264,7 +304,7 @@ async fn read_peer(
 mod tests {
     use common::test_utils::produce_dummy_block;
     use lee::{
-        PublicTransaction,
+        PrivateKey, PublicKey, PublicTransaction,
         program::Program,
         public_transaction::{Message, WitnessSet},
     };
@@ -277,11 +317,16 @@ mod tests {
     const PEER_BLOCK_ID: u64 = 5;
 
     fn verifier() -> CrossZoneVerifier {
+        verifier_with_pinned_keys(HashMap::new())
+    }
+
+    fn verifier_with_pinned_keys(peer_pubkeys: HashMap<ZoneId, PublicKey>) -> CrossZoneVerifier {
         CrossZoneVerifier {
             self_zone: SELF_ZONE,
             inbox_id: Program::cross_zone_inbox().id(),
             ping_sender_id: Program::ping_sender().id(),
             bridge_lock_id: Program::bridge_lock().id(),
+            peer_pubkeys,
             peers: PeerBlocks::default(),
             seen: Arc::new(RwLock::new(HashSet::new())),
         }
@@ -347,6 +392,57 @@ mod tests {
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"forged")]);
+        let err = verifier.verify_block(&block).await.unwrap_err();
+        assert!(err.to_string().contains("forged"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn verifies_dispatch_signed_by_the_pinned_peer_key() {
+        // produce_dummy_block signs with PrivateKey([37; 32]); pin its pubkey.
+        let signer = PublicKey::new_from_private_key(&PrivateKey::try_new([37; 32]).unwrap());
+        let mut keys = HashMap::new();
+        keys.insert(PEER_ZONE, signer);
+        let verifier = verifier_with_pinned_keys(keys);
+        verifier
+            .peers
+            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .await;
+
+        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        verifier
+            .verify_block(&block)
+            .await
+            .expect("a dispatch from the pinned signer verifies");
+    }
+
+    #[tokio::test]
+    async fn rejects_dispatch_from_a_block_not_signed_by_the_pinned_key() {
+        // Pin a different key than the one that signed the peer block.
+        let mut keys = HashMap::new();
+        keys.insert(PEER_ZONE, PublicKey::try_new([42; 32]).unwrap());
+        let verifier = verifier_with_pinned_keys(keys);
+        verifier
+            .peers
+            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .await;
+
+        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        let err = verifier.verify_block(&block).await.unwrap_err();
+        assert!(err.to_string().contains("pinned"), "unexpected error: {err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_reference_to_a_block_the_peer_never_finalized() {
+        let verifier = verifier();
+        // The reader has finalized past PEER_BLOCK_ID (it holds a later block) but
+        // never saw PEER_BLOCK_ID itself, so a dispatch referencing it is a forgery
+        // and must be rejected rather than waited on forever.
+        verifier
+            .peers
+            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID + 1, None, vec![emission(b"hi")]))
+            .await;
+
+        let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         let err = verifier.verify_block(&block).await.unwrap_err();
         assert!(err.to_string().contains("forged"), "unexpected error: {err}");
     }

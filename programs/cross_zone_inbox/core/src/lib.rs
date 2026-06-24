@@ -30,6 +30,11 @@ pub struct CrossZonePeer {
     pub channel_id: ZoneId,
     /// Programs on the local zone a message from this peer is allowed to target.
     pub allowed_targets: Vec<ProgramId>,
+    /// The peer's block-signing public key, pinned to reject blocks inscribed by
+    /// anyone other than that zone's sequencer. `None` skips the check (the
+    /// channel signer is still authenticated by the zone-sdk).
+    #[serde(default)]
+    pub expected_block_signing_pubkey: Option<[u8; 32]>,
 }
 
 /// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer

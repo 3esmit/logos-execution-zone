@@ -54,6 +54,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
             allowed_targets: vec![wrapped_token_id],
+            expected_block_signing_pubkey: None,
         }],
     };
 

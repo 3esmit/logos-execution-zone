@@ -48,6 +48,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_targets: vec![receiver_id],
+            expected_block_signing_pubkey: None,
         }],
     };
 

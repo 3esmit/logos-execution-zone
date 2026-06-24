@@ -76,11 +76,13 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
+    /// The hash a block's signature is computed over. Signing and verifying both
+    /// go through this, so a peer's block-signing key can be re-checked.
     #[must_use]
-    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
+    pub fn signing_hash(&self) -> BlockHash {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
 
-        let data_bytes = borsh::to_vec(&self).unwrap();
+        let data_bytes = borsh::to_vec(self).unwrap();
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
@@ -90,7 +92,12 @@ impl HashableBlockData {
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(&data_bytes);
 
-        let hash = OwnHasher::hash(&bytes);
+        OwnHasher::hash(&bytes)
+    }
+
+    #[must_use]
+    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
+        let hash = self.signing_hash();
         let signature = lee::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {
@@ -116,6 +123,18 @@ impl From<Block> for HashableBlockData {
             timestamp: value.header.timestamp,
             transactions: value.body.transactions,
         }
+    }
+}
+
+impl Block {
+    /// Recomputes the signed hash from the block contents and checks the header
+    /// signature against `expected_pubkey`. Used to pin a peer zone's
+    /// block-signing key, so a block inscribed by anyone other than that zone's
+    /// sequencer is rejected even if it reached the channel.
+    #[must_use]
+    pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
+        let hash = HashableBlockData::from(self.clone()).signing_hash();
+        self.header.signature.is_valid_for(&hash.0, expected_pubkey)
     }
 }
 

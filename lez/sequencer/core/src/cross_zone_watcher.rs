@@ -3,7 +3,7 @@ use std::time::Duration;
 use common::{block::Block, transaction::LeeTransaction};
 use cross_zone_inbox_core::{build_dispatch_from_emission, extract_emission};
 use futures::StreamExt as _;
-use lee::program::Program;
+use lee::{PublicKey, program::Program};
 use lee_core::program::ProgramId;
 use log::{error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -37,10 +37,14 @@ pub fn spawn_watchers(
             CommonHttpClient::new(bedrock_config.auth.clone().map(Into::into)),
             bedrock_config.node_url.clone(),
         );
+        let expected_pubkey = peer.expected_block_signing_pubkey.map(|bytes| {
+            PublicKey::try_new(bytes).expect("configured peer block-signing pubkey is a valid key")
+        });
         tokio::spawn(watch_peer(
             ZoneIndexer::new(ChannelId::from(peer.channel_id), node),
             peer.channel_id,
             peer.allowed_targets,
+            expected_pubkey,
             self_zone,
             inbox_id,
             ping_sender_id,
@@ -59,6 +63,7 @@ async fn watch_peer(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
     peer_zone: [u8; 32],
     allowed_targets: Vec<ProgramId>,
+    expected_pubkey: Option<PublicKey>,
     self_zone: [u8; 32],
     inbox_id: ProgramId,
     ping_sender_id: ProgramId,
@@ -90,17 +95,31 @@ async fn watch_peer(
             };
             match borsh::from_slice::<Block>(&zone_block.data) {
                 Ok(block) => {
-                    deliver_block(
-                        &block,
-                        peer_zone,
-                        self_zone,
-                        inbox_id,
-                        ping_sender_id,
-                        bridge_lock_id,
-                        &allowed_targets,
-                        &mempool_handle,
-                    )
-                    .await;
+                    // Reject blocks not signed by the pinned peer key (equivocation):
+                    // the channel signer is authenticated by the zone-sdk, but that
+                    // does not prove the peer's honest sequencer produced the block.
+                    if expected_pubkey
+                        .as_ref()
+                        .is_some_and(|pk| !block.is_signed_by(pk))
+                    {
+                        warn!(
+                            "Watcher dropping peer {} block {}: block-signing key does not match the pinned key",
+                            hex::encode(peer_zone),
+                            block.header.block_id
+                        );
+                    } else {
+                        deliver_block(
+                            &block,
+                            peer_zone,
+                            self_zone,
+                            inbox_id,
+                            ping_sender_id,
+                            bridge_lock_id,
+                            &allowed_targets,
+                            &mempool_handle,
+                        )
+                        .await;
+                    }
                 }
                 Err(err) => error!("Watcher failed to deserialize peer block: {err}"),
             }

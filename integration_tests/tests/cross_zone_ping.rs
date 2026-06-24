@@ -51,6 +51,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
             allowed_targets: vec![receiver_id],
+            expected_block_signing_pubkey: None,
         }],
     };
 
