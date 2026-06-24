@@ -99,6 +99,28 @@
             sha256 = recursionZkrHash;
           };
 
+          # risc0 compiles its Metal (GPU) prover kernels by invoking
+          # `xcrun metal` / `xcrun metallib`. Under nix, the darwin stdenv sets
+          # DEVELOPER_DIR/SDKROOT to its own SDK, which makes `xcrun` look for
+          # the `metal` tool in the wrong place and fail with
+          #   error: cannot execute tool 'metal' due to missing Metal Toolchain
+          # even when a working Metal Toolchain is installed. This wrapper, put
+          # first in PATH, clears those two vars for metal/metallib invocations
+          # only — so they resolve the real system Xcode Metal Toolchain — while
+          # every other xcrun call passes through with the nix environment
+          # intact. (On recent macOS the Metal Toolchain is a per-user component;
+          # `xcodebuild -downloadComponent MetalToolchain` must have been run.)
+          metalStub = pkgs.writeShellScriptBin "xcrun" ''
+            tool=
+            for a in "$@"; do
+              case "$a" in metal|metallib) tool=1 ;; esac
+            done
+            if [ -n "$tool" ]; then
+              unset DEVELOPER_DIR SDKROOT
+            fi
+            exec /usr/bin/xcrun "$@"
+          '';
+
           commonArgs = {
             inherit src;
             buildInputs = [ pkgs.openssl ];
@@ -118,13 +140,14 @@
             RECURSION_SRC_PATH = "${recursionZkr}";
             # Provide a writable HOME so risc0-build-kernel can use its cache directory
             # (needed on macOS for Metal kernel compilation cache).
-            # On macOS, append /usr/bin to PATH so xcrun (Metal compiler) can be found,
-            # while keeping Nix tools (like gnutar) first in PATH.
+            # On macOS, put the metalStub xcrun wrapper first so `xcrun metal` /
+            # `metallib` resolve the system Metal Toolchain (see metalStub above),
+            # and append /usr/bin for the real xcrun it execs.
             # This requires running with --option sandbox false for Metal GPU support.
             preBuild = ''
               export HOME=$(mktemp -d)
             '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
-              export PATH="$PATH:/usr/bin"
+              export PATH="${metalStub}/bin:$PATH:/usr/bin"
             '';
           };
 
