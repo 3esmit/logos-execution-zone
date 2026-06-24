@@ -1,6 +1,7 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use common::block::Block;
 // ToDo: Remove after testnet
 use futures::StreamExt as _;
@@ -10,21 +11,30 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 
-use crate::{block_store::IndexerStore, config::IndexerConfig};
+use crate::{
+    block_store::IndexerStore,
+    config::IndexerConfig,
+    status::{IndexerStatus, IndexerSyncStatus},
+};
 
 pub mod block_store;
 pub mod config;
+pub mod status;
 
 #[derive(Clone)]
 pub struct IndexerCore {
     pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
+    /// Live ingestion status; updated by the ingest stream, read by `status`.
+    pub status: Arc<ArcSwap<IndexerSyncStatus>>,
 }
 
 impl IndexerCore {
-    pub fn new(config: IndexerConfig) -> Result<Self> {
-        let home = config.home.join("rocksdb");
+    pub fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+        // Namespace the DB by channel so indexers on different channels can
+        // share a storage dir without their RocksDB state colliding.
+        let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(
@@ -37,7 +47,27 @@ impl IndexerCore {
             zone_indexer: Arc::new(zone_indexer),
             config,
             store: IndexerStore::open_db(&home)?,
+            status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
         })
+    }
+
+    /// Snapshot of the current ingestion status (sync state + indexed tip).
+    ///
+    /// Combines the ingest loop's live status with the L2 tip read fresh from the
+    /// store, so callers (FFI/RPC) can tell "catching up" from "failed".
+    #[must_use]
+    pub fn status(&self) -> IndexerStatus {
+        let sync = IndexerSyncStatus::clone(&self.status.load());
+        let indexed_block_id = self.store.get_last_block_id().ok().flatten();
+        IndexerStatus {
+            sync,
+            indexed_block_id,
+        }
+    }
+
+    /// Atomically publish a new ingestion status for readers of `status`.
+    fn set_status(&self, status: IndexerSyncStatus) {
+        self.status.store(Arc::new(status));
     }
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
@@ -60,14 +90,30 @@ impl IndexerCore {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
                     Ok(s) => s,
                     Err(err) => {
+                        // `next_messages` reads L1 consensus info internally, so
+                        // this also covers an unreachable/misconfigured L1 node.
                         error!("Failed to start zone-sdk next_messages stream: {err}");
+                        self.set_status(IndexerSyncStatus::error(format!(
+                            "cannot reach L1 / read channel: {err}"
+                        )));
                         tokio::time::sleep(poll_interval).await;
                         continue;
                     }
                 };
                 let mut stream = std::pin::pin!(stream);
 
+                // Flip to Syncing on the first message of this cycle (not merely on
+                // a successful poll) so the steady-state CaughtUp status doesn't
+                // flicker. Until then the state stays Starting (cold-start scan of
+                // empty L1 history) or CaughtUp (idle).
+                let mut announced_syncing = false;
+
                 while let Some((msg, slot)) = stream.next().await {
+                    if !announced_syncing {
+                        self.set_status(IndexerSyncStatus::syncing());
+                        announced_syncing = true;
+                    }
+
                     let zone_block = match msg {
                         ZoneMessage::Block(b) => b,
                         // Non-block messages don't carry a cursor position; the
@@ -105,7 +151,11 @@ impl IndexerCore {
                     yield Ok(block);
                 }
 
-                // Stream ended (caught up to LIB). Sleep then poll again.
+                // Stream drained: caught up to LIB as of this cycle. Clears any
+                // prior error (e.g. a transient L1 disconnect that left no
+                // backlog, so the `Syncing` branch above never ran). Sleep then
+                // poll again.
+                self.set_status(IndexerSyncStatus::caught_up());
                 tokio::time::sleep(poll_interval).await;
             }
         }

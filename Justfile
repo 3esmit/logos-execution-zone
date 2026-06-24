@@ -59,10 +59,10 @@ run-indexer mock="":
     @echo "🔍 Running indexer"
     @if [ "{{mock}}" = "mock" ]; then \
         echo "🧪 Using mock data"; \
-        RUST_LOG=info cargo run --release --features mock-responses -p indexer_service configs/indexer_config.json; \
+        RUST_LOG=info cargo run --release --features mock-responses -p indexer_service configs/debug/indexer_config.json; \
     else \
         echo "🚀 Using real data"; \
-        RUST_LOG=info cargo run --release -p indexer_service configs/indexer_config.json; \
+        RUST_LOG=info cargo run --release -p indexer_service configs/debug/indexer_config.json; \
     fi
 
 # Run Explorer.
@@ -93,7 +93,7 @@ clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf lez/sequencer/service/bedrock_signing_key
     rm -rf lez/sequencer/service/rocksdb
-    rm -rf lez/indexer/service/rocksdb
+    rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
-    rm -rf rocksdb
+    rm -rf rocksdb*
     cd bedrock && docker compose down -v

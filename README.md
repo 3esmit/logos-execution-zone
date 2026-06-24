@@ -156,7 +156,7 @@ The sequencer and logos blockchain node can be run locally:
     - `docker compose up`
 
  2. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run indexer service:
-      - `RUST_LOG=info cargo run -p indexer_service lez/indexer/service/configs/indexer_config.json`
+      - `RUST_LOG=info cargo run -p indexer_service lez/indexer/service/configs/debug/indexer_config.json`
 
  3. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run the sequencer:
       - `RUST_LOG=info cargo run -p sequencer_service lez/sequencer/service/configs/debug/sequencer_config.json`

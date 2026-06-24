@@ -1,5 +1,4 @@
 {
-    "home": "./indexer/service",
     "consensus_info_polling_interval": "1s",
     "bedrock_config": {
         "addr": "http://logos-blockchain-node-0:18080"
