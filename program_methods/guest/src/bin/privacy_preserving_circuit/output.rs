@@ -282,6 +282,14 @@ fn emit_private_output(
     let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
 
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, esk, *output_index);
+
+    // Currently the view tag is properlty generated for all accounts.
+    // To increase privacy, this will be changed in the later version
+    // to only be generated explicitly for initialized accounts and
+    // fed by the prover directly for updated accounts.
+    //
+    // See issue 573:
+    // https://github.com/logos-blockchain/logos-execution-zone/issues/573
     let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
 
     let encrypted_account = EncryptionScheme::encrypt(
