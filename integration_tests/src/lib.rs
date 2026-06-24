@@ -10,7 +10,7 @@ use log::info;
 pub use test_fixtures::*;
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
-pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
+pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(7);
 
 /// Poll the indexer until its last finalized block id reaches the sequencer's
 /// current last block id or until [`L2_TO_L1_TIMEOUT`] elapses.

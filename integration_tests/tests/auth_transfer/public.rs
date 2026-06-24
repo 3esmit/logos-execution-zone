@@ -1,9 +1,9 @@
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention};
-use lee::{program::Program, public_transaction, system_faucet_account_id};
+use lee::public_transaction;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -250,7 +250,7 @@ async fn initialize_public_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
     assert_eq!(account.balance, 0);
     assert_eq!(account.nonce.0, 1);
@@ -356,7 +356,7 @@ async fn successful_transfer_using_to_label() -> Result<()> {
 #[test]
 async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let ctx = TestContext::new().await?;
-    let faucet_account_id = system_faucet_account_id();
+    let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
     let recipient_balance_before = ctx
@@ -370,7 +370,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        Program::authenticated_transfer_program().id(),
+        programs::authenticated_transfer().id(),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -407,10 +407,10 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 #[test]
 async fn cannot_execute_faucet_program() -> Result<()> {
     let ctx = TestContext::new().await?;
-    let faucet_account_id = system_faucet_account_id();
+    let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
-    let vault_program_id = Program::vault().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
     let recipient_balance_before = ctx
@@ -424,7 +424,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        Program::faucet().id(),
+        programs::faucet().id(),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
@@ -466,28 +466,24 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let binary = std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
-    )?;
-    let faucet_chain_caller_id = Program::new(binary.clone())?.id();
+    let faucet_chain_caller = test_programs::faucet_chain_caller();
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(binary),
+        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     info!("Waiting for deploy block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_account_id = system_faucet_account_id();
+    let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
-    let faucet_program_id = Program::faucet().id();
-    let vault_program_id = Program::vault().id();
+    let faucet_program_id = programs::faucet().id();
+    let vault_program_id = programs::vault().id();
     let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
-        faucet_chain_caller_id,
+        faucet_chain_caller.id(),
         vec![faucet_account_id, attacker_vault_id],
         vec![],
         (faucet_program_id, vault_program_id, attacker, amount),

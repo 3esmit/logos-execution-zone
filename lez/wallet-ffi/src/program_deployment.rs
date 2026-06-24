@@ -1,7 +1,7 @@
 use std::{ffi::CString, ptr, slice};
 
 use common::transaction::LeeTransaction;
-use lee::{program::Program, ProgramDeploymentTransaction};
+use lee::ProgramDeploymentTransaction;
 use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
@@ -112,7 +112,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_elf(ffi_program: *mut FfiProgram) -
         return WalletFfiError::NullPointer;
     }
 
-    let elf = Program::authenticated_transfer_program().elf().to_vec();
+    let elf = programs::authenticated_transfer().elf().to_vec();
 
     let (raw_elf_data, raw_elf_size, _) = elf.into_raw_parts();
 
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn wallet_ffi_token_elf(ffi_program: *mut FfiProgram) -> W
         return WalletFfiError::NullPointer;
     }
 
-    let elf = Program::token().elf().to_vec();
+    let elf = programs::token().elf().to_vec();
 
     let (raw_elf_data, raw_elf_size, _) = elf.into_raw_parts();
 
@@ -182,7 +182,7 @@ pub unsafe extern "C" fn wallet_ffi_amm_elf(ffi_program: *mut FfiProgram) -> Wal
         return WalletFfiError::NullPointer;
     }
 
-    let elf = Program::amm().elf().to_vec();
+    let elf = programs::amm().elf().to_vec();
 
     let (raw_elf_data, raw_elf_size, _) = elf.into_raw_parts();
 
@@ -217,7 +217,7 @@ pub unsafe extern "C" fn wallet_ffi_ata_elf(ffi_program: *mut FfiProgram) -> Wal
         return WalletFfiError::NullPointer;
     }
 
-    let elf = Program::ata().elf().to_vec();
+    let elf = programs::ata().elf().to_vec();
 
     let (raw_elf_data, raw_elf_size, _) = elf.into_raw_parts();
 

@@ -7,7 +7,7 @@ use std::{
     str::FromStr as _,
 };
 
-use lee::{Data, SharedSecretKey};
+use lee::{Data, ProgramId, SharedSecretKey};
 use lee_core::{encryption::MlKem768EncapsulationKey, NullifierPublicKey};
 use wallet::AccountIdentity;
 
@@ -578,6 +578,18 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 })
             }
         }
+    }
+}
+
+impl From<ProgramId> for FfiProgramId {
+    fn from(value: ProgramId) -> Self {
+        Self { data: value }
+    }
+}
+
+impl From<FfiProgramId> for ProgramId {
+    fn from(value: FfiProgramId) -> Self {
+        value.data
     }
 }
 

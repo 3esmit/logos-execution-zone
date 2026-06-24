@@ -80,10 +80,9 @@ impl LeeTransaction {
     ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
         let diff = self.compute_state_diff(state, block_id, timestamp)?;
 
-        let restricted_modification_accounts = lee::CLOCK_PROGRAM_ACCOUNT_IDS
-            .iter()
-            .copied()
-            .chain(std::iter::once(lee::system_faucet_account_id()));
+        let restricted_modification_accounts = system_accounts::clock_account_ids()
+            .into_iter()
+            .chain(std::iter::once(system_accounts::faucet_account_id()));
         for account_id in restricted_modification_accounts {
             validate_doesnt_modify_account(state, &diff, account_id)?;
         }
@@ -157,7 +156,7 @@ impl LeeTransaction {
         state: &V03State,
         diff: &ValidatedStateDiff,
     ) -> Result<(), lee::error::LeeError> {
-        let bridge_account_id = lee::system_bridge_account_id();
+        let bridge_account_id = system_accounts::bridge_account_id();
         let pre = state.get_account_by_id(bridge_account_id);
         let Some(post) = diff.public_diff().get(&bridge_account_id).cloned() else {
             return Ok(());
@@ -229,7 +228,7 @@ pub enum TransactionMalformationError {
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
     let message = lee::public_transaction::Message::try_new(
-        lee::program::Program::clock().id(),
+        programs::clock().id(),
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
@@ -261,17 +260,14 @@ fn validate_doesnt_modify_account(
 
 #[cfg(test)]
 mod tests {
-    use lee::{
-        AccountId, CLOCK_01_PROGRAM_ACCOUNT_ID, PrivateKey, PublicKey, V03State,
-        system_bridge_account_id, system_faucet_account_id,
-    };
+    use lee::{AccountId, PrivateKey, PublicKey, V03State};
 
     use crate::test_utils::create_transaction_native_token_transfer;
 
     #[test]
     fn system_account_ids_are_distinct_and_non_default() {
-        let faucet = system_faucet_account_id();
-        let bridge = system_bridge_account_id();
+        let faucet = system_accounts::faucet_account_id();
+        let bridge = system_accounts::bridge_account_id();
         assert_ne!(faucet, AccountId::default());
         assert_ne!(bridge, AccountId::default());
         assert_ne!(faucet, bridge);
@@ -286,12 +282,12 @@ mod tests {
         // (an empty diff hides the modification).
         let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
         let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
-        let state = V03State::new_with_genesis_accounts(&[(sender_id, 10_000)], vec![], 0);
+        let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
 
         let tx = create_transaction_native_token_transfer(
             sender_id,
             0,
-            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            system_accounts::clock_account_ids()[0],
             100,
             &sender_key,
         );

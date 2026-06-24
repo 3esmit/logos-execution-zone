@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stderr,
+    reason = "This is a CLI application, printing to stderr is expected and convenient"
+)]
+
 use anyhow::Result;
 use clap::Subcommand;
 use keycard_wallet::{KeycardWallet, clear_pairing, python_path};

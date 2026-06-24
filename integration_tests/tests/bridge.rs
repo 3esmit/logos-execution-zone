@@ -43,12 +43,12 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
-    let bridge_account_id = lee::system_bridge_account_id();
-    let vault_program_id = Program::vault().id();
+    let bridge_account_id = system_accounts::bridge_account_id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
     let message = public_transaction::Message::try_new(
-        Program::bridge().id(),
+        programs::bridge().id(),
         vec![bridge_account_id, recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
@@ -103,8 +103,8 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
-    let bridge_account_id = lee::system_bridge_account_id();
-    let vault_program_id = Program::vault().id();
+    let bridge_account_id = system_accounts::bridge_account_id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
     // Get pre-state of bridge and vault accounts
@@ -126,12 +126,12 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Create program with dependencies
     let program_with_deps =
         lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
-            Program::bridge(),
+            programs::bridge(),
             [
-                (vault_program_id, Program::vault()),
+                (vault_program_id, programs::vault()),
                 (
-                    Program::authenticated_transfer_program().id(),
-                    Program::authenticated_transfer_program(),
+                    programs::authenticated_transfer().id(),
+                    programs::authenticated_transfer(),
                 ),
             ]
             .into(),
@@ -386,7 +386,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
     let recipient_id = ctx.existing_public_accounts()[0];
     let amount = 1_u64;
-    let vault_program_id = Program::vault().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
     let vault_balance_before = ctx
@@ -474,7 +474,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     // state as the sequencer — including the bridge system account the deposit
     // modifies, which is the case the hot fix unblocks.
     wait_for_indexer_to_catch_up(&ctx).await?;
-    let bridge_account_id = lee::system_bridge_account_id();
+    let bridge_account_id = system_accounts::bridge_account_id();
     for account_id in [recipient_id, recipient_vault_id, bridge_account_id] {
         let indexer_account = indexer_service_rpc::RpcClient::get_account(
             // `deref` is needed for correct trait resolution

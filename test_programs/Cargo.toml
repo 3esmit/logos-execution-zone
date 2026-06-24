@@ -1,0 +1,17 @@
+[package]
+name = "test_programs"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+
+[build-dependencies]
+risc0-build.workspace = true
+
+[package.metadata.risc0]
+methods = ["guest"]

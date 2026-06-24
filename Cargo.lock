@@ -123,6 +123,7 @@ dependencies = [
  "amm_core",
  "lee",
  "lee_core",
+ "programs",
  "token_core",
 ]
 
@@ -514,6 +515,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4858a9d740c5007a9069007c3b4e91152d0506f13c1b31dd49051fd537656156"
 
 [[package]]
+name = "associated_token_account_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "associated_token_account_program"
+version = "0.1.0"
+dependencies = [
+ "associated_token_account_core",
+ "lee_core",
+ "token_core",
+]
+
+[[package]]
 name = "astral-tokio-tar"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,24 +685,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ata_core"
-version = "0.1.0"
-dependencies = [
- "lee_core",
- "risc0-zkvm",
- "serde",
-]
-
-[[package]]
-name = "ata_program"
-version = "0.1.0"
-dependencies = [
- "ata_core",
- "lee_core",
- "token_core",
-]
-
-[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -756,6 +757,14 @@ name = "authenticated_transfer_core"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "authenticated_transfer_program"
+version = "0.1.0"
+dependencies = [
+ "authenticated_transfer_core",
+ "lee_core",
 ]
 
 [[package]]
@@ -1146,12 +1155,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge_program"
+version = "0.1.0"
+dependencies = [
+ "authenticated_transfer_core",
+ "bridge_core",
+ "lee_core",
+ "vault_core",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
 dependencies = [
  "tinyvec",
+]
+
+[[package]]
+name = "build_utils"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "risc0-binfmt",
 ]
 
 [[package]]
@@ -1453,6 +1480,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "clock_program"
+version = "0.1.0"
+dependencies = [
+ "clock_core",
+ "lee_core",
+]
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1514,9 +1549,11 @@ dependencies = [
  "lee_core",
  "log",
  "logos-blockchain-common-http-client",
+ "programs",
  "serde",
  "serde_with",
  "sha2",
+ "system_accounts",
  "thiserror 2.0.18",
 ]
 
@@ -1932,7 +1969,7 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "anyhow",
- "ata_core",
+ "associated_token_account_core",
  "authenticated_transfer_core",
  "borsh",
  "clap",
@@ -1940,9 +1977,11 @@ dependencies = [
  "criterion",
  "lee",
  "lee_core",
+ "programs",
  "risc0-zkvm",
  "serde",
  "serde_json",
+ "test_programs",
  "token_core",
 ]
 
@@ -2638,6 +2677,16 @@ version = "0.1.0"
 dependencies = [
  "lee_core",
  "serde",
+]
+
+[[package]]
+name = "faucet_program"
+version = "0.1.0"
+dependencies = [
+ "authenticated_transfer_core",
+ "faucet_core",
+ "lee_core",
+ "vault_core",
 ]
 
 [[package]]
@@ -3959,7 +4008,7 @@ name = "integration_tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ata_core",
+ "associated_token_account_core",
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",
@@ -3980,12 +4029,15 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
+ "programs",
  "reqwest",
  "sequencer_core",
  "sequencer_service_rpc",
  "serde_json",
+ "system_accounts",
  "tempfile",
  "test_fixtures",
+ "test_programs",
  "token_core",
  "tokio",
  "vault_core",
@@ -4499,12 +4551,9 @@ name = "lee"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "authenticated_transfer_core",
  "borsh",
- "bridge_core",
- "clock_core",
+ "build_utils",
  "env_logger",
- "faucet_core",
  "hex",
  "hex-literal 1.1.0",
  "k256",
@@ -4512,13 +4561,12 @@ dependencies = [
  "log",
  "rand 0.8.6",
  "risc0-binfmt",
- "risc0-build",
  "risc0-zkvm",
  "serde",
  "serde_with",
  "sha2",
  "test-case",
- "test_program_methods",
+ "test_methods",
  "thiserror 2.0.18",
  "token_core",
 ]
@@ -7113,6 +7161,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinata_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+]
+
+[[package]]
+name = "pinata_token_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "token_core",
+]
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7266,6 +7331,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "privacy_preserving_circuit_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7367,27 +7440,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "program_methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
-]
-
-[[package]]
 name = "programs"
 version = "0.1.0"
 dependencies = [
  "amm_core",
  "amm_program",
- "ata_core",
- "ata_program",
+ "associated_token_account_core",
+ "associated_token_account_program",
  "authenticated_transfer_core",
  "bridge_core",
+ "build_utils",
  "clock_core",
  "faucet_core",
+ "lee",
  "lee_core",
  "risc0-zkvm",
- "serde",
  "token_core",
  "token_program",
  "vault_core",
@@ -8842,14 +8909,17 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "mempool",
  "num-bigint 0.4.6",
+ "programs",
  "rand 0.8.6",
  "risc0-zkvm",
  "serde",
  "serde_json",
  "storage",
+ "system_accounts",
  "tempfile",
- "test_program_methods",
+ "test_programs",
  "testnet_initial_state",
+ "token_core",
  "tokio",
  "url",
  "vault_core",
@@ -8870,6 +8940,7 @@ dependencies = [
  "lee",
  "log",
  "mempool",
+ "programs",
  "sequencer_core",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
@@ -9388,7 +9459,9 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "programs",
  "rocksdb",
+ "system_accounts",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -9542,6 +9615,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "system_accounts"
+version = "0.1.0"
+dependencies = [
+ "bridge_core",
+ "clock_core",
+ "faucet_core",
+ "lee_core",
+ "programs",
+]
+
+[[package]]
 name = "tachys"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9663,6 +9747,7 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
+ "programs",
  "sequencer_core",
  "sequencer_service",
  "sequencer_service_rpc",
@@ -9676,14 +9761,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "test_program_methods"
+name = "test_methods"
 version = "0.1.0"
 dependencies = [
  "risc0-build",
 ]
 
 [[package]]
-name = "test_programs"
+name = "test_methods_guests"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
@@ -9691,7 +9785,14 @@ dependencies = [
  "faucet_core",
  "lee_core",
  "risc0-zkvm",
- "serde",
+]
+
+[[package]]
+name = "test_programs"
+version = "0.1.0"
+dependencies = [
+ "lee",
+ "risc0-build",
 ]
 
 [[package]]
@@ -9731,11 +9832,12 @@ dependencies = [
 name = "testnet_initial_state"
 version = "0.1.0"
 dependencies = [
- "common",
  "key_protocol",
  "lee",
  "lee_core",
+ "programs",
  "serde",
+ "system_accounts",
 ]
 
 [[package]]
@@ -10694,6 +10796,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vault_program"
+version = "0.1.0"
+dependencies = [
+ "authenticated_transfer_core",
+ "lee_core",
+ "vault_core",
+]
+
+[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10721,8 +10832,8 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "anyhow",
+ "associated_token_account_core",
  "async-stream",
- "ata_core",
  "authenticated_transfer_core",
  "base58",
  "bincode",
@@ -10744,6 +10855,7 @@ dependencies = [
  "lee_core",
  "log",
  "optfield",
+ "programs",
  "pyo3",
  "rand 0.8.6",
  "rpassword",
@@ -10751,6 +10863,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "system_accounts",
  "tempfile",
  "testnet_initial_state",
  "thiserror 2.0.18",
@@ -10771,6 +10884,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "programs",
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde_json",

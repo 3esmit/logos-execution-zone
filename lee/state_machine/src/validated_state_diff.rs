@@ -462,7 +462,7 @@ impl ValidatedStateDiff {
         state: &V03State,
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
-        let program = Program::new(tx.message.bytecode.clone())?;
+        let program = Program::new(tx.message.bytecode.clone().into())?;
         if state.programs().contains_key(&program.id()) {
             return Err(LeeError::ProgramAlreadyExists);
         }
@@ -516,7 +516,9 @@ fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Nonce};
+    use std::collections::HashMap;
+
+    use lee_core::account::{Account, AccountId, Nonce};
 
     use crate::{
         PrivateKey, PublicKey, V03State,
@@ -526,27 +528,43 @@ mod tests {
         validated_state_diff::ValidatedStateDiff,
     };
 
+    fn public_state_from_balances(
+        initial_data: &[(AccountId, u128)],
+    ) -> HashMap<AccountId, Account> {
+        initial_data
+            .iter()
+            .copied()
+            .map(|(account_id, balance)| {
+                (
+                    account_id,
+                    Account {
+                        program_owner: crate::test_methods::simple_balance_transfer().id(),
+                        balance,
+                        ..Account::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn public_diff_reflects_a_successful_transfer() {
         // A successful native transfer must record the debited sender in
         // `public_diff()`.  Catches the mutation that replaces `public_diff` with
         // `HashMap::new()` (which would hide every account change).
-        use authenticated_transfer_core::Instruction as AtInstruction;
-
         let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
         let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
         let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
 
-        let state = V03State::new_with_genesis_accounts(&[(from, 100)], vec![], 0);
-        let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(
-            program_id,
-            vec![from, to],
-            vec![Nonce(0), Nonce(0)],
-            AtInstruction::Transfer { amount: 5 },
-        )
-        .unwrap();
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&[(from, 100)]))
+            .with_programs(std::iter::once(
+                crate::test_methods::simple_balance_transfer(),
+            ));
+        let program_id = crate::test_methods::simple_balance_transfer().id();
+        let message =
+            Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
         let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
         let tx = crate::PublicTransaction::new(message, witness_set);
 
@@ -596,7 +614,7 @@ mod tests {
 
         type InjectorInstruction = (
             lee_core::program::ProgramId, // p2_id
-            lee_core::program::ProgramId, // auth_transfer_id
+            lee_core::program::ProgramId, // simple_balance_transfer_id
             [u8; 32],                     // victim_id_raw
             u128,                         // victim_balance
             u128,                         // victim_nonce
@@ -614,18 +632,21 @@ mod tests {
         let recipient_id = AccountId::new([42_u8; 32]);
         let victim_balance = 5_000_u128;
 
-        // genesis sets program_owner = authenticated_transfer_program.id() on all accounts.
-        let mut state = V03State::new_with_genesis_accounts(
-            &[(victim_id, victim_balance), (recipient_id, 0)],
-            vec![],
-            0,
-        );
-        state.insert_program(Program::malicious_injector());
-        state.insert_program(Program::malicious_launderer());
+        // genesis sets program_owner = simple_balance_transfer_program.id() on all accounts.
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&[
+                (victim_id, victim_balance),
+                (recipient_id, 0),
+            ]))
+            .with_programs([
+                crate::test_methods::simple_balance_transfer(),
+                crate::test_methods::malicious_injector(),
+                crate::test_methods::malicious_launderer(),
+            ]);
 
         // Build attacker's private account and its local commitment tree.
         let attacker_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             ..Account::default()
         };
@@ -640,8 +661,8 @@ mod tests {
 
         let victim_account = state.get_account_by_id(victim_id);
         let instruction: InjectorInstruction = (
-            Program::malicious_launderer().id(),
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::malicious_launderer().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             *victim_id.value(),
             victim_account.balance,
             victim_account.nonce.0,
@@ -651,17 +672,17 @@ mod tests {
         );
         let instruction_data = Program::serialize_instruction(instruction).unwrap();
 
-        let p2 = Program::malicious_launderer();
-        let at = Program::authenticated_transfer_program();
+        let p2 = crate::test_methods::malicious_launderer();
+        let at = crate::test_methods::simple_balance_transfer();
         let program_with_deps = ProgramWithDependencies::new(
-            Program::malicious_injector(),
+            crate::test_methods::malicious_injector(),
             [(p2.id(), p2), (at.id(), at)].into(),
         );
 
         // account_identities order must match self.pre_states as built by the circuit:
         //   [0] attacker — first seen in P1's program_output.pre_states
-        //   [1] victim   — first seen in authenticated_transfer's program_output.pre_states
-        //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
+        //   [1] victim   — first seen in simple_balance_transfer's program_output.pre_states
+        //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 epk: attacker_epk,
@@ -751,7 +772,7 @@ mod tests {
 
         type InjectorInstruction = (
             lee_core::program::ProgramId, // p2_id
-            lee_core::program::ProgramId, // auth_transfer_id
+            lee_core::program::ProgramId, // simple_balance_transfer_id
             [u8; 32],                     // victim_id_raw
             u128,                         // victim_balance
             u128,                         // victim_nonce
@@ -773,13 +794,17 @@ mod tests {
         let recipient_id = AccountId::new([42_u8; 32]);
 
         // Victim has no public state entry; only recipient is registered at genesis.
-        let mut state = V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], 0);
-        state.insert_program(Program::malicious_injector());
-        state.insert_program(Program::malicious_launderer());
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&[(recipient_id, 0)]))
+            .with_programs([
+                crate::test_methods::simple_balance_transfer(),
+                crate::test_methods::malicious_injector(),
+                crate::test_methods::malicious_launderer(),
+            ]);
 
         // Build attacker's private account and its local commitment tree.
         let attacker_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             ..Account::default()
         };
@@ -793,32 +818,32 @@ mod tests {
         let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
 
         // The attacker supplies the victim's account data directly — it cannot be read from
-        // public state. The injected balance and program_owner allow authenticated_transfer
+        // public state. The injected balance and program_owner allow simple_balance_transfer
         // to succeed inside the circuit, which has no access to chain state and cannot detect
         // that these values are fabricated.
         let instruction: InjectorInstruction = (
-            Program::malicious_launderer().id(),
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::malicious_launderer().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             *victim_id.value(),
             victim_balance,
-            0_u128,                                         // nonce
-            Program::authenticated_transfer_program().id(), // program_owner
+            0_u128,                                              // nonce
+            crate::test_methods::simple_balance_transfer().id(), // program_owner
             *recipient_id.value(),
             victim_balance,
         );
         let instruction_data = Program::serialize_instruction(instruction).unwrap();
 
-        let p2 = Program::malicious_launderer();
-        let at = Program::authenticated_transfer_program();
+        let p2 = crate::test_methods::malicious_launderer();
+        let at = crate::test_methods::simple_balance_transfer();
         let program_with_deps = ProgramWithDependencies::new(
-            Program::malicious_injector(),
+            crate::test_methods::malicious_injector(),
             [(p2.id(), p2), (at.id(), at)].into(),
         );
 
         // account_identities order must match self.pre_states as built by the circuit:
         //   [0] attacker  — first seen in P1's program_output.pre_states
-        //   [1] victim    — first seen in authenticated_transfer's program_output.pre_states
-        //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
+        //   [1] victim    — first seen in simple_balance_transfer's program_output.pre_states
+        //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
         //
         // Victim is marked Public: the attacker has no nsk for the victim's private account,
         // so PrivateAuthorizedUpdate is not an option.
@@ -838,7 +863,7 @@ mod tests {
             InputAccountIdentity::Public, // recipient
         ];
 
-        // execute_and_prove succeeds: authenticated_transfer runs against the injected
+        // execute_and_prove succeeds: simple_balance_transfer runs against the injected
         // victim(balance=5000, is_authorized=true) and produces valid inner receipts.
         // The outer circuit commits victim(is_authorized=true) to public_pre_states.
         let (circuit_output, proof) = execute_and_prove(
@@ -880,7 +905,7 @@ mod tests {
     ///   Transaction (attacker signs) → P1 (`malicious_injector`)
     ///     → injects `victim(is_authorized=true)` into chained-call `pre_states` for P2
     ///   P2 (`malicious_launderer`)
-    ///     → outputs empty pre/post states, forwarding the forged flag to `authenticated_transfer`
+    ///     → outputs empty pre/post states, forwarding the forged flag to `simple_balance_transfer`
     ///     → if `authorized_accounts` were built from the injected `pre_states`,
     ///       `{victim}.contains(victim)` would pass and the transfer would execute.
     ///
@@ -889,13 +914,13 @@ mod tests {
     /// input, so a forged `is_authorized=true` flag is never trusted.
     #[test]
     fn malicious_programs_cannot_drain_victim_without_signature() {
-        // p2_id, auth_transfer_id, victim_id_raw, victim_balance, victim_nonce,
+        // p2_id, simple_balance_transfer_id, victim_id_raw, victim_balance, victim_nonce,
         // victim_program_owner, recipient_id_raw, amount.
         // Primitives only — AccountId/Account cannot round-trip through instruction_data
         // via risc0_zkvm::serde (SerializeDisplay issue).
         type InjectorInstruction = (
             lee_core::program::ProgramId, // p2_id
-            lee_core::program::ProgramId, // auth_transfer_id
+            lee_core::program::ProgramId, // simple_balance_transfer_id
             [u8; 32],                     // victim_id_raw
             u128,                         // victim_balance
             u128,                         // victim_nonce
@@ -913,25 +938,24 @@ mod tests {
         let recipient_id = AccountId::new([42; 32]);
 
         let victim_balance = 5_000_u128;
-        let mut state = V03State::new_with_genesis_accounts(
-            &[
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&[
                 (attacker_id, 100),
                 (victim_id, victim_balance),
                 (recipient_id, 0),
-            ],
-            vec![],
-            0,
-        );
-
-        state.insert_program(Program::malicious_injector());
-        state.insert_program(Program::malicious_launderer());
+            ]))
+            .with_programs([
+                crate::test_methods::simple_balance_transfer(),
+                crate::test_methods::malicious_injector(),
+                crate::test_methods::malicious_launderer(),
+            ]);
 
         // Read victim state from chain, exactly as the attacker would.
         let victim_account = state.get_account_by_id(victim_id);
 
         let instruction: InjectorInstruction = (
-            Program::malicious_launderer().id(),
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::malicious_launderer().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             *victim_id.value(),
             victim_account.balance,
             victim_account.nonce.0,
@@ -941,7 +965,7 @@ mod tests {
         );
 
         let message = Message::try_new(
-            Program::malicious_injector().id(),
+            crate::test_methods::malicious_injector().id(),
             vec![attacker_id],
             vec![Nonce(0)],
             instruction,
@@ -994,7 +1018,7 @@ mod tests {
             },
         };
 
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let state = V03State::new();
 
         // Minimal message that passes every check up to proof verification: a single
         // commitment satisfies the non-empty requirement, no signers makes the

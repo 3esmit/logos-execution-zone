@@ -31,7 +31,7 @@ use tempfile::tempdir;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys,
-    FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
+    FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     wallet::FfiCreateWalletOutput,
 };
@@ -234,7 +234,7 @@ unsafe extern "C" {
         account_identities_size: usize,
         instruction_words: *const u32,
         instruction_words_size: usize,
-        program_with_dependencies: *const FfiProgramWithDependencies,
+        program_id: FfiProgramId,
         out_result: *mut FfiTransactionResult,
     ) -> error::WalletFfiError;
 
@@ -608,7 +608,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -648,7 +648,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -846,7 +846,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
 
     unsafe {
@@ -906,7 +906,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
 
     unsafe {
@@ -1493,7 +1493,7 @@ fn test_wallet_ffi_bridge_withdraw() -> Result<()> {
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
-    let bridge_account: FfiBytes32 = lee::system_bridge_account_id().into();
+    let bridge_account: FfiBytes32 = system_accounts::bridge_account_id().into();
     let bedrock_account_pk = FfiBytes32::from_bytes([0x42; 32]);
     let amount = 100_u64;
 
@@ -1585,8 +1585,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
     let instruction_words_size = instruction_data.len();
     let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
 
-    let program: ProgramWithDependencies = Program::authenticated_transfer_program().into();
-    let program_with_dependencies: FfiProgramWithDependencies = program.into();
+    let program_id = programs::authenticated_transfer().id();
 
     unsafe {
         wallet_ffi_send_generic_public_transaction(
@@ -1595,7 +1594,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
             account_identities_size,
             instruction_words,
             instruction_words_size,
-            &raw const program_with_dependencies,
+            program_id.into(),
             &raw mut transaction_result,
         )
         .unwrap();
@@ -1682,7 +1681,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
     let instruction_words_size = instruction_data.len();
     let instruction_words = Box::into_raw(instruction_data.into_boxed_slice()) as *const u32;
 
-    let program: ProgramWithDependencies = Program::authenticated_transfer_program().into();
+    let program: ProgramWithDependencies = programs::authenticated_transfer().into();
     let program_with_dependencies: FfiProgramWithDependencies = program.into();
 
     unsafe {
