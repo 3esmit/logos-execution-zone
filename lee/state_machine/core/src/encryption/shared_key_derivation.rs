@@ -92,7 +92,7 @@ impl SharedSecretKey {
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
-        message_hash: &[u8; 32],
+        esk: &[u8; 32],
         output_index: u32,
     ) -> (Self, EphemeralPublicKey) {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -100,7 +100,7 @@ impl SharedSecretKey {
         const PREFIX: &[u8; 21] = b"/LEE/v0.3/KDF-ML-KEM/";
         let mut input = [0; 21 + 32 + 4];
         input[0..21].copy_from_slice(PREFIX);
-        input[21..53].copy_from_slice(message_hash);
+        input[21..53].copy_from_slice(esk);
         input[53..57].copy_from_slice(&output_index.to_le_bytes());
         let hash = Impl::hash_bytes(&input);
         let m: ml_kem::B32 =
