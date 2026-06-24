@@ -7,7 +7,38 @@ on:
       - "v*"
 
 jobs:
+  # Shared base (toolchain + r0vm), single source of truth in
+  # lez/docker/risc0-base.Dockerfile. Built and pushed once so the service
+  # builds below can pull it as the `risc0_base` named context. The
+  # docker-container builder resolves named contexts from the registry (not the
+  # host image store), so the base must be pushed, not just loaded.
+  risc0_base:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.DOCKER_REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push risc0 base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./lez/docker/risc0-base.Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}/risc0_base:sha-${{ github.sha }}
+          cache-from: type=gha,scope=risc0-base
+          cache-to: type=gha,mode=max,scope=risc0-base
+
   publish:
+    needs: risc0_base
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -16,20 +47,16 @@ jobs:
             dockerfile: ./lez/sequencer/service/Dockerfile
             build_args: |
               STANDALONE=false
-            needs_risc0: true
           - name: sequencer_service-standalone
             dockerfile: ./lez/sequencer/service/Dockerfile
             build_args: |
               STANDALONE=true
-            needs_risc0: true
           - name: indexer_service
             dockerfile: ./lez/indexer/service/Dockerfile
             build_args: ""
-            needs_risc0: true
           - name: explorer_service
             dockerfile: ./lez/explorer_service/Dockerfile
             build_args: ""
-            needs_risc0: false
     steps:
       - uses: actions/checkout@v5
 
@@ -57,17 +84,6 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build risc0 base image
-        if: ${{ matrix.needs_risc0 }}
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./lez/docker/risc0-base.Dockerfile
-          load: true
-          tags: lez/risc0_base:ci
-          cache-from: type=gha,scope=risc0-base
-          cache-to: type=gha,mode=max,scope=risc0-base
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -77,6 +93,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
-          build-contexts: ${{ matrix.needs_risc0 && 'risc0_base=docker-image://lez/risc0_base:ci' || '' }}
+          build-contexts: risc0_base=docker-image://${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}/risc0_base:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
