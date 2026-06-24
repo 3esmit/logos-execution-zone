@@ -1146,6 +1146,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge_lock_core"
+version = "0.1.0"
+dependencies = [
+ "lee",
+ "lee_core",
+ "serde",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1801,8 +1810,10 @@ name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "bridge_lock_core",
  "lee",
  "lee_core",
+ "ping_core",
  "risc0-zkvm",
  "serde",
 ]
@@ -3823,6 +3834,7 @@ dependencies = [
  "async-stream",
  "authenticated_transfer_core",
  "borsh",
+ "bridge_lock_core",
  "common",
  "cross_zone_inbox_core",
  "futures",
@@ -3988,8 +4000,10 @@ dependencies = [
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",
+ "bridge_lock_core",
  "bytesize",
  "common",
+ "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "faucet_core",
  "futures",
@@ -4019,6 +4033,7 @@ dependencies = [
  "vault_core",
  "wallet",
  "wallet-ffi",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -4530,8 +4545,10 @@ dependencies = [
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",
+ "bridge_lock_core",
  "clock_core",
  "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
  "env_logger",
  "faucet_core",
  "hex",
@@ -4551,6 +4568,7 @@ dependencies = [
  "test_program_methods",
  "thiserror 2.0.18",
  "token_core",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -7421,6 +7439,7 @@ dependencies = [
  "ata_program",
  "authenticated_transfer_core",
  "bridge_core",
+ "bridge_lock_core",
  "clock_core",
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
@@ -7432,6 +7451,7 @@ dependencies = [
  "token_core",
  "token_program",
  "vault_core",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -8867,6 +8887,7 @@ dependencies = [
  "anyhow",
  "borsh",
  "bridge_core",
+ "bridge_lock_core",
  "bytesize",
  "chrono",
  "common",
@@ -11473,6 +11494,15 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "wrapped_token_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
 ]
 
 [[package]]

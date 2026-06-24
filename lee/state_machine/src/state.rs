@@ -201,6 +201,23 @@ impl V03State {
         this.insert_program(Program::cross_zone_inbox());
         this.insert_program(Program::ping_sender());
         this.insert_program(Program::ping_receiver());
+        this.insert_program(Program::bridge_lock());
+        this.insert_program(Program::wrapped_token());
+
+        // Seed the wrapped-token config with its authorized minter (the cross-zone
+        // inbox), so the guest can pin its caller without importing the inbox id.
+        let wrapped_token_id = Program::wrapped_token().id();
+        this.public_state.insert(
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            Account {
+                program_owner: wrapped_token_id,
+                data: wrapped_token_core::minter_bytes(Program::cross_zone_inbox().id())
+                    .to_vec()
+                    .try_into()
+                    .expect("minter id fits in account data"),
+                ..Account::default()
+            },
+        );
 
         this
     }
@@ -705,6 +722,17 @@ pub mod tests {
                     },
                 );
             }
+            this.insert(
+                wrapped_token_core::config_account_id(Program::wrapped_token().id()),
+                Account {
+                    program_owner: Program::wrapped_token().id(),
+                    data: wrapped_token_core::minter_bytes(Program::cross_zone_inbox().id())
+                        .to_vec()
+                        .try_into()
+                        .unwrap(),
+                    ..Account::default()
+                },
+            );
             this
         };
         let expected_builtin_programs = {
@@ -727,6 +755,8 @@ pub mod tests {
             this.insert(Program::cross_zone_inbox().id(), Program::cross_zone_inbox());
             this.insert(Program::ping_sender().id(), Program::ping_sender());
             this.insert(Program::ping_receiver().id(), Program::ping_receiver());
+            this.insert(Program::bridge_lock().id(), Program::bridge_lock());
+            this.insert(Program::wrapped_token().id(), Program::wrapped_token());
             this
         };
 

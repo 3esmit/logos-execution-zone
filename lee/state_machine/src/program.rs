@@ -14,7 +14,7 @@ use crate::{
         CLOCK_ID, CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF,
         CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, PING_RECEIVER_ELF,
         PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF,
-        VAULT_ID,
+        VAULT_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     },
 };
 
@@ -205,6 +205,22 @@ impl Program {
         Self {
             id: PING_SENDER_ID,
             elf: PING_SENDER_ELF.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn bridge_lock() -> Self {
+        Self {
+            id: BRIDGE_LOCK_ID,
+            elf: BRIDGE_LOCK_ELF.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn wrapped_token() -> Self {
+        Self {
+            id: WRAPPED_TOKEN_ID,
+            elf: WRAPPED_TOKEN_ELF.to_vec(),
         }
     }
 }
