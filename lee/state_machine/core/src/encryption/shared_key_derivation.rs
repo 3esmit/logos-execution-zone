@@ -80,15 +80,16 @@ impl SharedSecretKey {
         (Self(ss_bytes), EphemeralPublicKey(ct.to_vec()))
     }
 
-    /// Deterministically encapsulate a shared secret toward `ek` for use in tests.
+    /// Deterministically encapsulate a shared secret toward `ek` with a given
+    /// `esk` and `output_index`.
     ///
-    /// The shared secret has no secret entropy — it is fully determined by `ek`,
-    /// `message_hash`, and `output_index`, all of which are public. This makes it
-    /// unsuitable for real encryption but useful for producing stable, reproducible
-    /// shared secrets in unit tests. Use a distinct `output_index` per output to
-    /// avoid EPK collisions across multiple outputs in the same test.
+    /// This function runs inside the privacy-preserving circuit, generating
+    /// the shared secret for ciphertext generation.
     ///
-    /// For production use [`Self::encapsulate`], which draws randomness from the OS.
+    /// Important: since `ek` is assumed to be public, the uniqueness of the
+    /// secret is reliant upon the uniqueness of the ephemeral secret key for
+    /// a note in a given position. It is hence important to generate it
+    /// with high entropy, for which the prover is responsible.
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
