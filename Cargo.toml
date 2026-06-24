@@ -92,7 +92,7 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
-# Unstable fearture needed for keccak optimization
+# Unstable feature needed for keccak optimization
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std', 'unstable'] }
 risc0-build = { version = "3.0.5", features = ['unstable'] }
 anyhow = "1.0.98"
