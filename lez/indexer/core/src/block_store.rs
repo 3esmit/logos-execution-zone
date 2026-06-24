@@ -22,11 +22,12 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path, genesis_seed: Option<(AccountId, Account)>) -> Result<Self> {
+    pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
         let mut initial_state = testnet_initial_state::initial_state();
-        // Seed any zone-specific genesis accounts (e.g. the cross-zone inbox
-        // config) so the indexer's replayed state matches the sequencer's.
-        if let Some((account_id, account)) = genesis_seed {
+        // Seed any zone-specific genesis accounts (the cross-zone inbox config and
+        // bridge-lock holdings) so the indexer's replayed state matches the
+        // sequencer's; none are produced by a transaction.
+        for (account_id, account) in genesis_seed {
             initial_state.insert_genesis_account(account_id, account);
         }
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
@@ -220,7 +221,7 @@ mod tests {
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let final_id = storage.get_last_block_id().unwrap();
 
@@ -228,10 +229,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn seeds_bridge_lock_holding_into_genesis_state() {
+        // The holding is force-inserted, not produced by a transaction, so the
+        // indexer must seed it to match the sequencer. Use the same builder both
+        // sides use, so this also guards against the two drifting.
+        let home = tempdir().unwrap();
+        let holder = AccountId::new([5; 32]);
+        let (id, account) = bridge_lock_core::build_holding_account(holder, 42);
+
+        let storage = IndexerStore::open_db(home.as_ref(), vec![(id, account)]).unwrap();
+
+        let seeded = storage.account_current_state(&holder).await.unwrap();
+        assert_eq!(
+            bridge_lock_core::read_balance(&seeded.data.into_inner()),
+            42,
+            "indexer genesis must hold the seeded bridge-lock balance"
+        );
+    }
+
+    #[tokio::test]
     async fn state_transition() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
@@ -283,7 +303,7 @@ mod tests {
     async fn account_state_at_block() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref(), None).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let mut prev_hash = None;
 

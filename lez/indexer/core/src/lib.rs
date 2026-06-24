@@ -37,12 +37,23 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node);
 
-        // Seed the inbox config so the indexer can replay cross-zone dispatch
-        // transactions, matching the account the sequencer seeds at genesis.
-        let inbox_config_seed = config.cross_zone.as_ref().map(|cross_zone| {
+        // Genesis accounts the indexer must seed to match the sequencer's state,
+        // since none are produced by a transaction: the cross-zone inbox config
+        // and any bridge-lock holdings. Both go through the same builders the
+        // sequencer uses, so the states are byte-identical.
+        let mut genesis_seed = Vec::new();
+        if let Some(cross_zone) = config.cross_zone.as_ref() {
             let self_zone: [u8; 32] = *config.channel_id.as_ref();
-            cross_zone_inbox_core::build_inbox_config_account(self_zone, cross_zone)
-        });
+            genesis_seed.push(cross_zone_inbox_core::build_inbox_config_account(
+                self_zone, cross_zone,
+            ));
+        }
+        for holding in &config.bridge_lock_holdings {
+            genesis_seed.push(bridge_lock_core::build_holding_account(
+                holding.holder,
+                holding.amount,
+            ));
+        }
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
         // finalized blocks. `None` when cross-zone messaging is disabled.
@@ -51,7 +62,7 @@ impl IndexerCore {
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
             config,
-            store: IndexerStore::open_db(&home, inbox_config_seed)?,
+            store: IndexerStore::open_db(&home, genesis_seed)?,
             verifier,
         })
     }

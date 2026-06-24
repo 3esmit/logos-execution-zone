@@ -182,6 +182,7 @@ pub fn indexer_config(
         },
         channel_id,
         cross_zone,
+        bridge_lock_holdings: Vec::new(),
     })
 }
 

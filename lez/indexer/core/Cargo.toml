@@ -13,6 +13,7 @@ logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 cross_zone_inbox_core = { workspace = true, features = ["host"] }
+bridge_lock_core = { workspace = true, features = ["host"] }
 ping_core.workspace = true
 storage.workspace = true
 testnet_initial_state.workspace = true

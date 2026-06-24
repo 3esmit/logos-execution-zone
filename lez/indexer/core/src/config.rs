@@ -9,6 +9,7 @@ use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
 use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
+use lee::AccountId;
 pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -31,6 +32,19 @@ pub struct IndexerConfig {
     /// Cross-zone configuration. `None` disables the indexer's cross-zone handling.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
+    /// Bridge-lock holdings to seed into genesis, mirroring the sequencer's
+    /// `SupplyBridgeLockHolding` actions. They are not produced by any
+    /// transaction, so the indexer must seed them to match the sequencer's state.
+    #[serde(default)]
+    pub bridge_lock_holdings: Vec<BridgeLockHolding>,
+}
+
+/// A genesis-funded bridge-lock holder balance, configured identically on the
+/// sequencer (via `SupplyBridgeLockHolding`) and the indexer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeLockHolding {
+    pub holder: AccountId,
+    pub amount: u128,
 }
 
 impl IndexerConfig {
