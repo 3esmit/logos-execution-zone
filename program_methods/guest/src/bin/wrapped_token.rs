@@ -53,8 +53,10 @@ fn main() {
         .to_vec()
         .try_into()
         .expect("balance fits in account data");
-    let holding_post =
-        AccountPostState::new_claimed_if_default(holding_account, Claim::Pda(holding_seed(&recipient)));
+    let holding_post = AccountPostState::new_claimed_if_default(
+        holding_account,
+        Claim::Pda(holding_seed(&recipient)),
+    );
     let config_post = AccountPostState::new(config.account.clone());
 
     ProgramOutput::new(

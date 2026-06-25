@@ -105,8 +105,13 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     };
 
     let outbox_account = outbox_pda(outbox_id, &target_zone, ordinal);
-    let message = Message::try_new(Program::ping_sender().id(), vec![outbox_account], vec![], send)
-        .expect("build ping message");
+    let message = Message::try_new(
+        Program::ping_sender().id(),
+        vec![outbox_account],
+        vec![],
+        send,
+    )
+    .expect("build ping message");
     LeeTransaction::Public(PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

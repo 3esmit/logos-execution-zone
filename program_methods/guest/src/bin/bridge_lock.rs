@@ -96,7 +96,11 @@ fn main() {
         caller_program_id,
         instruction_words,
         vec![holder, escrow, outbox.clone()],
-        vec![holder_post, escrow_post, AccountPostState::new(outbox.account)],
+        vec![
+            holder_post,
+            escrow_post,
+            AccountPostState::new(outbox.account),
+        ],
     )
     .with_chained_calls(vec![call])
     .write();

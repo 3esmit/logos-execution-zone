@@ -102,17 +102,25 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holder_after =
         bridge_lock_core::read_balance(&public_diff[&holder_id].data.clone().into_inner());
-    assert_eq!(holder_after, INITIAL_BALANCE - LOCK_AMOUNT, "holder debited");
+    assert_eq!(
+        holder_after,
+        INITIAL_BALANCE - LOCK_AMOUNT,
+        "holder debited"
+    );
 
     let escrow_after =
         bridge_lock_core::read_balance(&public_diff[&escrow_id].data.clone().into_inner());
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
-    let record = OutboxRecord::from_bytes(&public_diff[&outbox_record_id].data.clone().into_inner())
-        .expect("outbox PDA holds an OutboxRecord");
+    let record =
+        OutboxRecord::from_bytes(&public_diff[&outbox_record_id].data.clone().into_inner())
+            .expect("outbox PDA holds an OutboxRecord");
     assert_eq!(record.target_zone, zone_b);
     assert_eq!(record.target_program_id, wrapped_token_id);
-    assert_eq!(record.payload, payload, "emitted payload is the wrapped mint");
+    assert_eq!(
+        record.payload, payload,
+        "emitted payload is the wrapped mint"
+    );
 }
 
 /// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)
@@ -179,7 +187,10 @@ fn inbox_dispatch_mints_wrapped_token() {
 
     let minted =
         wrapped_token_core::read_balance(&public_diff[&holding_id].data.clone().into_inner());
-    assert_eq!(minted, LOCK_AMOUNT, "recipient holding minted the locked amount");
+    assert_eq!(
+        minted, LOCK_AMOUNT,
+        "recipient holding minted the locked amount"
+    );
 }
 
 /// A dispatch whose message key is already in the seen-shard is an idempotent
@@ -229,7 +240,10 @@ fn mint_replay_rejected() {
         Account {
             program_owner: inbox_id,
             balance: 0,
-            data: shard.to_bytes().try_into().expect("shard fits in account data"),
+            data: shard
+                .to_bytes()
+                .try_into()
+                .expect("shard fits in account data"),
             nonce: 0_u128.into(),
         },
     );
@@ -261,15 +275,15 @@ fn mint_replay_rejected() {
     let public_diff = diff.public_diff();
 
     // No mint: the holding is never credited on replay.
-    let minted = public_diff
-        .get(&holding_id)
-        .map_or(0, |account| wrapped_token_core::read_balance(&account.data.clone().into_inner()));
+    let minted = public_diff.get(&holding_id).map_or(0, |account| {
+        wrapped_token_core::read_balance(&account.data.clone().into_inner())
+    });
     assert_eq!(minted, 0, "a replayed message must not mint again");
 
     // The seen-shard is untouched by the no-op.
     if let Some(seen) = public_diff.get(&seen_id) {
-        let shard_after = SeenShard::from_bytes(&seen.data.clone().into_inner())
-            .expect("seen shard decodes");
+        let shard_after =
+            SeenShard::from_bytes(&seen.data.clone().into_inner()).expect("seen shard decodes");
         assert_eq!(shard_after, shard, "replay must not modify the seen-shard");
     }
 }

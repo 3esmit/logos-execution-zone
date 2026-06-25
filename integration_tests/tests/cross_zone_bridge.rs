@@ -67,10 +67,15 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, genesis_a, channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (_seq_b, _seq_b_home) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone.clone()))
-            .await
-            .context("Failed to set up zone B sequencer")?;
+    let (_seq_b, _seq_b_home) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        vec![],
+        channel_b,
+        Some(cross_zone.clone()),
+    )
+    .await
+    .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
         .await
         .context("Failed to set up zone B indexer")?;
@@ -101,11 +106,16 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // escrow now.
     let seq_a_client = sequencer_client(seq_a.addr())?;
     let escrow_id = bridge_lock_core::escrow_account_id(Program::bridge_lock().id());
-    let escrowed =
-        bridge_lock_core::read_balance(&seq_a_client.get_account(escrow_id).await?.data.into_inner());
-    assert_eq!(escrowed, LOCK_AMOUNT, "zone A escrow must hold the locked amount");
-    let remaining =
-        bridge_lock_core::read_balance(&seq_a_client.get_account(holder_id).await?.data.into_inner());
+    let escrowed = bridge_lock_core::read_balance(
+        &seq_a_client.get_account(escrow_id).await?.data.into_inner(),
+    );
+    assert_eq!(
+        escrowed, LOCK_AMOUNT,
+        "zone A escrow must hold the locked amount"
+    );
+    let remaining = bridge_lock_core::read_balance(
+        &seq_a_client.get_account(holder_id).await?.data.into_inner(),
+    );
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
@@ -116,7 +126,11 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
 
 /// Builds a signed bridge_lock Lock that forwards a wrapped-token Mint of the
 /// locked amount to the recipient on the target zone.
-fn build_lock_tx(holder_key: &PrivateKey, holder_id: AccountId, target_zone: [u8; 32]) -> LeeTransaction {
+fn build_lock_tx(
+    holder_key: &PrivateKey,
+    holder_id: AccountId,
+    target_zone: [u8; 32],
+) -> LeeTransaction {
     let bridge_lock_id = Program::bridge_lock().id();
     let wrapped_token_id = Program::wrapped_token().id();
     let outbox_id = Program::cross_zone_outbox().id();

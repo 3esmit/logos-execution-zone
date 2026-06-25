@@ -286,7 +286,11 @@ pub fn build_dispatch_from_emission(
         payload,
         l1_inclusion_witness: None,
     };
-    let target_ids = target_accounts.iter().copied().map(AccountId::new).collect();
+    let target_ids = target_accounts
+        .iter()
+        .copied()
+        .map(AccountId::new)
+        .collect();
     build_inbox_dispatch_tx(inbox_id, &msg, target_ids)
 }
 

@@ -96,7 +96,9 @@ async fn wait_until_zone_live(
         loop {
             let finalized = indexer.get_last_finalized_block_id().await?.unwrap_or(0);
             if finalized >= target {
-                log::info!("Zone {label} live: sequencer at {target}, indexer finalized {finalized}");
+                log::info!(
+                    "Zone {label} live: sequencer at {target}, indexer finalized {finalized}"
+                );
                 return Ok::<u64, anyhow::Error>(finalized);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;

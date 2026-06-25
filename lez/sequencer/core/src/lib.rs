@@ -616,7 +616,9 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
             GenesisAction::SupplyAccount {
                 account_id,
                 balance,
-            } => Some(build_supply_account_genesis_transaction(account_id, *balance)),
+            } => Some(build_supply_account_genesis_transaction(
+                account_id, *balance,
+            )),
             GenesisAction::SupplyBridgeAccount { balance } => {
                 Some(build_supply_bridge_account_genesis_transaction(*balance))
             }
@@ -1744,7 +1746,9 @@ mod sequencer_only_program_tests {
     #[test]
     fn only_the_cross_zone_inbox_is_sequencer_only() {
         assert!(is_sequencer_only_program(Program::cross_zone_inbox().id()));
-        assert!(!is_sequencer_only_program(Program::cross_zone_outbox().id()));
+        assert!(!is_sequencer_only_program(
+            Program::cross_zone_outbox().id()
+        ));
         assert!(!is_sequencer_only_program(Program::wrapped_token().id()));
         assert!(!is_sequencer_only_program(Program::ping_sender().id()));
         assert!(!is_sequencer_only_program(Program::clock().id()));

@@ -109,7 +109,13 @@ mod tests {
     #[test]
     fn holding_is_unique_per_recipient() {
         let id: ProgramId = [9; 8];
-        assert_ne!(holding_account_id(id, &[1; 32]), holding_account_id(id, &[2; 32]));
-        assert_eq!(holding_account_id(id, &[1; 32]), holding_account_id(id, &[1; 32]));
+        assert_ne!(
+            holding_account_id(id, &[1; 32]),
+            holding_account_id(id, &[2; 32])
+        );
+        assert_eq!(
+            holding_account_id(id, &[1; 32]),
+            holding_account_id(id, &[1; 32])
+        );
     }
 }

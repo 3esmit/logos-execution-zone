@@ -127,7 +127,10 @@ impl CrossZoneVerifier {
 
             let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
             if self.seen.read().await.contains(&key) {
-                bail!("cross-zone replay: message {} re-delivered", hex::encode(key));
+                bail!(
+                    "cross-zone replay: message {} re-delivered",
+                    hex::encode(key)
+                );
             }
 
             let expected = self.rederive(&msg).await?;
@@ -192,7 +195,10 @@ impl CrossZoneVerifier {
             .transactions
             .get(msg.src_tx_index as usize)
             .ok_or_else(|| {
-                anyhow::anyhow!("src_tx_index {} out of range in peer block", msg.src_tx_index)
+                anyhow::anyhow!(
+                    "src_tx_index {} out of range in peer block",
+                    msg.src_tx_index
+                )
             })?;
 
         let LeeTransaction::Public(emission_tx) = emission_tx else {
@@ -241,7 +247,12 @@ impl CrossZoneVerifier {
             if let Some(block) = self.peers.get(zone, block_id).await {
                 return Ok(block);
             }
-            if self.peers.highest_seen(zone).await.is_some_and(|h| h >= block_id) {
+            if self
+                .peers
+                .highest_seen(zone)
+                .await
+                .is_some_and(|h| h >= block_id)
+            {
                 bail!(
                     "forged cross-zone reference: peer zone {} finalized past block {} but it is absent",
                     hex::encode(zone),
@@ -269,7 +280,10 @@ async fn read_peer(
     peers: PeerBlocks,
     poll_interval: Duration,
 ) {
-    info!("Cross-zone peer reader started for {}", hex::encode(peer_zone));
+    info!(
+        "Cross-zone peer reader started for {}",
+        hex::encode(peer_zone)
+    );
 
     let mut cursor = None;
     loop {
@@ -371,7 +385,10 @@ mod tests {
         let verifier = verifier();
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]),
+            )
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
@@ -388,12 +405,18 @@ mod tests {
         // different payload, so re-derivation does not reproduce it.
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"real")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"real")]),
+            )
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"forged")]);
         let err = verifier.verify_block(&block).await.unwrap_err();
-        assert!(err.to_string().contains("forged"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("forged"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -405,7 +428,10 @@ mod tests {
         let verifier = verifier_with_pinned_keys(keys);
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]),
+            )
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
@@ -423,12 +449,18 @@ mod tests {
         let verifier = verifier_with_pinned_keys(keys);
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]),
+            )
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         let err = verifier.verify_block(&block).await.unwrap_err();
-        assert!(err.to_string().contains("pinned"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("pinned"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -439,12 +471,18 @@ mod tests {
         // and must be rejected rather than waited on forever.
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID + 1, None, vec![emission(b"hi")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID + 1, None, vec![emission(b"hi")]),
+            )
             .await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         let err = verifier.verify_block(&block).await.unwrap_err();
-        assert!(err.to_string().contains("forged"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("forged"),
+            "unexpected error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -452,14 +490,23 @@ mod tests {
         let verifier = verifier();
         verifier
             .peers
-            .insert(PEER_ZONE, produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]))
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]),
+            )
             .await;
 
         let first = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        verifier.verify_block(&first).await.expect("first delivery verifies");
+        verifier
+            .verify_block(&first)
+            .await
+            .expect("first delivery verifies");
 
         let replay = produce_dummy_block(10, None, vec![dispatch(b"hi")]);
         let err = verifier.verify_block(&replay).await.unwrap_err();
-        assert!(err.to_string().contains("replay"), "unexpected error: {err}");
+        assert!(
+            err.to_string().contains("replay"),
+            "unexpected error: {err}"
+        );
     }
 }

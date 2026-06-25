@@ -71,7 +71,10 @@ async fn watch_peer(
     poll_interval: Duration,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
-    info!("Cross-zone watcher started for peer {}", hex::encode(peer_zone));
+    info!(
+        "Cross-zone watcher started for peer {}",
+        hex::encode(peer_zone)
+    );
 
     let mut cursor = None;
     loop {
@@ -183,7 +186,10 @@ async fn deliver_block(
         );
 
         match mempool_handle
-            .push((TransactionOrigin::Sequencer, LeeTransaction::Public(dispatch)))
+            .push((
+                TransactionOrigin::Sequencer,
+                LeeTransaction::Public(dispatch),
+            ))
             .await
         {
             Ok(()) => info!(

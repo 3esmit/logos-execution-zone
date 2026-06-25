@@ -752,7 +752,10 @@ pub mod tests {
                 Program::cross_zone_outbox().id(),
                 Program::cross_zone_outbox(),
             );
-            this.insert(Program::cross_zone_inbox().id(), Program::cross_zone_inbox());
+            this.insert(
+                Program::cross_zone_inbox().id(),
+                Program::cross_zone_inbox(),
+            );
             this.insert(Program::ping_sender().id(), Program::ping_sender());
             this.insert(Program::ping_receiver().id(), Program::ping_receiver());
             this.insert(Program::bridge_lock().id(), Program::bridge_lock());

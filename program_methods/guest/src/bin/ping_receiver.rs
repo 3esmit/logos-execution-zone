@@ -34,7 +34,8 @@ fn main() {
 
     let mut post_account = record.account.clone();
     post_account.data = payload.try_into().expect("payload fits in account data");
-    let post = AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
+    let post =
+        AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
 
     ProgramOutput::new(
         self_program_id,
