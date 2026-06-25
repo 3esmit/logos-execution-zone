@@ -247,7 +247,7 @@ pub mod tests {
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
         let message = Message::new_preserialized(
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             vec![],
             vec![],
             vec![0; 4],
