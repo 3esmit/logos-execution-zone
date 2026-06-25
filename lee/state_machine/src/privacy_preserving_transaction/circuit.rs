@@ -178,7 +178,7 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use lee_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, EphemeralSecretKey, Nullifier,
         PrivacyPreservingCircuitOutput, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         program::{PdaSeed, PrivateAccountKind},
@@ -257,8 +257,11 @@ mod tests {
 
         let expected_sender_pre = sender.clone();
 
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0).0;
+        let shared_secret = SharedSecretKey::encapsulate_deterministic(
+            &recipient_keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
@@ -270,7 +273,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -357,11 +360,17 @@ mod tests {
             Commitment::new(&recipient_account_id, &expected_private_account_2),
         ];
 
-        let shared_secret_1 =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0).0;
+        let shared_secret_1 = SharedSecretKey::encapsulate_deterministic(
+            &sender_keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
-        let shared_secret_2 =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 1).0;
+        let shared_secret_2 = SharedSecretKey::encapsulate_deterministic(
+            &recipient_keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
@@ -372,7 +381,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: commitment_set
                         .get_proof_for(&commitment_sender)
@@ -381,7 +390,7 @@ mod tests {
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -447,7 +456,7 @@ mod tests {
             instruction,
             vec![InputAccountIdentity::PrivateUnauthorized {
                 vpk: account_keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 npk: account_keys.npk(),
                 identifier: 0,
             }],
@@ -466,8 +475,11 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let shared_secret = SharedSecretKey::encapsulate_deterministic(
+            &keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
         let account_id =
             AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
@@ -478,7 +490,7 @@ mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 npk,
                 identifier,
                 seed: None,
@@ -524,7 +536,7 @@ mod tests {
             instruction,
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 npk,
                 identifier: 0,
                 seed: None,
@@ -576,7 +588,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaInit {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     npk,
                     identifier: 0,
                     seed: None,
@@ -633,7 +645,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: shared_keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     npk: shared_npk,
                     identifier: shared_identifier,
                 },
@@ -653,7 +665,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let ssk = SharedSecretKey::encapsulate_deterministic(
+            &keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
         let account_id =
             AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
         let pre = AccountWithMetadata::new(Account::default(), true, account_id);
@@ -664,7 +680,7 @@ mod tests {
                 .unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 nsk: keys.nsk,
                 identifier,
             }],
@@ -695,7 +711,7 @@ mod tests {
                 .unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 nsk: keys.nsk,
                 identifier,
             }],
@@ -742,7 +758,7 @@ mod tests {
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 // use a different vpk
                 vpk: foreign_keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 // but the same nsk
                 nsk: keys.nsk,
                 identifier,
@@ -760,7 +776,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let ssk = SharedSecretKey::encapsulate_deterministic(
+            &keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
         let sender = AccountWithMetadata::new(
             Account {
@@ -785,7 +805,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     npk: keys.npk(),
                     identifier,
                 },
@@ -807,7 +827,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let ssk = SharedSecretKey::encapsulate_deterministic(
+            &keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
         let account_id =
             AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
         let account = Account {
@@ -831,7 +855,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
                     identifier,
@@ -858,7 +882,11 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let ssk = SharedSecretKey::encapsulate_deterministic(
+            &keys.vpk(),
+            &EphemeralSecretKey([0_u8; 32]),
+        )
+        .0;
 
         let auth_transfer_id = auth_transfer.id();
         let pda_id =
@@ -887,7 +915,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier,
@@ -923,7 +951,7 @@ mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                os_random: [0; 32],
                 npk,
                 identifier: 99,
                 seed: None,
@@ -965,7 +993,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    os_random: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier: 99,

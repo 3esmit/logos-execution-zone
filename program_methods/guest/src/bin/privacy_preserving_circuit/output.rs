@@ -42,7 +42,7 @@ pub fn compute_circuit_output(
             }
             InputAccountIdentity::PrivateAuthorizedInit {
                 vpk,
-                esk,
+                os_random,
                 nsk,
                 identifier,
             } => {
@@ -74,14 +74,14 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(*identifier),
                     &npk,
                     vpk,
-                    esk,
+                    os_random,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk,
-                esk,
+                os_random,
                 nsk,
                 membership_proof,
                 identifier,
@@ -111,14 +111,14 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(*identifier),
                     &npk,
                     vpk,
-                    esk,
+                    os_random,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateUnauthorized {
                 vpk,
-                esk,
+                os_random,
                 npk,
                 identifier,
             } => {
@@ -149,14 +149,14 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(*identifier),
                     npk,
                     vpk,
-                    esk,
+                    os_random,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaInit {
                 vpk,
-                esk,
+                os_random,
                 npk,
                 identifier,
                 seed: _,
@@ -199,14 +199,14 @@ pub fn compute_circuit_output(
                     },
                     npk,
                     vpk,
-                    esk,
+                    os_random,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk,
-                esk,
+                os_random,
                 nsk,
                 membership_proof,
                 identifier,
@@ -247,7 +247,7 @@ pub fn compute_circuit_output(
                     },
                     &npk,
                     vpk,
-                    esk,
+                    os_random,
                     new_nullifier,
                     new_nonce,
                 );
@@ -270,7 +270,7 @@ fn emit_private_output(
     kind: &PrivateAccountKind,
     npk: &NullifierPublicKey,
     vpk: &ViewingPublicKey,
-    esk: &EphemeralSecretKey,
+    os_random: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
 ) {
@@ -281,7 +281,8 @@ fn emit_private_output(
 
     let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
 
-    let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, esk, *output_index);
+    let esk = EphemeralSecretKey::new(account_id, os_random, &new_nonce);
+    let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
     // Currently the view tag is properlty generated for all accounts.
     // To increase privacy, this will be changed in the later version
