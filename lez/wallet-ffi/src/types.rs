@@ -9,7 +9,7 @@ use std::{
 
 use lee::{Data, ProgramId, SharedSecretKey};
 use lee_core::{encryption::MlKem768EncapsulationKey, NullifierPublicKey};
-use wallet::AccountIdentity;
+use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
 use crate::error::WalletFfiError;
 
@@ -590,6 +590,38 @@ impl From<ProgramId> for FfiProgramId {
 impl From<FfiProgramId> for ProgramId {
     fn from(value: FfiProgramId) -> Self {
         value.data
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct FfiAccountIdWithPrivacy {
+    pub account_id: FfiBytes32,
+    pub is_private: bool,
+}
+
+impl From<AccountIdWithPrivacy> for FfiAccountIdWithPrivacy {
+    fn from(value: AccountIdWithPrivacy) -> Self {
+        match value {
+            AccountIdWithPrivacy::Public(acc) => Self {
+                account_id: acc.into(),
+                is_private: false,
+            },
+            AccountIdWithPrivacy::Private(acc) => Self {
+                account_id: acc.into(),
+                is_private: true,
+            },
+        }
+    }
+}
+
+impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
+    fn from(value: FfiAccountIdWithPrivacy) -> Self {
+        if value.is_private {
+            Self::Private(value.account_id.into())
+        } else {
+            Self::Public(value.account_id.into())
+        }
     }
 }
 

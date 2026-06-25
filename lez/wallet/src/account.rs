@@ -19,6 +19,11 @@ impl Label {
     pub fn new(label: impl ToString) -> Self {
         Self(label.to_string())
     }
+
+    #[must_use]
+    pub fn inner(&self) -> &str {
+        &self.0
+    }
 }
 
 impl FromStr for Label {
