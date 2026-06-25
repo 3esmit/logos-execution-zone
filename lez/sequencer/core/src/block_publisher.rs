@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_core::mantle::ops::channel::inscribe::Inscription;
+use logos_blockchain_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
@@ -61,11 +61,14 @@ pub trait BlockPublisherTrait: Clone {
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
     /// retries internally; this just hands the payload off.
     async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
+
+    fn channel_id(&self) -> ChannelId;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
 #[derive(Clone)]
 pub struct ZoneSdkPublisher {
+    channel_id: ChannelId,
     publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
@@ -192,6 +195,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .context("Zone-sdk readiness channel closed before becoming ready")?;
 
         Ok(Self {
+            channel_id: config.channel_id,
             publish_tx,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
@@ -209,6 +213,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
         Ok(())
+    }
+
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id
     }
 }
 

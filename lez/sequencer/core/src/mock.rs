@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::block::Block;
+use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
 
@@ -16,11 +17,13 @@ use crate::{
 pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
 
 #[derive(Clone)]
-pub struct MockBlockPublisher;
+pub struct MockBlockPublisher {
+    channel_id: ChannelId,
+}
 
 impl BlockPublisherTrait for MockBlockPublisher {
     async fn new(
-        _config: &BedrockConfig,
+        config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
         _resubmit_interval: Duration,
         _initial_checkpoint: Option<SequencerCheckpoint>,
@@ -29,7 +32,9 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _on_deposit_event: OnDepositEventSink,
         _on_withdraw_event: OnWithdrawEventSink,
     ) -> Result<Self> {
-        Ok(Self)
+        Ok(Self {
+            channel_id: config.channel_id,
+        })
     }
 
     async fn publish_block(
@@ -38,5 +43,9 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _bridge_withdrawals: Vec<WithdrawArg>,
     ) -> Result<()> {
         Ok(())
+    }
+
+    fn channel_id(&self) -> ChannelId {
+        self.channel_id
     }
 }
