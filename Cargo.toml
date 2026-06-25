@@ -92,9 +92,8 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
-# Unstable feature needed for keccak optimization
-risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std', 'unstable'] }
-risc0-build = { version = "3.0.5", features = ['unstable'] }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
+risc0-build = "3.0.5"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
 num_cpus = "1.13.1"
@@ -181,7 +180,7 @@ codegen-units = 1
 
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
-keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "16ac194828f8e25e5eaf38d33970b4515e13b676" }
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
 
 # Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
 # linking large integration-test binaries on resource-constrained CI runners.

@@ -4389,7 +4389,7 @@ dependencies = [
 [[package]]
 name = "keccak"
 version = "0.2.0"
-source = "git+https://github.com/logos-blockchain/sponges?rev=16ac194828f8e25e5eaf38d33970b4515e13b676#16ac194828f8e25e5eaf38d33970b4515e13b676"
+source = "git+https://github.com/logos-blockchain/sponges?rev=3a56e99771beedf04946eab21a4a62adc2951377#3a56e99771beedf04946eab21a4a62adc2951377"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
