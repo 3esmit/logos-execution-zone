@@ -210,6 +210,7 @@ pub fn indexer_config(bedrock_addr: SocketAddr) -> Result<IndexerConfig> {
             auth: None,
         },
         channel_id: bedrock_channel_id(),
+        allow_chain_reset: false,
     })
 }
 
