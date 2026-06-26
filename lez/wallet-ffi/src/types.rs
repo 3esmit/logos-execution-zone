@@ -24,7 +24,7 @@ pub struct WalletHandle {
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
 }
@@ -594,7 +594,7 @@ impl From<FfiProgramId> for ProgramId {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
 pub struct FfiAccountIdWithPrivacy {
     pub account_id: FfiBytes32,
     pub is_private: bool,

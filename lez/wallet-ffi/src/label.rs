@@ -12,8 +12,8 @@ use crate::{
 
 #[repr(C)]
 pub struct LabelAvailability {
-    is_available: bool,
-    error: WalletFfiError,
+    pub is_available: bool,
+    pub error: WalletFfiError,
 }
 
 impl LabelAvailability {
@@ -35,9 +35,10 @@ impl LabelAvailability {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy)]
 pub struct AccountIdResolvedFromLabel {
-    account_id: FfiAccountIdWithPrivacy,
-    error: WalletFfiError,
+    pub account_id: FfiAccountIdWithPrivacy,
+    pub error: WalletFfiError,
 }
 
 impl AccountIdResolvedFromLabel {
@@ -60,9 +61,9 @@ impl AccountIdResolvedFromLabel {
 
 #[repr(C)]
 pub struct LabelList {
-    labels_data: *mut *const c_char,
-    labels_size: usize,
-    error: WalletFfiError,
+    pub labels_data: *mut *const c_char,
+    pub labels_size: usize,
+    pub error: WalletFfiError,
 }
 
 impl LabelList {
