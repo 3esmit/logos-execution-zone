@@ -18,7 +18,7 @@ pub extern "C" fn wallet_ffi_account_id_for_public_pda(
     AccountId::for_public_pda(&program_id.data, &pda_seed.into()).into()
 }
 
-/// Produce account id for public PDA.
+/// Produce account id for private PDA.
 ///
 /// # Parameters
 /// - `program_id`: Id of a owner program

@@ -932,7 +932,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
                                                        FfiPdaSeed pda_seed);
 
 /**
- * Produce account id for public PDA.
+ * Produce account id for private PDA.
  *
  * # Parameters
  * - `program_id`: Id of a owner program
