@@ -1664,7 +1664,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.viewing_public_key,
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.private_key_holder.nullifier_secret_key,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)

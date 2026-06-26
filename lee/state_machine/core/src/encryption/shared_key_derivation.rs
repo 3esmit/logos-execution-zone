@@ -83,7 +83,7 @@ impl SharedSecretKey {
     /// Deterministically encapsulate a shared secret toward `ek` using a
     /// pre-derived `esk` as the ML-KEM encapsulation randomness.
     ///
-    /// The `esk` must be derived via `derive_esk(account_id, os_random, nonce)`
+    /// The `esk` must be derived via `derive_esk(account_id, random_seed, nonce)`
     /// which binds it to the account and incorporates OS entropy.
     #[must_use]
     pub fn encapsulate_deterministic(

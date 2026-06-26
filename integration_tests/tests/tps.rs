@@ -293,14 +293,14 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_vpk,
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: sender_nsk,
                 membership_proof: proof,
                 identifier: 0,
             },
             InputAccountIdentity::PrivateUnauthorized {
                 vpk: recipient_vpk,
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk: recipient_npk,
                 identifier: 0,
             },

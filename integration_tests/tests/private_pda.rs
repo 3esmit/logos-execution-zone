@@ -71,7 +71,7 @@ async fn fund_private_pda(
         InputAccountIdentity::Public,
         InputAccountIdentity::PrivatePdaInit {
             vpk,
-            os_random: [0; 32],
+            random_seed: [0; 32],
             npk,
             identifier,
             seed: Some((seed, authority_program_id)),

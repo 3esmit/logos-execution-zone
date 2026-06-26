@@ -1419,7 +1419,7 @@ pub mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -1470,7 +1470,7 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -1479,7 +1479,7 @@ pub mod tests {
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -1526,7 +1526,7 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -2099,14 +2099,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: recipient_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2147,14 +2147,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2195,14 +2195,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2243,14 +2243,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2291,14 +2291,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2337,14 +2337,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -2383,7 +2383,7 @@ pub mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivatePdaInit {
                     vpk: keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk,
                     identifier: u128::MAX,
                     seed: None,
@@ -2416,7 +2416,7 @@ pub mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: u128::MAX,
                 seed: None,
@@ -2457,7 +2457,7 @@ pub mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys_b.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk: npk_b,
                 identifier: u128::MAX,
                 seed: None,
@@ -2494,7 +2494,7 @@ pub mod tests {
             Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: u128::MAX,
                 seed: None,
@@ -2534,7 +2534,7 @@ pub mod tests {
             Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: u128::MAX,
                 seed: None,
@@ -2584,14 +2584,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaInit {
                     vpk: keys_a.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: keys_a.npk(),
                     identifier: u128::MAX,
                     seed: None,
                 },
                 InputAccountIdentity::PrivatePdaInit {
                     vpk: keys_b.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: keys_b.npk(),
                     identifier: u128::MAX,
                     seed: None,
@@ -2633,7 +2633,7 @@ pub mod tests {
             Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: u128::MAX,
                 seed: None,
@@ -2720,14 +2720,14 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
                     identifier: 0,
                 },
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
                     identifier: 0,
@@ -3075,7 +3075,7 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
@@ -3194,7 +3194,7 @@ pub mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: from_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: from_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&from_commitment)
@@ -3203,7 +3203,7 @@ pub mod tests {
                 },
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: to_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: to_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
@@ -3465,7 +3465,7 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: private_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3510,7 +3510,7 @@ pub mod tests {
             Program::serialize_instruction(0_u128).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
                 vpk: private_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 npk: private_keys.npk(),
                 identifier: 0,
             }],
@@ -3559,7 +3559,7 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: private_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3600,7 +3600,7 @@ pub mod tests {
             Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: private_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: private_keys.nsk,
                 identifier: 0,
             }],
@@ -3681,7 +3681,7 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -3711,7 +3711,7 @@ pub mod tests {
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
-                os_random: [0; 32],
+                random_seed: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -3773,7 +3773,7 @@ pub mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: recipient_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     nsk: recipient_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&recipient_commitment)
@@ -3929,7 +3929,7 @@ pub mod tests {
                 Program::serialize_instruction(instruction).unwrap(),
                 vec![InputAccountIdentity::PrivateUnauthorized {
                     vpk: account_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: account_keys.npk(),
                     identifier: 0,
                 }],
@@ -3994,7 +3994,7 @@ pub mod tests {
                 Program::serialize_instruction(instruction).unwrap(),
                 vec![InputAccountIdentity::PrivateUnauthorized {
                     vpk: account_keys.vpk(),
-                    os_random: [0; 32],
+                    random_seed: [0; 32],
                     npk: account_keys.npk(),
                     identifier: 0,
                 }],
@@ -4549,7 +4549,7 @@ pub mod tests {
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
                         vpk: alice_keys.vpk(),
-                        os_random: [0; 32],
+                        random_seed: [0; 32],
                         npk: alice_npk,
                         identifier: 0,
                         seed: Some((seed, proxy_id)),
@@ -4586,7 +4586,7 @@ pub mod tests {
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
                         vpk: alice_keys.vpk(),
-                        os_random: [0; 32],
+                        random_seed: [0; 32],
                         npk: alice_npk,
                         identifier: 1,
                         seed: Some((seed, proxy_id)),
@@ -4626,7 +4626,7 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         vpk: alice_keys.vpk(),
-                        os_random: [0; 32],
+                        random_seed: [0; 32],
                         nsk: alice_keys.nsk,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_0)
@@ -4664,7 +4664,7 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         vpk: alice_keys.vpk(),
-                        os_random: [0; 32],
+                        random_seed: [0; 32],
                         nsk: alice_keys.nsk,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1)
@@ -4721,7 +4721,7 @@ pub mod tests {
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaUpdate {
                         vpk: alice_keys.vpk(),
-                        os_random: [0; 32],
+                        random_seed: [0; 32],
                         nsk: alice_keys.nsk,
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1_after_spend)
