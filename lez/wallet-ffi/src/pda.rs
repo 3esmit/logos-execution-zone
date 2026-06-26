@@ -11,7 +11,7 @@ use crate::{FfiBytes32, FfiNullifierPublicKey, FfiPdaSeed, FfiProgramId, FfiU128
 /// # Returns
 /// - `FfiBytes32` representing account id bytes
 #[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_account_id_for_public_pda(
+pub extern "C" fn wallet_ffi_account_id_for_public_pda(
     program_id: FfiProgramId,
     pda_seed: FfiPdaSeed,
 ) -> FfiBytes32 {
@@ -29,7 +29,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_public_pda(
 /// # Returns
 /// - `FfiBytes32` representing account id bytes
 #[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
+pub extern "C" fn wallet_ffi_account_id_for_private_pda(
     program_id: FfiProgramId,
     pda_seed: FfiPdaSeed,
     npk: FfiNullifierPublicKey,
