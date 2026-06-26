@@ -8,7 +8,7 @@ use std::{
 };
 
 use lee::{Data, ProgramId, SharedSecretKey};
-use lee_core::{encryption::MlKem768EncapsulationKey, NullifierPublicKey};
+use lee_core::{encryption::MlKem768EncapsulationKey, program::PdaSeed, NullifierPublicKey};
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
 use crate::error::WalletFfiError;
@@ -27,6 +27,22 @@ pub struct WalletHandle {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
+}
+
+pub type FfiPdaSeed = FfiBytes32;
+
+impl From<FfiPdaSeed> for PdaSeed {
+    fn from(value: FfiPdaSeed) -> Self {
+        Self::new(value.data)
+    }
+}
+
+pub type FfiNullifierPublicKey = FfiBytes32;
+
+impl From<FfiNullifierPublicKey> for NullifierPublicKey {
+    fn from(value: FfiNullifierPublicKey) -> Self {
+        Self(value.data)
+    }
 }
 
 /// Program ID - 8 u32 values (32 bytes total).

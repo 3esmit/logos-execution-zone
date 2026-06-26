@@ -320,6 +320,10 @@ typedef struct LabelList {
   enum WalletFfiError error;
 } LabelList;
 
+typedef struct FfiBytes32 FfiPdaSeed;
+
+typedef struct FfiBytes32 FfiNullifierPublicKey;
+
 typedef struct FfiCreateWalletOutput {
   struct WalletHandle *wallet;
   /**
@@ -913,6 +917,36 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
  *   `wallet_ffi_get_all_labels_for_account`
  */
 enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
+
+/**
+ * Produce account id for public PDA.
+ *
+ * # Parameters
+ * - `program_id`: Id of a owner program
+ * - `pda_seed`: 32 byte seed
+ *
+ * # Returns
+ * - `FfiBytes32` representing account id bytes
+ */
+struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId program_id,
+                                                       FfiPdaSeed pda_seed);
+
+/**
+ * Produce account id for public PDA.
+ *
+ * # Parameters
+ * - `program_id`: Id of a owner program
+ * - `pda_seed`: 32 byte seed
+ * - `npk`: 32 byte nullifier public key(can be get from `wallet_ffi_get_private_account_keys`)
+ * - `identifier`: little endian encoded `u128`
+ *
+ * # Returns
+ * - `FfiBytes32` representing account id bytes
+ */
+struct FfiBytes32 wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+                                                        FfiPdaSeed pda_seed,
+                                                        FfiNullifierPublicKey npk,
+                                                        struct FfiU128 identifier);
 
 /**
  * Claim a pinata reward using a public transaction.
