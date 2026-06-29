@@ -12,7 +12,30 @@ pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
 
-pub type EphemeralSecretKey = [u8; 32];
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct EphemeralSecretKey(pub [u8; 32]);
+
+impl EphemeralSecretKey {
+    /// Derives an ephemeral secret key from OS randomness and account-specific values.
+    ///
+    /// For updates, `nonce` carries `nsk`-derived entropy, making `esk` strong even
+    /// with a compromised RNG. For inits, `nonce` is deterministic, so `random_seed`
+    /// is the sole entropy source.
+    #[must_use]
+    pub fn new(
+        account_id: &crate::account::AccountId,
+        random_seed: &[u8; 32],
+        nonce: &crate::account::Nonce,
+    ) -> Self {
+        const PREFIX: &[u8; 14] = b"/LEE/v0.3/esk/";
+        let mut input = [0_u8; 14 + 32 + 32 + 16];
+        input[0..14].copy_from_slice(PREFIX);
+        input[14..46].copy_from_slice(account_id.value());
+        input[46..78].copy_from_slice(random_seed);
+        input[78..94].copy_from_slice(&nonce.0.to_le_bytes());
+        Self(Impl::hash_bytes(&input).as_bytes().try_into().unwrap())
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
@@ -236,5 +259,42 @@ mod tests {
             bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
             "wrong shared secret must not produce the correct plaintext"
         );
+    }
+
+    #[test]
+    fn esk_is_deterministic() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let random_seed = [2_u8; 32];
+        let nonce = crate::account::Nonce(42);
+        let esk1 = EphemeralSecretKey::new(&account_id, &random_seed, &nonce);
+        let esk2 = EphemeralSecretKey::new(&account_id, &random_seed, &nonce);
+        assert_eq!(esk1.0, esk2.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_account_id() {
+        let random_seed = [2_u8; 32];
+        let nonce = crate::account::Nonce(42);
+        let esk_a = EphemeralSecretKey::new(&AccountId::new([0_u8; 32]), &random_seed, &nonce);
+        let esk_b = EphemeralSecretKey::new(&AccountId::new([1_u8; 32]), &random_seed, &nonce);
+        assert_ne!(esk_a.0, esk_b.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_random_seed() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let nonce = crate::account::Nonce(42);
+        let esk_a = EphemeralSecretKey::new(&account_id, &[0_u8; 32], &nonce);
+        let esk_b = EphemeralSecretKey::new(&account_id, &[1_u8; 32], &nonce);
+        assert_ne!(esk_a.0, esk_b.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_nonce() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let random_seed = [2_u8; 32];
+        let esk_a = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(0));
+        let esk_b = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(1));
+        assert_ne!(esk_a.0, esk_b.0);
     }
 }

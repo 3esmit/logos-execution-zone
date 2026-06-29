@@ -89,8 +89,8 @@ impl Message {
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
-        SharedSecretKey,
+        Commitment, EncryptionScheme, EphemeralSecretKey, Nullifier, NullifierPublicKey,
+        PrivateAccountKind, SharedSecretKey,
         account::{Account, AccountId, Nonce},
         encryption::ViewingPublicKey,
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -200,7 +200,8 @@ pub mod tests {
         let account = Account::default();
         let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
         let commitment = Commitment::new(&account_id, &account);
-        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0_u8; 32], 0);
+        let (shared_secret, epk) =
+            SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),

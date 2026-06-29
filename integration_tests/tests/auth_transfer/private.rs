@@ -710,7 +710,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivatePdaInit {
                 vpk,
-                esk: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: 1337,
                 seed: None,

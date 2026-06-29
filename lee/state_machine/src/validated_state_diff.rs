@@ -660,7 +660,7 @@ mod tests {
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: attacker_keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 nsk: attacker_keys.nsk,
                 membership_proof,
                 identifier: 0,
@@ -817,7 +817,7 @@ mod tests {
         let account_identities = vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: attacker_keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 nsk: attacker_keys.nsk,
                 membership_proof,
                 identifier: 0,

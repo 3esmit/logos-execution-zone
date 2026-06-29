@@ -80,32 +80,18 @@ impl SharedSecretKey {
         (Self(ss_bytes), EphemeralPublicKey(ct.to_vec()))
     }
 
-    /// Deterministically encapsulate a shared secret toward `ek` with a given
-    /// `esk` and `output_index`.
+    /// Deterministically encapsulate a shared secret toward `ek` using a
+    /// pre-derived `esk` as the ML-KEM encapsulation randomness.
     ///
-    /// This function runs inside the privacy-preserving circuit, generating
-    /// the shared secret for ciphertext generation.
-    ///
-    /// Important: since `ek` is assumed to be public, the uniqueness of the
-    /// secret is reliant upon the uniqueness of the ephemeral secret key for
-    /// a note in a given position. It is hence important to generate it
-    /// with high entropy, for which the prover is responsible.
+    /// The `esk` must be derived via `derive_esk(account_id, random_seed, nonce)`
+    /// which binds it to the account and incorporates OS entropy.
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
-        esk: &[u8; 32],
-        output_index: u32,
+        esk: &crate::encryption::EphemeralSecretKey,
     ) -> (Self, EphemeralPublicKey) {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
-
-        const PREFIX: &[u8; 21] = b"/LEE/v0.3/KDF-ML-KEM/";
-        let mut input = [0; 21 + 32 + 4];
-        input[0..21].copy_from_slice(PREFIX);
-        input[21..53].copy_from_slice(esk);
-        input[53..57].copy_from_slice(&output_index.to_le_bytes());
-        let hash = Impl::hash_bytes(&input);
-        let m: ml_kem::B32 =
-            ml_kem::array::Array::try_from(hash.as_bytes()).expect("SHA-256 output is 32 bytes");
+        let m: ml_kem::B32 = ml_kem::array::Array::try_from(esk.0.as_slice())
+            .expect("EphemeralSecretKey is 32 bytes");
 
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()

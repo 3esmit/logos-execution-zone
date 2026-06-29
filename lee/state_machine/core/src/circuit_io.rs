@@ -4,7 +4,7 @@ use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey,
     account::{Account, AccountWithMetadata},
-    encryption::{EncryptedAccountData, EphemeralSecretKey, ViewingPublicKey},
+    encryption::{EncryptedAccountData, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
@@ -32,7 +32,7 @@ pub enum InputAccountIdentity {
     /// and matched against `pre_state.account_id`.
     PrivateAuthorizedInit {
         vpk: ViewingPublicKey,
-        esk: EphemeralSecretKey,
+        random_seed: [u8; 32],
         nsk: NullifierSecretKey,
         identifier: Identifier,
     },
@@ -40,7 +40,7 @@ pub enum InputAccountIdentity {
     /// membership proof.
     PrivateAuthorizedUpdate {
         vpk: ViewingPublicKey,
-        esk: EphemeralSecretKey,
+        random_seed: [u8; 32],
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
@@ -49,7 +49,7 @@ pub enum InputAccountIdentity {
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
     PrivateUnauthorized {
         vpk: ViewingPublicKey,
-        esk: EphemeralSecretKey,
+        random_seed: [u8; 32],
         npk: NullifierPublicKey,
         identifier: Identifier,
     },
@@ -59,7 +59,7 @@ pub enum InputAccountIdentity {
     /// as the 4th input.
     PrivatePdaInit {
         vpk: ViewingPublicKey,
-        esk: EphemeralSecretKey,
+        random_seed: [u8; 32],
         npk: NullifierPublicKey,
         identifier: Identifier,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
@@ -75,7 +75,7 @@ pub enum InputAccountIdentity {
     /// previously-seen authorization in a chained call.
     PrivatePdaUpdate {
         vpk: ViewingPublicKey,
-        esk: EphemeralSecretKey,
+        random_seed: [u8; 32],
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,

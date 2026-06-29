@@ -178,7 +178,7 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use lee_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, EphemeralSecretKey, Nullifier,
         PrivacyPreservingCircuitOutput, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         program::{PdaSeed, PrivateAccountKind},
@@ -257,8 +257,10 @@ mod tests {
 
         let expected_sender_pre = sender.clone();
 
+        let init_nonce = Nonce::private_account_nonce_init(&recipient_account_id);
+        let esk = EphemeralSecretKey::new(&recipient_account_id, &[0; 32], &init_nonce);
         let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0).0;
+            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &esk).0;
 
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
@@ -270,7 +272,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -357,11 +359,16 @@ mod tests {
             Commitment::new(&recipient_account_id, &expected_private_account_2),
         ];
 
+        let sender_new_nonce = sender_nonce.private_account_nonce_increment(&sender_keys.nsk);
+        let sender_esk = EphemeralSecretKey::new(&sender_account_id, &[0; 32], &sender_new_nonce);
         let shared_secret_1 =
-            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0).0;
+            SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &sender_esk).0;
 
+        let recipient_init_nonce = Nonce::private_account_nonce_init(&recipient_account_id);
+        let recipient_esk =
+            EphemeralSecretKey::new(&recipient_account_id, &[0; 32], &recipient_init_nonce);
         let shared_secret_2 =
-            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 1).0;
+            SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &recipient_esk).0;
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
@@ -372,7 +379,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: sender_keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     nsk: sender_keys.nsk,
                     membership_proof: commitment_set
                         .get_proof_for(&commitment_sender)
@@ -381,7 +388,7 @@ mod tests {
                 },
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: recipient_keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     npk: recipient_keys.npk(),
                     identifier: 0,
                 },
@@ -447,7 +454,7 @@ mod tests {
             instruction,
             vec![InputAccountIdentity::PrivateUnauthorized {
                 vpk: account_keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 npk: account_keys.npk(),
                 identifier: 0,
             }],
@@ -466,11 +473,12 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
-        let shared_secret =
-            SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
-
         let account_id =
             AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+        let init_nonce = Nonce::private_account_nonce_init(&account_id);
+        let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &init_nonce);
+        let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
+
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let (output, _proof) = execute_and_prove(
@@ -478,7 +486,7 @@ mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier,
                 seed: None,
@@ -524,7 +532,7 @@ mod tests {
             instruction,
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: 0,
                 seed: None,
@@ -576,7 +584,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaInit {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     npk,
                     identifier: 0,
                     seed: None,
@@ -633,7 +641,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: shared_keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     npk: shared_npk,
                     identifier: shared_identifier,
                 },
@@ -653,9 +661,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
         let account_id =
             AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+        let nonce = Nonce::private_account_nonce_init(&account_id);
+        let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &nonce);
+        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
         let pre = AccountWithMetadata::new(Account::default(), true, account_id);
 
         let (output, _) = execute_and_prove(
@@ -664,7 +674,7 @@ mod tests {
                 .unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 nsk: keys.nsk,
                 identifier,
             }],
@@ -695,7 +705,7 @@ mod tests {
                 .unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 nsk: keys.nsk,
                 identifier,
             }],
@@ -742,7 +752,7 @@ mod tests {
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 // use a different vpk
                 vpk: foreign_keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 // but the same nsk
                 nsk: keys.nsk,
                 identifier,
@@ -760,7 +770,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+        let recipient_id =
+            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+        let init_nonce = Nonce::private_account_nonce_init(&recipient_id);
+        let esk = EphemeralSecretKey::new(&recipient_id, &[0; 32], &init_nonce);
+        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
 
         let sender = AccountWithMetadata::new(
             Account {
@@ -771,8 +785,6 @@ mod tests {
             true,
             AccountId::new([0; 32]),
         );
-        let recipient_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let (output, _) = execute_and_prove(
@@ -785,7 +797,7 @@ mod tests {
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     npk: keys.npk(),
                     identifier,
                 },
@@ -807,9 +819,11 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
         let account_id =
             AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+        let update_nonce = Nonce::default().private_account_nonce_increment(&keys.nsk);
+        let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &update_nonce);
+        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
         let account = Account {
             program_owner: program.id(),
             balance: 1,
@@ -831,7 +845,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
                     identifier,
@@ -858,11 +872,12 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
-        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
-
         let auth_transfer_id = auth_transfer.id();
         let pda_id =
             AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+        let update_nonce = Nonce::default().private_account_nonce_increment(&keys.nsk);
+        let esk = EphemeralSecretKey::new(&pda_id, &[0; 32], &update_nonce);
+        let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
         let pda_account = Account {
             program_owner: auth_transfer_id,
             balance: 1,
@@ -887,7 +902,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier,
@@ -923,7 +938,7 @@ mod tests {
             Program::serialize_instruction(seed).unwrap(),
             vec![InputAccountIdentity::PrivatePdaInit {
                 vpk: keys.vpk(),
-                esk: [0; 32],
+                random_seed: [0; 32],
                 npk,
                 identifier: 99,
                 seed: None,
@@ -965,7 +980,7 @@ mod tests {
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: keys.vpk(),
-                    esk: [0; 32],
+                    random_seed: [0; 32],
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier: 99,

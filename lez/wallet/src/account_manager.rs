@@ -4,8 +4,8 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    EphemeralSecretKey, Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey,
-    NullifierSecretKey, SharedSecretKey,
+    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::ViewingPublicKey,
 };
@@ -262,8 +262,8 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, &vpk, identifier));
-                    let mut esk: EphemeralSecretKey = [0; 32];
-                    OsRng.fill_bytes(&mut esk);
+                    let mut random_seed: [u8; 32] = [0; 32];
+                    OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -271,7 +271,7 @@ impl AccountManager {
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
-                        esk,
+                        random_seed,
                         is_pda: false,
                     };
 
@@ -289,8 +289,8 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
-                    let mut esk: EphemeralSecretKey = [0; 32];
-                    OsRng.fill_bytes(&mut esk);
+                    let mut random_seed: [u8; 32] = [0; 32];
+                    OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -298,7 +298,7 @@ impl AccountManager {
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
-                        esk,
+                        random_seed,
                         is_pda: true,
                     };
                     State::Private(pre)
@@ -372,14 +372,22 @@ impl AccountManager {
                 State::Private(pre) => Some(pre),
                 State::Public { .. } | State::PublicKeycard { .. } => None,
             })
-            .enumerate()
-            .map(|(output_index, pre)| PrivateAccountKeys {
-                ssk: SharedSecretKey::encapsulate_deterministic(
-                    &pre.vpk,
-                    &pre.esk,
-                    u32::try_from(output_index).expect("private output index fits in u32"),
-                )
-                .0,
+            .map(|pre| {
+                let nonce = if pre.proof.is_some() {
+                    pre.pre_state.account.nonce.private_account_nonce_increment(
+                        pre.nsk.as_ref().expect("update variant must have nsk"),
+                    )
+                } else {
+                    lee_core::account::Nonce::private_account_nonce_init(&pre.pre_state.account_id)
+                };
+                let esk = lee_core::EphemeralSecretKey::new(
+                    &pre.pre_state.account_id,
+                    &pre.random_seed,
+                    &nonce,
+                );
+                PrivateAccountKeys {
+                    ssk: SharedSecretKey::encapsulate_deterministic(&pre.vpk, &esk).0,
+                }
             })
             .collect()
     }
@@ -396,7 +404,7 @@ impl AccountManager {
                 State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
                         vpk: pre.vpk.clone(),
-                        esk: pre.esk,
+                        random_seed: pre.random_seed,
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
@@ -404,7 +412,7 @@ impl AccountManager {
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
                         vpk: pre.vpk.clone(),
-                        esk: pre.esk,
+                        random_seed: pre.random_seed,
                         npk: pre.npk,
                         identifier: pre.identifier,
                         seed: None,
@@ -414,7 +422,7 @@ impl AccountManager {
                     (Some(nsk), Some(membership_proof)) => {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
                             vpk: pre.vpk.clone(),
-                            esk: pre.esk,
+                            random_seed: pre.random_seed,
                             nsk,
                             membership_proof,
                             identifier: pre.identifier,
@@ -422,13 +430,13 @@ impl AccountManager {
                     }
                     (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
                         vpk: pre.vpk.clone(),
-                        esk: pre.esk,
+                        random_seed: pre.random_seed,
                         nsk,
                         identifier: pre.identifier,
                     },
                     (None, _) => InputAccountIdentity::PrivateUnauthorized {
                         vpk: pre.vpk.clone(),
-                        esk: pre.esk,
+                        random_seed: pre.random_seed,
                         npk: pre.npk,
                         identifier: pre.identifier,
                     },
@@ -505,7 +513,7 @@ struct AccountPreparedData {
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
-    esk: EphemeralSecretKey,
+    random_seed: [u8; 32],
     /// True when this account is a private PDA (owned or foreign). Used by `account_identities()`
     /// to select `PrivatePdaInit`/`PrivatePdaUpdate` rather than the standalone private variants.
     is_pda: bool,
@@ -536,8 +544,8 @@ async fn private_key_tree_acc_preparation(
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
-    let mut esk: EphemeralSecretKey = [0; 32];
-    OsRng.fill_bytes(&mut esk);
+    let mut random_seed: [u8; 32] = [0; 32];
+    OsRng.fill_bytes(&mut random_seed);
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -546,7 +554,7 @@ async fn private_key_tree_acc_preparation(
         vpk: from_vpk,
         pre_state: sender_pre,
         proof,
-        esk,
+        random_seed,
         is_pda,
     })
 }
@@ -574,8 +582,8 @@ async fn private_shared_acc_preparation(
         .await
         .unwrap_or(None);
 
-    let mut esk: EphemeralSecretKey = [0; 32];
-    OsRng.fill_bytes(&mut esk);
+    let mut random_seed: [u8; 32] = [0; 32];
+    OsRng.fill_bytes(&mut random_seed);
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -584,7 +592,7 @@ async fn private_shared_acc_preparation(
         vpk,
         pre_state,
         proof,
-        esk,
+        random_seed,
         is_pda,
     })
 }
