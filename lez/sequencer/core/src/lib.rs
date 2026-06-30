@@ -729,26 +729,23 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
         risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
             .ok()?;
 
-    match instruction {
-        bridge_core::Instruction::Withdraw {
-            amount,
-            bedrock_account_pk,
-        } => {
-            let recipient_pk =
-                logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
-                    BigUint::from_bytes_le(&bedrock_account_pk),
-                );
+    let bridge_core::Instruction::Withdraw {
+        amount,
+        bedrock_account_pk,
+    } = instruction
+    else {
+        return None;
+    };
 
-            Some(WithdrawArg {
-                outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
-                    logos_blockchain_core::mantle::Note::new(amount, recipient_pk),
-                ),
-            })
-        }
-        bridge_core::Instruction::Deposit { .. } => unreachable!(
-            "Deposit instructions from users should never pass validation, and thus should never be seen here"
+    let recipient_pk = logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
+        BigUint::from_bytes_le(&bedrock_account_pk),
+    );
+
+    Some(WithdrawArg {
+        outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
+            logos_blockchain_core::mantle::Note::new(amount, recipient_pk),
         ),
-    }
+    })
 }
 
 fn withdraw_event_reconciliation_key(
