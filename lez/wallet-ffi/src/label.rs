@@ -265,7 +265,7 @@ pub unsafe extern "C" fn wallet_ffi_get_all_labels_for_account(
         .storage()
         .labels_for_account(account_id_with_privacy.into())
     {
-        let Ok(label_c) = CString::from_str(label.inner()) else {
+        let Ok(label_c) = CString::from_str(label.as_ref()) else {
             print_error(format!("Failed to cast label into C string: {label}"));
             return LabelList::error(WalletFfiError::InternalError);
         };
