@@ -7,7 +7,7 @@
     reason = "Most of the shadows come from args parsing which is ok"
 )]
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
@@ -22,7 +22,8 @@ use lee::{
     },
 };
 use lee_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, MembershipProof, Nullifier, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -789,28 +790,7 @@ impl WalletCore {
             .key_chain()
             .shared_private_accounts_iter()
             .filter_map(|(&account_id, entry)| {
-                let holder = self
-                    .storage
-                    .key_chain()
-                    .group_key_holder(&entry.group_label)?;
-
-                let keys = match (&entry.pda_seed, &entry.authority_program_id) {
-                    (Some(pda_seed), Some(program_id)) => {
-                        holder.derive_keys_for_pda(program_id, pda_seed)
-                    }
-                    (Some(_), None) => return None, // PDA without program_id, skip
-                    _ => {
-                        let derivation_seed = {
-                            use sha2::Digest as _;
-                            let mut hasher = sha2::Sha256::new();
-                            hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
-                            hasher.update(entry.identifier.to_le_bytes());
-                            let result: [u8; 32] = hasher.finalize().into();
-                            result
-                        };
-                        holder.derive_keys_for_shared_account(&derivation_seed)
-                    }
-                };
+                let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
                 let npk = keys.generate_nullifier_public_key();
                 let vpk = keys.generate_viewing_public_key();
                 let vsk = keys.viewing_secret_key;
@@ -853,6 +833,31 @@ impl WalletCore {
                 }
             }
         }
+    }
+
+    #[expect(dead_code, reason = "wired into the sync loop in the update-scan unit")]
+    fn build_nullifier_watch(&self) -> HashMap<Nullifier, AccountId> {
+        let key_chain = self.storage.key_chain();
+        let mut watch = HashMap::new();
+
+        for found in key_chain.private_accounts() {
+            let account_id =
+                AccountId::for_private_account(&found.key_chain.nullifier_public_key, found.kind);
+            let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
+            let commitment = Commitment::new(&account_id, found.account);
+            watch.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+        }
+
+        for (&account_id, entry) in key_chain.shared_private_accounts_iter() {
+            let Some(keys) = key_chain.derive_shared_account_keys(entry) else {
+                continue;
+            };
+            let nsk = keys.nullifier_secret_key;
+            let commitment = Commitment::new(&account_id, &entry.account);
+            watch.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+        }
+
+        watch
     }
 
     #[must_use]

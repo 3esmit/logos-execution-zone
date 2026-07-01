@@ -6,7 +6,7 @@ use key_protocol::key_management::{
     KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
-    secret_holders::{SeedHolder, ViewingSecretKey},
+    secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
 use lee::{Account, AccountId};
 use lee_core::{Identifier, PrivateAccountKind};
@@ -209,41 +209,11 @@ impl UserKeyChain {
     /// those.
     #[must_use]
     pub fn private_account(&self, account_id: AccountId) -> Option<FoundPrivateAccount<'_>> {
-        self.imported_private_accounts
-            .iter()
-            .flat_map(|(key, data)| {
-                data.accounts
-                    .iter()
-                    .map(|(kind, account)| FoundPrivateAccount {
-                        account,
-                        key_chain: &key.key_chain,
-                        kind,
-                        chain_index: key.chain_index.clone(),
-                    })
-            })
-            .chain(
-                self.private_key_tree
-                    .key_map
-                    .iter()
-                    .flat_map(|(chain_index, data)| {
-                        data.value
-                            .1
-                            .iter()
-                            .map(|(kind, account)| FoundPrivateAccount {
-                                account,
-                                key_chain: &data.value.0,
-                                kind,
-                                chain_index: Some(chain_index.clone()),
-                            })
-                    }),
-            )
-            .find_map(|found| {
-                let expected_id = AccountId::for_private_account(
-                    &found.key_chain.nullifier_public_key,
-                    found.kind,
-                );
-                (expected_id == account_id).then_some(found)
-            })
+        self.private_accounts().find_map(|found| {
+            let expected_id =
+                AccountId::for_private_account(&found.key_chain.nullifier_public_key, found.kind);
+            (expected_id == account_id).then_some(found)
+        })
     }
 
     #[must_use]
@@ -279,6 +249,60 @@ impl UserKeyChain {
                         })
                     }),
             )
+    }
+
+    pub fn private_accounts(&self) -> impl Iterator<Item = FoundPrivateAccount<'_>> {
+        self.imported_private_accounts
+            .iter()
+            .flat_map(|(key, data)| {
+                data.accounts
+                    .iter()
+                    .map(|(kind, account)| FoundPrivateAccount {
+                        account,
+                        key_chain: &key.key_chain,
+                        kind,
+                        chain_index: key.chain_index.clone(),
+                    })
+            })
+            .chain(
+                self.private_key_tree
+                    .key_map
+                    .iter()
+                    .flat_map(|(chain_index, data)| {
+                        data.value
+                            .1
+                            .iter()
+                            .map(|(kind, account)| FoundPrivateAccount {
+                                account,
+                                key_chain: &data.value.0,
+                                kind,
+                                chain_index: Some(chain_index.clone()),
+                            })
+                    }),
+            )
+    }
+
+    #[must_use]
+    pub fn derive_shared_account_keys(
+        &self,
+        entry: &SharedAccountEntry,
+    ) -> Option<PrivateKeyHolder> {
+        let holder = self.group_key_holder(&entry.group_label)?;
+        Some(match (&entry.pda_seed, &entry.authority_program_id) {
+            (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
+            (Some(_), None) => return None,
+            _ => {
+                let derivation_seed = {
+                    use sha2::Digest as _;
+                    let mut hasher = sha2::Sha256::new();
+                    hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
+                    hasher.update(entry.identifier.to_le_bytes());
+                    let result: [u8; 32] = hasher.finalize().into();
+                    result
+                };
+                holder.derive_keys_for_shared_account(&derivation_seed)
+            }
+        })
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
