@@ -253,6 +253,8 @@ impl UserKeyChain {
             )
     }
 
+    /// Iterates every owned private account (imported and generated), one
+    /// [`FoundPrivateAccount`] per identity. Excludes shared accounts.
     pub fn private_accounts(&self) -> impl Iterator<Item = FoundPrivateAccount<'_>> {
         self.imported_private_accounts
             .iter()
@@ -284,6 +286,8 @@ impl UserKeyChain {
             )
     }
 
+    /// Re-derives the [`PrivateKeyHolder`] for a shared account `entry`, dispatching on PDA vs
+    /// regular. `None` if the group key holder is absent or a PDA entry lacks its program id.
     #[must_use]
     pub fn derive_shared_account_keys(
         &self,
@@ -297,6 +301,8 @@ impl UserKeyChain {
         })
     }
 
+    /// Maps each owned and shared account's current-state update nullifier to its `account_id`,
+    /// so co-owner updates are found during sync by nullifier rather than view tag.
     #[must_use]
     pub fn build_nullifier_watch(&self) -> HashMap<Nullifier, AccountId> {
         let mut watch = HashMap::new();
@@ -321,6 +327,9 @@ impl UserKeyChain {
         watch
     }
 
+    /// Applies every watched nullifier the `message` publishes: decrypts the position-aligned
+    /// note, stores the new state, and rolls the watch to the account's next nullifier. Returns
+    /// the output slots handled, so the view-tag pass can skip them.
     pub fn sync_updates_via_nullifiers(
         &mut self,
         message: &Message,
@@ -344,6 +353,8 @@ impl UserKeyChain {
         handled
     }
 
+    /// Decrypts the note at slot `i` for `account_id` (shared or sole-owned), stores the new
+    /// state, and returns the account's next update nullifier. `None` if keys or decryption fail.
     fn apply_nullifier_update(
         &mut self,
         account_id: AccountId,
@@ -389,6 +400,8 @@ impl UserKeyChain {
         Some(new_nullifier)
     }
 
+    /// Recomputes `account_id`'s current update nullifier and inserts it into the watch -- used
+    /// after the view-tag pass stores a freshly discovered or updated account mid-sync.
     pub fn refresh_watch_entry(
         &self,
         watch: &mut HashMap<Nullifier, AccountId>,

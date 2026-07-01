@@ -146,6 +146,10 @@ impl GroupKeyHolder {
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
     }
 
+    /// Derive keys for a shared regular account from its `identifier`.
+    ///
+    /// Computes the derivation seed via the `SharedAccountTag` domain separator, then delegates
+    /// to [`Self::derive_keys_for_shared_account`] so controllers sharing the GMS agree on keys.
     #[must_use]
     pub fn derive_keys_for_regular_shared_account(
         &self,
