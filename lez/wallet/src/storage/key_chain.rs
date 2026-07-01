@@ -1,5 +1,5 @@
 use core::panic;
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, HashMap, HashSet, btree_map::Entry};
 
 use anyhow::{Context as _, Result, anyhow};
 use key_protocol::key_management::{
@@ -8,8 +8,10 @@ use key_protocol::key_management::{
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
     secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
-use lee::{Account, AccountId};
-use lee_core::{Identifier, PrivateAccountKind};
+use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
+use lee_core::{
+    Commitment, EncryptionScheme, Identifier, Nullifier, PrivateAccountKind, SharedSecretKey,
+};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
@@ -303,6 +305,120 @@ impl UserKeyChain {
                 holder.derive_keys_for_shared_account(&derivation_seed)
             }
         })
+    }
+
+    #[must_use]
+    pub fn build_nullifier_watch(&self) -> HashMap<Nullifier, AccountId> {
+        let mut watch = HashMap::new();
+
+        for found in self.private_accounts() {
+            let account_id =
+                AccountId::for_private_account(&found.key_chain.nullifier_public_key, found.kind);
+            let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
+            let commitment = Commitment::new(&account_id, found.account);
+            watch.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+        }
+
+        for (&account_id, entry) in self.shared_private_accounts_iter() {
+            let Some(keys) = self.derive_shared_account_keys(entry) else {
+                continue;
+            };
+            let nsk = keys.nullifier_secret_key;
+            let commitment = Commitment::new(&account_id, &entry.account);
+            watch.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+        }
+
+        watch
+    }
+
+    pub fn sync_updates_via_nullifiers(
+        &mut self,
+        message: &Message,
+        watch: &mut HashMap<Nullifier, AccountId>,
+    ) -> HashSet<usize> {
+        let hits: Vec<(usize, Nullifier, AccountId)> = message
+            .new_nullifiers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (nullifier, _))| watch.get(nullifier).map(|&id| (i, *nullifier, id)))
+            .collect();
+
+        let mut handled = HashSet::new();
+        for (i, old_nullifier, account_id) in hits {
+            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
+                watch.remove(&old_nullifier);
+                watch.insert(new_nullifier, account_id);
+                handled.insert(i);
+            }
+        }
+        handled
+    }
+
+    fn apply_nullifier_update(
+        &mut self,
+        account_id: AccountId,
+        message: &Message,
+        i: usize,
+    ) -> Option<Nullifier> {
+        let encrypted = &message.encrypted_private_post_states[i];
+        let commitment = &message.new_commitments[i];
+        let ciph_id = u32::try_from(i).ok()?;
+
+        let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
+        {
+            let keys = self.derive_shared_account_keys(entry)?;
+            let secret = SharedSecretKey::decapsulate(
+                &encrypted.epk,
+                &keys.viewing_secret_key.d,
+                &keys.viewing_secret_key.z,
+            )?;
+            (keys.nullifier_secret_key, secret, true)
+        } else {
+            let found = self.private_account(account_id)?;
+            let secret = found
+                .key_chain
+                .calculate_shared_secret_receiver(&encrypted.epk)?;
+            (
+                found.key_chain.private_key_holder.nullifier_secret_key,
+                secret,
+                false,
+            )
+        };
+
+        let (kind, new_account) =
+            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, commitment, ciph_id)?;
+        let new_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+
+        if is_shared {
+            self.update_shared_private_account_state(&account_id, new_account);
+        } else {
+            self.insert_private_account(account_id, kind, new_account)
+                .ok()?;
+        }
+        Some(new_nullifier)
+    }
+
+    pub fn refresh_watch_entry(
+        &self,
+        watch: &mut HashMap<Nullifier, AccountId>,
+        account_id: AccountId,
+    ) {
+        let (account, nsk) = if let Some(entry) = self.shared_private_account(account_id) {
+            let Some(keys) = self.derive_shared_account_keys(entry) else {
+                return;
+            };
+            (&entry.account, keys.nullifier_secret_key)
+        } else if let Some(found) = self.private_account(account_id) {
+            (
+                found.account,
+                found.key_chain.private_key_holder.nullifier_secret_key,
+            )
+        } else {
+            return;
+        };
+        let nullifier = Nullifier::for_account_update(&Commitment::new(&account_id, account), &nsk);
+        watch.insert(nullifier, account_id);
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
