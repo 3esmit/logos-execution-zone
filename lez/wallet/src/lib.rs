@@ -803,14 +803,19 @@ impl WalletCore {
                         .map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(npk, &kind);
-                            (account_id, kind, res_acc)
+                            let nsk = key_chain.private_key_holder.nullifier_secret_key;
+                            let nullifier = Nullifier::for_account_update(
+                                &Commitment::new(&account_id, &res_acc),
+                                &nsk,
+                            );
+                            (account_id, kind, res_acc, nullifier)
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, kind, new_acc) in affected_accounts {
+        for (affected_account_id, kind, new_acc, nullifier) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
@@ -818,11 +823,9 @@ impl WalletCore {
                 .key_chain_mut()
                 .insert_private_account(affected_account_id, kind, new_acc)
                 .expect("Account Id should exist");
-            // Insert the initial nullifier awaited for the new ID.
-            // This allows to skip tag matching for noticing updates to it.
-            self.storage
-                .key_chain()
-                .refresh_next_nullifier_entry(index, affected_account_id);
+            // Await the account's next update by its nullifier, so later updates
+            // to it are caught without tag matching.
+            index.insert(nullifier, affected_account_id);
         }
 
         // Scan for updates to shared accounts (GMS-derived).
@@ -843,12 +846,13 @@ impl WalletCore {
                 let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
                 let npk = keys.generate_nullifier_public_key();
                 let vpk = keys.generate_viewing_public_key();
+                let nsk = keys.nullifier_secret_key;
                 let vsk = keys.viewing_secret_key;
-                Some((account_id, npk, vpk, vsk))
+                Some((account_id, npk, vpk, vsk, nsk))
             })
             .collect();
 
-        for (account_id, npk, vpk, vsk) in shared_keys {
+        for (account_id, npk, vpk, vsk, nsk) in shared_keys {
             let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
             for (ciph_id, encrypted_data) in tx
@@ -878,12 +882,14 @@ impl WalletCore {
                         .expect("Ciphertext ID is expected to fit in u32"),
                 ) {
                     info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
+                    let nullifier = Nullifier::for_account_update(
+                        &Commitment::new(&account_id, &new_acc),
+                        &nsk,
+                    );
                     self.storage
                         .key_chain_mut()
                         .update_shared_private_account_state(&account_id, new_acc);
-                    self.storage
-                        .key_chain()
-                        .refresh_next_nullifier_entry(index, account_id);
+                    index.insert(nullifier, account_id);
                 }
             }
         }

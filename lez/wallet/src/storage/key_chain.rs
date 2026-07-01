@@ -409,29 +409,6 @@ impl UserKeyChain {
         Some(new_nullifier)
     }
 
-    /// Recomputes `account_id`'s current update nullifier and inserts it into the index.
-    pub fn refresh_next_nullifier_entry(
-        &self,
-        index: &mut HashMap<Nullifier, AccountId>,
-        account_id: AccountId,
-    ) {
-        let (account, nsk) = if let Some(entry) = self.shared_private_account(account_id) {
-            let Some(keys) = self.derive_shared_account_keys(entry) else {
-                return;
-            };
-            (&entry.account, keys.nullifier_secret_key)
-        } else if let Some(found) = self.private_account(account_id) {
-            (
-                found.account,
-                found.key_chain.private_key_holder.nullifier_secret_key,
-            )
-        } else {
-            return;
-        };
-        let nullifier = Nullifier::for_account_update(&Commitment::new(&account_id, account), &nsk);
-        index.insert(nullifier, account_id);
-    }
-
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
         let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
