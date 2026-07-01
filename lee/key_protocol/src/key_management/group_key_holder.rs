@@ -149,9 +149,9 @@ impl GroupKeyHolder {
     /// Derive keys for a shared regular account from its `identifier`.
     ///
     /// Computes the derivation seed via the `SharedAccountTag` domain separator, then delegates
-    /// to [`Self::derive_keys_for_shared_account`] so controllers sharing the GMS agree on keys.
+    /// to [`Self::derive_keys_for_shared_account`].
     #[must_use]
-    pub fn derive_keys_for_regular_shared_account(
+    pub fn derive_regular_shared_account_keys_from_identifier(
         &self,
         identifier: Identifier,
     ) -> PrivateKeyHolder {

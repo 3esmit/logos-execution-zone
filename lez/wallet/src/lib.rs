@@ -402,7 +402,7 @@ impl WalletCore {
             .group_key_holder(&group_name)
             .context(format!("Group '{group_name}' not found"))?;
 
-        let keys = holder.derive_keys_for_regular_shared_account(identifier);
+        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::from((&npk, identifier));
@@ -691,18 +691,20 @@ impl WalletCore {
         let mut blocks =
             std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 
-        let mut watch = self.storage.key_chain().build_nullifier_watch();
+        // Get the latest nullifiers for all owned accounts.
+        let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
+                // Eagerly decrypt note updates using expected nullifiers.
                 let handled = if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
                     self.storage
                         .key_chain_mut()
-                        .sync_updates_via_nullifiers(&pp_tx.message, &mut watch)
+                        .sync_updates_via_nullifiers(&pp_tx.message, &mut index)
                 } else {
                     HashSet::new()
                 };
-                self.sync_private_accounts_with_tx(tx, &mut watch, &handled);
+                self.sync_private_accounts_with_tx(tx, &mut index, &handled);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -722,7 +724,7 @@ impl WalletCore {
     fn sync_private_accounts_with_tx(
         &mut self,
         tx: LeeTransaction,
-        watch: &mut HashMap<Nullifier, AccountId>,
+        index: &mut HashMap<Nullifier, AccountId>,
         handled: &HashSet<usize>,
     ) {
         let LeeTransaction::PrivacyPreserving(tx) = tx else {
@@ -745,6 +747,9 @@ impl WalletCore {
                     .iter()
                     .enumerate()
                     .filter(move |(ciph_id, encrypted_data)| {
+                        // If we have not decrypted the update using the nullifiers,
+                        // the note may be an initialized one, for which we should
+                        // scan.
                         !handled.contains(ciph_id) && encrypted_data.view_tag == view_tag
                     })
                     .filter_map(move |(ciph_id, encrypted_data)| {
@@ -779,19 +784,21 @@ impl WalletCore {
                 .key_chain_mut()
                 .insert_private_account(affected_account_id, kind, new_acc)
                 .expect("Account Id should exist");
+            // Insert the initial nullifier awaited for the new ID.
+            // This allows to skip tag matching for noticing updates to it.
             self.storage
                 .key_chain()
-                .refresh_watch_entry(watch, affected_account_id);
+                .refresh_next_nullifier_entry(index, affected_account_id);
         }
 
         // Scan for updates to shared accounts (GMS-derived).
-        self.sync_shared_private_accounts_with_tx(&tx, watch, handled);
+        self.sync_shared_private_accounts_with_tx(&tx, index, handled);
     }
 
     fn sync_shared_private_accounts_with_tx(
         &mut self,
         tx: &PrivacyPreservingTransaction,
-        watch: &mut HashMap<Nullifier, AccountId>,
+        index: &mut HashMap<Nullifier, AccountId>,
         handled: &HashSet<usize>,
     ) {
         let shared_keys: Vec<_> = self
@@ -816,6 +823,7 @@ impl WalletCore {
                 .iter()
                 .enumerate()
             {
+                // If already decrypted or the tag does nto match, skip.
                 if handled.contains(&ciph_id) || encrypted_data.view_tag != view_tag {
                     continue;
                 }
@@ -841,7 +849,7 @@ impl WalletCore {
                         .update_shared_private_account_state(&account_id, new_acc);
                     self.storage
                         .key_chain()
-                        .refresh_watch_entry(watch, account_id);
+                        .refresh_next_nullifier_entry(index, account_id);
                 }
             }
         }
