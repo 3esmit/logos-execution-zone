@@ -703,7 +703,7 @@ impl WalletCore {
                 if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
                     self.sync_updates_via_nullifiers(pp_tx, &mut watch);
                 }
-                self.sync_private_accounts_with_tx(tx);
+                self.sync_private_accounts_with_tx(tx, &mut watch);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -720,7 +720,11 @@ impl WalletCore {
         Ok(())
     }
 
-    fn sync_private_accounts_with_tx(&mut self, tx: LeeTransaction) {
+    fn sync_private_accounts_with_tx(
+        &mut self,
+        tx: LeeTransaction,
+        watch: &mut HashMap<Nullifier, AccountId>,
+    ) {
         let LeeTransaction::PrivacyPreserving(tx) = tx else {
             return;
         };
@@ -773,13 +777,18 @@ impl WalletCore {
                 .key_chain_mut()
                 .insert_private_account(affected_account_id, kind, new_acc)
                 .expect("Account Id should exist");
+            self.refresh_watch_entry(watch, affected_account_id);
         }
 
         // Scan for updates to shared accounts (GMS-derived).
-        self.sync_shared_private_accounts_with_tx(&tx);
+        self.sync_shared_private_accounts_with_tx(&tx, watch);
     }
 
-    fn sync_shared_private_accounts_with_tx(&mut self, tx: &PrivacyPreservingTransaction) {
+    fn sync_shared_private_accounts_with_tx(
+        &mut self,
+        tx: &PrivacyPreservingTransaction,
+        watch: &mut HashMap<Nullifier, AccountId>,
+    ) {
         let shared_keys: Vec<_> = self
             .storage
             .key_chain()
@@ -825,6 +834,7 @@ impl WalletCore {
                     self.storage
                         .key_chain_mut()
                         .update_shared_private_account_state(&account_id, new_acc);
+                    self.refresh_watch_entry(watch, account_id);
                 }
             }
         }
@@ -927,6 +937,29 @@ impl WalletCore {
                 .ok()?;
         }
         Some(new_nullifier)
+    }
+
+    fn refresh_watch_entry(
+        &self,
+        watch: &mut HashMap<Nullifier, AccountId>,
+        account_id: AccountId,
+    ) {
+        let key_chain = self.storage.key_chain();
+        let (account, nsk) = if let Some(entry) = key_chain.shared_private_account(account_id) {
+            let Some(keys) = key_chain.derive_shared_account_keys(entry) else {
+                return;
+            };
+            (&entry.account, keys.nullifier_secret_key)
+        } else if let Some(found) = key_chain.private_account(account_id) {
+            (
+                found.account,
+                found.key_chain.private_key_holder.nullifier_secret_key,
+            )
+        } else {
+            return;
+        };
+        let nullifier = Nullifier::for_account_update(&Commitment::new(&account_id, account), &nsk);
+        watch.insert(nullifier, account_id);
     }
 
     #[must_use]
