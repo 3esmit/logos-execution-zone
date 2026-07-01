@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use lee::{
@@ -30,10 +30,7 @@ use lee_core::{
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::{
-    AccountIdentity, WalletCore,
-    cli::{Command, account::AccountSubcommand},
-};
+use wallet::{AccountIdentity, WalletCore};
 
 /// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
@@ -218,11 +215,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // Both PDAs must be discoverable and have the correct balance.
     let pda_0_account = ctx
@@ -301,11 +294,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // After spending, PDAs should have the remaining balance.
     let pda_0_spent = ctx
