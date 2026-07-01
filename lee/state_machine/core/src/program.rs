@@ -317,7 +317,7 @@ impl AccountPostState {
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)

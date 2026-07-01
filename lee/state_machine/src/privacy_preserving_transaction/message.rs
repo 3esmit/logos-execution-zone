@@ -11,7 +11,7 @@ use crate::{AccountId, error::LeeError};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
