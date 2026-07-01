@@ -10,7 +10,8 @@ use key_protocol::key_management::{
 };
 use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
 use lee_core::{
-    Commitment, EncryptionScheme, Identifier, Nullifier, PrivateAccountKind, SharedSecretKey,
+    Commitment, EncryptionScheme, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind,
+    SharedSecretKey,
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,41 @@ pub struct SharedAccountEntry {
     pub pda_seed: Option<lee_core::program::PdaSeed>,
     pub authority_program_id: Option<lee_core::program::ProgramId>,
     pub account: Account,
+}
+
+/// Maps each owned or shared private account to the nullifier its next update will publish,
+/// so sync can spot updates by nullifier rather than view tag.
+#[derive(Default)]
+pub struct NullifierIndex(HashMap<Nullifier, AccountId>);
+
+impl NullifierIndex {
+    fn next_update_nullifier(
+        account_id: AccountId,
+        account: &Account,
+        nsk: &NullifierSecretKey,
+    ) -> Nullifier {
+        Nullifier::for_account_update(&Commitment::new(&account_id, account), nsk)
+    }
+
+    /// Returns the account whose next update would publish `nullifier`.
+    #[must_use]
+    pub fn account_for(&self, nullifier: &Nullifier) -> Option<AccountId> {
+        self.0.get(nullifier).copied()
+    }
+
+    /// Indexes `account_id` by the nullifier its next update will publish.
+    pub fn track(&mut self, account_id: AccountId, account: &Account, nsk: &NullifierSecretKey) {
+        self.0.insert(
+            Self::next_update_nullifier(account_id, account, nsk),
+            account_id,
+        );
+    }
+
+    /// Replaces a spent nullifier with the account's `next` one.
+    pub fn update(&mut self, spent: &Nullifier, next: Nullifier, account_id: AccountId) {
+        self.0.remove(spent);
+        self.0.insert(next, account_id);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -304,8 +340,8 @@ impl UserKeyChain {
     /// Maps each owned and shared account's current-state update nullifier to its `account_id`,
     /// so co-owner updates are found during sync by nullifier rather than view tag.
     #[must_use]
-    pub fn build_latest_nullifier_index(&self) -> HashMap<Nullifier, AccountId> {
-        let mut index = HashMap::new();
+    pub fn build_latest_nullifier_index(&self) -> NullifierIndex {
+        let mut index = NullifierIndex::default();
 
         // For each (regular) found account the user owns, compute its nullifier and put
         // into the map. This is the next nullifier it will look for.
@@ -313,8 +349,7 @@ impl UserKeyChain {
             let account_id =
                 AccountId::for_private_account(&found.key_chain.nullifier_public_key, found.kind);
             let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
-            let commitment = Commitment::new(&account_id, found.account);
-            index.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+            index.track(account_id, found.account, &nsk);
         }
 
         // Same for the shared accounts.
@@ -323,8 +358,7 @@ impl UserKeyChain {
                 continue;
             };
             let nsk = keys.nullifier_secret_key;
-            let commitment = Commitment::new(&account_id, &entry.account);
-            index.insert(Nullifier::for_account_update(&commitment, &nsk), account_id);
+            index.track(account_id, &entry.account, &nsk);
         }
 
         index
@@ -336,14 +370,16 @@ impl UserKeyChain {
     pub fn sync_updates_via_nullifiers(
         &mut self,
         message: &Message,
-        index: &mut HashMap<Nullifier, AccountId>,
+        index: &mut NullifierIndex,
     ) -> HashSet<usize> {
         // Get the nullifier information if awaiting the nullifier.
         let hits: Vec<(usize, Nullifier, AccountId)> = message
             .new_nullifiers
             .iter()
             .enumerate()
-            .filter_map(|(i, (nullifier, _))| index.get(nullifier).map(|&id| (i, *nullifier, id)))
+            .filter_map(|(i, (nullifier, _))| {
+                index.account_for(nullifier).map(|id| (i, *nullifier, id))
+            })
             .collect();
 
         let mut handled = HashSet::new();
@@ -351,10 +387,9 @@ impl UserKeyChain {
             // Try decrypting the commitment connectted to the nullifier and get the next
             // nullifier to await.
             if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
-                index.remove(&old_nullifier);
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
-                index.insert(new_nullifier, account_id);
+                index.update(&old_nullifier, new_nullifier, account_id);
                 // Record that this nullifier's position can be skipped for scanning.
                 handled.insert(i);
             }
@@ -397,8 +432,7 @@ impl UserKeyChain {
 
         let (kind, new_account) =
             EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, commitment, ciph_id)?;
-        let new_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+        let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
         if is_shared {
             self.update_shared_private_account_state(&account_id, new_account);
@@ -832,7 +866,7 @@ mod tests {
         let old_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
         let mut index = kc.build_latest_nullifier_index();
-        assert_eq!(index.get(&old_nullifier), Some(&account_id));
+        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
         let new_account = Account {
             balance: 150,
@@ -870,8 +904,8 @@ mod tests {
         );
         let new_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
-        assert_eq!(index.get(&new_nullifier), Some(&account_id));
-        assert!(!index.contains_key(&old_nullifier));
+        assert_eq!(index.account_for(&new_nullifier), Some(account_id));
+        assert!(index.account_for(&old_nullifier).is_none());
     }
 
     #[test]
@@ -903,7 +937,7 @@ mod tests {
         let old_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
         let mut index = kc.build_latest_nullifier_index();
-        assert_eq!(index.get(&old_nullifier), Some(&account_id));
+        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
 
         let new_account = Account {
             balance: 250,
@@ -935,8 +969,8 @@ mod tests {
         );
         let new_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
-        assert_eq!(index.get(&new_nullifier), Some(&account_id));
-        assert!(!index.contains_key(&old_nullifier));
+        assert_eq!(index.account_for(&new_nullifier), Some(account_id));
+        assert!(index.account_for(&old_nullifier).is_none());
     }
 
     #[test]

@@ -7,10 +7,7 @@
     reason = "Most of the shadows come from args parsing which is ok"
 )]
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::{collections::HashSet, path::PathBuf};
 
 pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
@@ -25,7 +22,7 @@ use lee::{
     },
 };
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
     account::Nonce, compute_digest_for_path, program::InstructionData,
 };
 use log::info;
@@ -37,7 +34,7 @@ use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
     poller::TxPoller,
-    storage::key_chain::SharedAccountEntry,
+    storage::key_chain::{NullifierIndex, SharedAccountEntry},
 };
 
 pub mod account;
@@ -758,7 +755,7 @@ impl WalletCore {
     fn sync_private_accounts_with_tx(
         &mut self,
         tx: LeeTransaction,
-        index: &mut HashMap<Nullifier, AccountId>,
+        index: &mut NullifierIndex,
         handled: &HashSet<usize>,
     ) {
         let LeeTransaction::PrivacyPreserving(tx) = tx else {
@@ -804,28 +801,24 @@ impl WalletCore {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(npk, &kind);
                             let nsk = key_chain.private_key_holder.nullifier_secret_key;
-                            let nullifier = Nullifier::for_account_update(
-                                &Commitment::new(&account_id, &res_acc),
-                                &nsk,
-                            );
-                            (account_id, kind, res_acc, nullifier)
+                            (account_id, kind, res_acc, nsk)
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, kind, new_acc, nullifier) in affected_accounts {
+        for (affected_account_id, kind, new_acc, nsk) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
+            // Await the account's next update by its nullifier, so later updates
+            // to it are caught without tag matching.
+            index.track(affected_account_id, &new_acc, &nsk);
             self.storage
                 .key_chain_mut()
                 .insert_private_account(affected_account_id, kind, new_acc)
                 .expect("Account Id should exist");
-            // Await the account's next update by its nullifier, so later updates
-            // to it are caught without tag matching.
-            index.insert(nullifier, affected_account_id);
         }
 
         // Scan for updates to shared accounts (GMS-derived).
@@ -835,7 +828,7 @@ impl WalletCore {
     fn sync_shared_private_accounts_with_tx(
         &mut self,
         tx: &PrivacyPreservingTransaction,
-        index: &mut HashMap<Nullifier, AccountId>,
+        index: &mut NullifierIndex,
         handled: &HashSet<usize>,
     ) {
         let shared_keys: Vec<_> = self
@@ -882,14 +875,10 @@ impl WalletCore {
                         .expect("Ciphertext ID is expected to fit in u32"),
                 ) {
                     info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
-                    let nullifier = Nullifier::for_account_update(
-                        &Commitment::new(&account_id, &new_acc),
-                        &nsk,
-                    );
+                    index.track(account_id, &new_acc, &nsk);
                     self.storage
                         .key_chain_mut()
                         .update_shared_private_account_state(&account_id, new_acc);
-                    index.insert(nullifier, account_id);
                 }
             }
         }
