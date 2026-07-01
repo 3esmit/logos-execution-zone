@@ -890,6 +890,71 @@ mod tests {
     }
 
     #[test]
+    fn nullifier_sync_updates_shared_account() {
+        let mut kc = UserKeyChain::default();
+
+        let label = Label::new("group");
+        let holder = GroupKeyHolder::new();
+        let identifier = 0;
+        let keys = holder.derive_keys_for_regular_shared_account(identifier);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let nsk = keys.nullifier_secret_key;
+        let account_id = AccountId::from((&npk, identifier));
+
+        kc.insert_group_key_holder(label.clone(), holder);
+        let old_account = Account::default();
+        kc.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                group_label: label,
+                identifier,
+                pda_seed: None,
+                authority_program_id: None,
+                account: old_account.clone(),
+            },
+        );
+
+        let old_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+        let mut watch = kc.build_nullifier_watch();
+        assert_eq!(watch.get(&old_nullifier), Some(&account_id));
+
+        let new_account = Account {
+            balance: 250,
+            ..Account::default()
+        };
+        let new_commitment = Commitment::new(&account_id, &new_account);
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let ciphertext = EncryptionScheme::encrypt(
+            &new_account,
+            &PrivateAccountKind::Regular(identifier),
+            &sender_ss,
+            &new_commitment,
+            0,
+        );
+        let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
+        let message = Message {
+            encrypted_private_post_states: vec![note],
+            new_commitments: vec![new_commitment],
+            new_nullifiers: vec![(old_nullifier, [0; 32])],
+            ..Default::default()
+        };
+
+        let handled = kc.sync_updates_via_nullifiers(&message, &mut watch);
+
+        assert_eq!(handled, HashSet::from([0]));
+        assert_eq!(
+            kc.shared_private_account(account_id).unwrap().account,
+            new_account
+        );
+        let new_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+        assert_eq!(watch.get(&new_nullifier), Some(&account_id));
+        assert!(!watch.contains_key(&old_nullifier));
+    }
+
+    #[test]
     fn nullifier_sync_ignores_unwatched_nullifier() {
         let mut kc = UserKeyChain::default();
 
