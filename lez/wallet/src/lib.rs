@@ -490,11 +490,6 @@ impl WalletCore {
         Some(Commitment::new(&account_id, account))
     }
 
-    /// Poll transactions.
-    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
-        self.poller.poll_tx(hash).await
-    }
-
     pub async fn check_private_account_initialized(
         &self,
         account_id: AccountId,
@@ -549,7 +544,6 @@ impl WalletCore {
             }
         }
 
-        println!("Transaction data is {:?}", tx.message);
         Ok(())
     }
 
@@ -558,10 +552,11 @@ impl WalletCore {
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
-        println!("Transaction data is {transfer_tx:?}");
+        let (tx, block_id) = self.poller.poll_tx(tx_hash).await?;
+        println!("Transaction is included in block {block_id}");
+        println!("Transaction data is {tx:?}");
         self.store_persistent_data()?;
-        Ok(cli::SubcommandReturnValue::Empty)
+        Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
 
     /// Pass an empty slice when the recipient is foreign and no accounts need decoding.
@@ -571,12 +566,17 @@ impl WalletCore {
         acc_decode_data: &[AccDecodeData],
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
-        if let common::transaction::LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-            self.decode_insert_privacy_preserving_transaction_results(&tx, acc_decode_data)?;
+        let (tx, block_id) = self.poller.poll_tx(tx_hash).await?;
+        println!("Transaction is included in block {block_id}");
+        println!("Transaction data is {tx:?}");
+        if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
+            self.decode_insert_privacy_preserving_transaction_results(
+                &private_tx,
+                acc_decode_data,
+            )?;
         }
         self.store_persistent_data()?;
-        Ok(cli::SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+        Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
 
     pub async fn send_privacy_preserving_tx(

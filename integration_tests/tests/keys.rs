@@ -57,8 +57,8 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = sub_ret else {
-        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = sub_ret else {
+        anyhow::bail!("Expected TransactionExecuted return value");
     };
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;

@@ -162,8 +162,8 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
     let pinata_balance_pre = account_balance(&ctx, system_accounts::pinata_account_id()).await?;
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash: _ } = result else {
-        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    let SubcommandReturnValue::TransactionExecuted { tx_hash: _ } = result else {
+        anyhow::bail!("Expected TransactionExecuted return value");
     };
 
     info!("Waiting for next block creation");

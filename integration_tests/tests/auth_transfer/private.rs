@@ -69,8 +69,8 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     });
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = result else {
-        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = result else {
+        anyhow::bail!("Expected TransactionExecuted return value");
     };
 
     info!("Waiting for next block creation");
@@ -158,8 +158,8 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = sub_ret else {
-        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = sub_ret else {
+        anyhow::bail!("Expected TransactionExecuted return value");
     };
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
@@ -237,8 +237,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
     });
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = result else {
-        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = result else {
+        anyhow::bail!("Expected TransactionExecuted return value");
     };
 
     info!("Waiting for next block creation");
@@ -297,7 +297,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = sub_ret else {
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = sub_ret else {
         anyhow::bail!("Failed to send transaction");
     };
 
