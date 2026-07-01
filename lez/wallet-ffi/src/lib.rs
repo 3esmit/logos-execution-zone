@@ -46,6 +46,7 @@ pub mod bridge;
 pub mod error;
 pub mod generic_transaction;
 pub mod keys;
+pub mod label;
 pub mod pinata;
 pub mod program_deployment;
 pub mod sync;
