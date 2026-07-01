@@ -218,6 +218,39 @@ impl UserKeyChain {
         })
     }
 
+    /// Iterates every owned private account (imported and generated), one
+    /// [`FoundPrivateAccount`] per identity. Excludes shared accounts.
+    pub fn private_accounts(&self) -> impl Iterator<Item = FoundPrivateAccount<'_>> {
+        self.imported_private_accounts
+            .iter()
+            .flat_map(|(key, data)| {
+                data.accounts
+                    .iter()
+                    .map(|(kind, account)| FoundPrivateAccount {
+                        account,
+                        key_chain: &key.key_chain,
+                        kind,
+                        chain_index: key.chain_index.clone(),
+                    })
+            })
+            .chain(
+                self.private_key_tree
+                    .key_map
+                    .iter()
+                    .flat_map(|(chain_index, data)| {
+                        data.value
+                            .1
+                            .iter()
+                            .map(|(kind, account)| FoundPrivateAccount {
+                                account,
+                                key_chain: &data.value.0,
+                                kind,
+                                chain_index: Some(chain_index.clone()),
+                            })
+                    }),
+            )
+    }
+
     #[must_use]
     pub fn private_account_key_chain_by_index(
         &self,
@@ -249,39 +282,6 @@ impl UserKeyChain {
                         keys_node.account_ids().map(move |account_id| {
                             (account_id, &keys_node.value.0, Some(chain_index))
                         })
-                    }),
-            )
-    }
-
-    /// Iterates every owned private account (imported and generated), one
-    /// [`FoundPrivateAccount`] per identity. Excludes shared accounts.
-    pub fn private_accounts(&self) -> impl Iterator<Item = FoundPrivateAccount<'_>> {
-        self.imported_private_accounts
-            .iter()
-            .flat_map(|(key, data)| {
-                data.accounts
-                    .iter()
-                    .map(|(kind, account)| FoundPrivateAccount {
-                        account,
-                        key_chain: &key.key_chain,
-                        kind,
-                        chain_index: key.chain_index.clone(),
-                    })
-            })
-            .chain(
-                self.private_key_tree
-                    .key_map
-                    .iter()
-                    .flat_map(|(chain_index, data)| {
-                        data.value
-                            .1
-                            .iter()
-                            .map(|(kind, account)| FoundPrivateAccount {
-                                account,
-                                key_chain: &data.value.0,
-                                kind,
-                                chain_index: Some(chain_index.clone()),
-                            })
                     }),
             )
     }
