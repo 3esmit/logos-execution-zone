@@ -7,7 +7,10 @@
     reason = "Most of the shadows come from args parsing which is ok"
 )]
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
@@ -700,10 +703,12 @@ impl WalletCore {
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
-                if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
-                    self.sync_updates_via_nullifiers(pp_tx, &mut watch);
-                }
-                self.sync_private_accounts_with_tx(tx, &mut watch);
+                let handled = if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
+                    self.sync_updates_via_nullifiers(pp_tx, &mut watch)
+                } else {
+                    HashSet::new()
+                };
+                self.sync_private_accounts_with_tx(tx, &mut watch, &handled);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -724,6 +729,7 @@ impl WalletCore {
         &mut self,
         tx: LeeTransaction,
         watch: &mut HashMap<Nullifier, AccountId>,
+        handled: &HashSet<usize>,
     ) {
         let LeeTransaction::PrivacyPreserving(tx) = tx else {
             return;
@@ -744,7 +750,9 @@ impl WalletCore {
                     .encrypted_private_post_states
                     .iter()
                     .enumerate()
-                    .filter(move |(_, encrypted_data)| encrypted_data.view_tag == view_tag)
+                    .filter(move |(ciph_id, encrypted_data)| {
+                        !handled.contains(ciph_id) && encrypted_data.view_tag == view_tag
+                    })
                     .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &new_commitments[ciph_id];
@@ -781,13 +789,14 @@ impl WalletCore {
         }
 
         // Scan for updates to shared accounts (GMS-derived).
-        self.sync_shared_private_accounts_with_tx(&tx, watch);
+        self.sync_shared_private_accounts_with_tx(&tx, watch, handled);
     }
 
     fn sync_shared_private_accounts_with_tx(
         &mut self,
         tx: &PrivacyPreservingTransaction,
         watch: &mut HashMap<Nullifier, AccountId>,
+        handled: &HashSet<usize>,
     ) {
         let shared_keys: Vec<_> = self
             .storage
@@ -811,7 +820,7 @@ impl WalletCore {
                 .iter()
                 .enumerate()
             {
-                if encrypted_data.view_tag != view_tag {
+                if handled.contains(&ciph_id) || encrypted_data.view_tag != view_tag {
                     continue;
                 }
 
@@ -868,7 +877,7 @@ impl WalletCore {
         &mut self,
         tx: &PrivacyPreservingTransaction,
         watch: &mut HashMap<Nullifier, AccountId>,
-    ) {
+    ) -> HashSet<usize> {
         let hits: Vec<(usize, Nullifier, AccountId)> = tx
             .message
             .new_nullifiers
@@ -877,12 +886,15 @@ impl WalletCore {
             .filter_map(|(i, (nullifier, _))| watch.get(nullifier).map(|&id| (i, *nullifier, id)))
             .collect();
 
+        let mut handled = HashSet::new();
         for (i, old_nullifier, account_id) in hits {
             if let Some(new_nullifier) = self.apply_nullifier_update(account_id, tx, i) {
                 watch.remove(&old_nullifier);
                 watch.insert(new_nullifier, account_id);
+                handled.insert(i);
             }
         }
+        handled
     }
 
     fn apply_nullifier_update(
