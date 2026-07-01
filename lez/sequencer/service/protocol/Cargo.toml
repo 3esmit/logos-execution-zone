@@ -11,3 +11,6 @@ workspace = true
 common.workspace = true
 lee.workspace = true
 lee_core.workspace = true
+
+hex.workspace = true
+serde_with.workspace = true

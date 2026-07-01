@@ -99,6 +99,66 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 }
 
 #[test]
+async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let recipient_id = ctx.existing_public_accounts()[0];
+    let bridge_account_id = system_accounts::bridge_account_id();
+    let vault_program_id = programs::vault().id();
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+
+    let message = public_transaction::Message::try_new(
+        programs::bridge().id(),
+        vec![bridge_account_id, recipient_vault_id],
+        vec![],
+        bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: [0_u8; 32],
+            vault_program_id,
+            recipient_id,
+            amount: 0,
+        },
+    )
+    .context("Failed to build zero-amount public bridge deposit transaction")?;
+
+    let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+
+    let bridge_balance_before = ctx
+        .sequencer_client()
+        .get_account_balance(bridge_account_id)
+        .await?;
+    let vault_balance_before = ctx
+        .sequencer_client()
+        .get_account_balance(recipient_vault_id)
+        .await?;
+
+    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let bridge_balance_after = ctx
+        .sequencer_client()
+        .get_account_balance(bridge_account_id)
+        .await?;
+    let vault_balance_after = ctx
+        .sequencer_client()
+        .get_account_balance(recipient_vault_id)
+        .await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+
+    assert_eq!(bridge_balance_after, bridge_balance_before);
+    assert_eq!(vault_balance_after, vault_balance_before);
+    assert!(
+        tx_on_chain.is_none(),
+        "Public bridge::Deposit with zero amount should be rejected"
+    );
+
+    Ok(())
+}
+
+#[test]
 async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
