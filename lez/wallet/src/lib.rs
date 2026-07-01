@@ -298,35 +298,26 @@ impl WalletCore {
             .storage
             .key_chain()
             .shared_private_account(account_id)?;
-        let holder = self
-            .storage
-            .key_chain()
-            .group_key_holder(&entry.group_label)?;
+        let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
+        let nsk = keys.nullifier_secret_key;
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let identifier = entry.identifier;
 
-        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.authority_program_id) {
-            let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
+        if entry.pda_seed.is_some() {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
-                nsk: keys.nullifier_secret_key,
-                npk: keys.generate_nullifier_public_key(),
-                vpk: keys.generate_viewing_public_key(),
-                identifier: entry.identifier,
+                nsk,
+                npk,
+                vpk,
+                identifier,
             })
         } else {
-            let derivation_seed = {
-                use sha2::Digest as _;
-                let mut hasher = sha2::Sha256::new();
-                hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
-                hasher.update(entry.identifier.to_le_bytes());
-                let result: [u8; 32] = hasher.finalize().into();
-                result
-            };
-            let keys = holder.derive_keys_for_shared_account(&derivation_seed);
             Some(AccountIdentity::PrivateShared {
-                nsk: keys.nullifier_secret_key,
-                npk: keys.generate_nullifier_public_key(),
-                vpk: keys.generate_viewing_public_key(),
-                identifier: entry.identifier,
+                nsk,
+                npk,
+                vpk,
+                identifier,
             })
         }
     }
