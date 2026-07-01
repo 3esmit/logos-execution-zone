@@ -1,6 +1,6 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
-    SharedSecretKey,
+    Identifier, SharedSecretKey,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
@@ -144,6 +144,19 @@ impl GroupKeyHolder {
         hasher.update(self.gms);
         hasher.update(derivation_seed);
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
+    }
+
+    #[must_use]
+    pub fn derive_keys_for_regular_shared_account(
+        &self,
+        identifier: Identifier,
+    ) -> PrivateKeyHolder {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(identifier.to_le_bytes());
+        let derivation_seed: [u8; 32] = hasher.finalize().into();
+        self.derive_keys_for_shared_account(&derivation_seed)
     }
 
     /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].

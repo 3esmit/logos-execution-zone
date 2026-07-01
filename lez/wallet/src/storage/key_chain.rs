@@ -293,17 +293,7 @@ impl UserKeyChain {
         Some(match (&entry.pda_seed, &entry.authority_program_id) {
             (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
             (Some(_), None) => return None,
-            _ => {
-                let derivation_seed = {
-                    use sha2::Digest as _;
-                    let mut hasher = sha2::Sha256::new();
-                    hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
-                    hasher.update(entry.identifier.to_le_bytes());
-                    let result: [u8; 32] = hasher.finalize().into();
-                    result
-                };
-                holder.derive_keys_for_shared_account(&derivation_seed)
-            }
+            _ => holder.derive_keys_for_regular_shared_account(entry.identifier),
         })
     }
 

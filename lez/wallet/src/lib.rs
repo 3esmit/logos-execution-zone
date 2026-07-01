@@ -395,14 +395,6 @@ impl WalletCore {
         group_name: Label,
     ) -> Result<SharedAccountInfo> {
         let identifier: lee_core::Identifier = rand::random();
-        let derivation_seed = {
-            use sha2::Digest as _;
-            let mut hasher = sha2::Sha256::new();
-            hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
-            hasher.update(identifier.to_le_bytes());
-            let result: [u8; 32] = hasher.finalize().into();
-            result
-        };
 
         let holder = self
             .storage
@@ -410,7 +402,7 @@ impl WalletCore {
             .group_key_holder(&group_name)
             .context(format!("Group '{group_name}' not found"))?;
 
-        let keys = holder.derive_keys_for_shared_account(&derivation_seed);
+        let keys = holder.derive_keys_for_regular_shared_account(identifier);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::from((&npk, identifier));
