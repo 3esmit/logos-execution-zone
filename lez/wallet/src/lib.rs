@@ -696,9 +696,13 @@ impl WalletCore {
         let mut blocks =
             std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 
+        let mut watch = self.build_nullifier_watch();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
+                if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
+                    self.sync_updates_via_nullifiers(pp_tx, &mut watch);
+                }
                 self.sync_private_accounts_with_tx(tx);
             }
 
@@ -826,7 +830,6 @@ impl WalletCore {
         }
     }
 
-    #[expect(dead_code, reason = "wired into the sync loop in the update-scan unit")]
     fn build_nullifier_watch(&self) -> HashMap<Nullifier, AccountId> {
         let key_chain = self.storage.key_chain();
         let mut watch = HashMap::new();
@@ -849,6 +852,81 @@ impl WalletCore {
         }
 
         watch
+    }
+
+    fn sync_updates_via_nullifiers(
+        &mut self,
+        tx: &PrivacyPreservingTransaction,
+        watch: &mut HashMap<Nullifier, AccountId>,
+    ) {
+        let hits: Vec<(usize, Nullifier, AccountId)> = tx
+            .message
+            .new_nullifiers
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (nullifier, _))| watch.get(nullifier).map(|&id| (i, *nullifier, id)))
+            .collect();
+
+        for (i, old_nullifier, account_id) in hits {
+            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, tx, i) {
+                watch.remove(&old_nullifier);
+                watch.insert(new_nullifier, account_id);
+            }
+        }
+    }
+
+    fn apply_nullifier_update(
+        &mut self,
+        account_id: AccountId,
+        tx: &PrivacyPreservingTransaction,
+        i: usize,
+    ) -> Option<Nullifier> {
+        let encrypted = &tx.message.encrypted_private_post_states[i];
+        let commitment = &tx.message.new_commitments[i];
+        let ciph_id = u32::try_from(i).ok()?;
+
+        let key_chain = self.storage.key_chain();
+        let (nsk, secret, is_shared) =
+            if let Some(entry) = key_chain.shared_private_account(account_id) {
+                let keys = key_chain.derive_shared_account_keys(entry)?;
+                let secret = SharedSecretKey::decapsulate(
+                    &encrypted.epk,
+                    &keys.viewing_secret_key.d,
+                    &keys.viewing_secret_key.z,
+                )?;
+                (keys.nullifier_secret_key, secret, true)
+            } else {
+                let found = key_chain.private_account(account_id)?;
+                let secret = found
+                    .key_chain
+                    .calculate_shared_secret_receiver(&encrypted.epk)?;
+                (
+                    found.key_chain.private_key_holder.nullifier_secret_key,
+                    secret,
+                    false,
+                )
+            };
+
+        let (kind, new_account) = lee_core::EncryptionScheme::decrypt(
+            &encrypted.ciphertext,
+            &secret,
+            commitment,
+            ciph_id,
+        )?;
+        let new_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+
+        if is_shared {
+            self.storage
+                .key_chain_mut()
+                .update_shared_private_account_state(&account_id, new_account);
+        } else {
+            self.storage
+                .key_chain_mut()
+                .insert_private_account(account_id, kind, new_account)
+                .ok()?;
+        }
+        Some(new_nullifier)
     }
 
     #[must_use]
