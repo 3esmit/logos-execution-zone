@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ata_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use common::HashType;
 use lee::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
@@ -21,13 +21,12 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = ata_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -39,7 +38,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }
@@ -55,13 +54,12 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = ata_core::Instruction::Transfer {
+        let instruction = associated_token_account_core::Instruction::Transfer {
             ata_program_id,
             amount,
         };
@@ -76,7 +74,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }
@@ -91,13 +89,12 @@ impl Ata<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::ata();
-        let ata_program_id = program.id();
+        let ata_program_id = programs::ata().id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-        let instruction = ata_core::Instruction::Burn {
+        let instruction = associated_token_account_core::Instruction::Burn {
             ata_program_id,
             amount,
         };
@@ -112,7 +109,7 @@ impl Ata<'_> {
                     AccountIdentity::PublicNoSign(definition_id),
                 ],
                 instruction_data,
-                &program.into(),
+                ata_program_id,
             )
             .await
     }
@@ -122,13 +119,13 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = Program::ata().id();
+        let ata_program_id = programs::ata().id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = ata_core::Instruction::Create { ata_program_id };
+        let instruction = associated_token_account_core::Instruction::Create { ata_program_id };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
@@ -156,13 +153,13 @@ impl Ata<'_> {
         recipient_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = Program::ata().id();
+        let ata_program_id = programs::ata().id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = ata_core::Instruction::Transfer {
+        let instruction = associated_token_account_core::Instruction::Transfer {
             ata_program_id,
             amount,
         };
@@ -192,13 +189,13 @@ impl Ata<'_> {
         definition_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let ata_program_id = Program::ata().id();
+        let ata_program_id = programs::ata().id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
 
-        let instruction = ata_core::Instruction::Burn {
+        let instruction = associated_token_account_core::Instruction::Burn {
             ata_program_id,
             amount,
         };
@@ -224,8 +221,8 @@ impl Ata<'_> {
 }
 
 fn ata_with_token_dependency() -> ProgramWithDependencies {
-    let token = Program::token();
+    let token = programs::token();
     let mut deps = HashMap::new();
     deps.insert(token.id(), token);
-    ProgramWithDependencies::new(Program::ata(), deps)
+    ProgramWithDependencies::new(programs::ata(), deps)
 }

@@ -5,8 +5,7 @@
 )]
 
 use anyhow::Result;
-use indexer_ffi::{Runtime, api::types::FfiOption};
-use integration_tests::L2_TO_L1_TIMEOUT;
+use indexer_ffi::api::types::FfiOption;
 use log::info;
 
 #[path = "indexer_ffi_helpers/mod.rs"]
@@ -14,21 +13,15 @@ mod indexer_ffi_helpers;
 
 #[test]
 fn indexer_ffi_block_batching() -> Result<()> {
-    let (ctx, indexer_ffi, _indexer_dir) = indexer_ffi_helpers::setup()?;
+    // `_ctx` keeps the bedrock/sequencer harness (and its runtime) alive for the
+    // duration of the test; the indexer was started on that runtime.
+    let (_ctx, indexer_ffi, _indexer_dir) = indexer_ffi_helpers::setup()?;
 
-    // WAIT
+    // WAIT: poll until the indexer has finalized at least two blocks (so the
+    // chain-consistency check below verifies at least one block link), returning
+    // early instead of sleeping for the full timeout.
     info!("Waiting for indexer to parse blocks");
-    std::thread::sleep(L2_TO_L1_TIMEOUT);
-
-    // Safety: ctx runtime is valid for the lifetime of the returned Runtime
-    let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
-    let last_block_indexer_ffi_res = unsafe {
-        indexer_ffi_helpers::query_last_block(&raw const runtime, &raw const indexer_ffi)
-    };
-
-    assert!(last_block_indexer_ffi_res.error.is_ok());
-
-    let last_block_indexer = unsafe { *last_block_indexer_ffi_res.value };
+    let last_block_indexer = indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 2)?;
 
     info!("Last block on indexer FFI now is {last_block_indexer}");
 
@@ -37,14 +30,8 @@ fn indexer_ffi_block_batching() -> Result<()> {
     let before_ffi = FfiOption::<u64>::from_none();
     let limit = 100;
 
-    let block_batch_ffi_res = unsafe {
-        indexer_ffi_helpers::query_block_vec(
-            &raw const runtime,
-            &raw const indexer_ffi,
-            before_ffi,
-            limit,
-        )
-    };
+    let block_batch_ffi_res =
+        unsafe { indexer_ffi_helpers::query_block_vec(&raw const indexer_ffi, before_ffi, limit) };
 
     assert!(block_batch_ffi_res.error.is_ok());
 

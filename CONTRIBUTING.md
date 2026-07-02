@@ -57,12 +57,16 @@ Before merging a PR, consider squashing non-meaningful commits. E.g.:
 
 Could be squashed to an empty commit if they belong to the same PR.
 
+## Default branch
+
+By default all PRs must be directed into the `dev` branch. This helps us to keep releases stable. 
+
 ## Branch workflow
 
-When bringing your feature branch up to date, prefer rebasing on top of `main`.
+When bringing your feature branch up to date, prefer rebasing on top of `dev`.
 
-- Preferred: `git rebase main`
-- Avoid: `git merge main` in feature branches
+- Preferred: `git rebase dev`
+- Avoid: `git merge dev` in feature branches
 
 This keeps commit history cleaner and makes reviews easier.
 

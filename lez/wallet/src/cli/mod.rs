@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use common::{HashType, transaction::LeeTransaction};
 use derive_more::Display;
 use futures::TryFutureExt as _;
-use lee::{ProgramDeploymentTransaction, program::Program};
+use lee::ProgramDeploymentTransaction;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -228,14 +228,14 @@ pub async fn execute_subcommand(
                 panic!("Missing authenticated transfer ID from remote");
             };
             assert!(
-                authenticated_transfer_id == &Program::authenticated_transfer_program().id(),
+                authenticated_transfer_id == &::programs::authenticated_transfer().id(),
                 "Local ID for authenticated transfer program is different from remote"
             );
             let Some(token_id) = remote_program_ids.get("token") else {
                 panic!("Missing token program ID from remote");
             };
             assert!(
-                token_id == &Program::token().id(),
+                token_id == &::programs::token().id(),
                 "Local ID for token program is different from remote"
             );
             let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
@@ -249,7 +249,7 @@ pub async fn execute_subcommand(
                 panic!("Missing AMM program ID from remote");
             };
             assert!(
-                amm_id == &Program::amm().id(),
+                amm_id == &::programs::amm().id(),
                 "Local ID for AMM program is different from remote"
             );
 
@@ -339,6 +339,26 @@ pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let vpk = hex::decode(vpk_hex.trim())
         .context("wallet::cli::read_keys_file: vpk in keys file must be valid hex")?;
     Ok((npk, vpk))
+}
+
+pub(crate) fn decode_npk_vpk(
+    npk_hex: &str,
+    vpk_hex: &str,
+) -> Result<(
+    lee_core::NullifierPublicKey,
+    lee_core::encryption::ViewingPublicKey,
+)> {
+    let npk_bytes: [u8; 32] = hex::decode(npk_hex)
+        .context("npk must be valid hex")?
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("npk must be exactly 32 bytes, got {}", v.len()))?;
+
+    let vpk = lee_core::encryption::ViewingPublicKey::from_bytes(
+        hex::decode(vpk_hex).context("vpk must be valid hex")?,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    Ok((lee_core::NullifierPublicKey(npk_bytes), vpk))
 }
 
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {

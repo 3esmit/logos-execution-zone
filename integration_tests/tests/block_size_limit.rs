@@ -94,16 +94,12 @@ async fn accept_transaction_within_limit() -> Result<()> {
 
 #[test]
 async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let artifacts_dir =
-        std::path::PathBuf::from(manifest_dir).join("../artifacts/test_program_methods");
-
-    let burner_bytecode = std::fs::read(artifacts_dir.join("burner.bin"))?;
-    let chain_caller_bytecode = std::fs::read(artifacts_dir.join("chain_caller.bin"))?;
+    let claimer = test_programs::claimer();
+    let chain_caller = test_programs::chain_caller();
 
     // Calculate block size to fit only one of the two transactions, leaving some room for headers
     // (e.g., 10 KiB)
-    let max_program_size = burner_bytecode.len().max(chain_caller_bytecode.len());
+    let max_program_size = claimer.elf().len().max(chain_caller.elf().len());
     let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
 
     let ctx = TestContext::builder()
@@ -116,16 +112,13 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .build()
         .await?;
 
-    let burner_id = Program::new(burner_bytecode.clone())?.id();
-    let chain_caller_id = Program::new(chain_caller_bytecode.clone())?.id();
-
     let initial_block_height = ctx.sequencer_client().get_last_block_id().await?;
 
     // Submit both program deployments
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::ProgramDeployment(
             lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(burner_bytecode),
+                lee::program_deployment_transaction::Message::new(claimer.elf().to_owned()),
             ),
         ))
         .await?;
@@ -133,7 +126,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::ProgramDeployment(
             lee::ProgramDeploymentTransaction::new(
-                lee::program_deployment_transaction::Message::new(chain_caller_bytecode),
+                lee::program_deployment_transaction::Message::new(chain_caller.elf().to_owned()),
             ),
         ))
         .await?;
@@ -156,7 +149,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
             .filter_map(|tx| {
                 if let LeeTransaction::ProgramDeployment(deployment) = tx {
                     let bytecode = deployment.message.clone().into_bytecode();
-                    Program::new(bytecode).ok().map(|p| p.id())
+                    Program::new(bytecode.into()).ok().map(|p| p.id())
                 } else {
                     None
                 }
@@ -173,8 +166,9 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         "Expected exactly one program deployment in block 1"
     );
     assert_eq!(
-        block1_program_ids[0], burner_id,
-        "Expected burner program to be deployed in block 1"
+        block1_program_ids[0],
+        claimer.id(),
+        "Expected claimer program to be deployed in block 1"
     );
 
     // Wait for second block
@@ -194,7 +188,8 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         "Expected exactly one program deployment in block 2"
     );
     assert_eq!(
-        block2_program_ids[0], chain_caller_id,
+        block2_program_ids[0],
+        chain_caller.id(),
         "Expected chain_caller program to be deployed in block 2"
     );
 

@@ -43,7 +43,7 @@ async fn main() {
 
     // Load the program
     let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-    let program = Program::new(bytecode).unwrap();
+    let program = Program::new(bytecode.into()).unwrap();
 
     let instruction_data = ();
     let nonces = vec![];

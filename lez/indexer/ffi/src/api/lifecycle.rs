@@ -1,14 +1,9 @@
 use std::{ffi::c_char, path::PathBuf};
 
-use crate::{
-    IndexerServiceFFI, Runtime,
-    api::{
-        PointerResult,
-        client::{UrlProtocol, addr_to_url},
-    },
-    client::{IndexerClient, IndexerClientTrait as _},
-    errors::OperationStatus,
-};
+use futures::StreamExt as _;
+use indexer_core::{IndexerCore, config::IndexerConfig};
+
+use crate::{IndexerServiceFFI, Runtime, api::PointerResult, errors::OperationStatus};
 
 pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, OperationStatus>;
 
@@ -17,8 +12,12 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 ///
 /// # Arguments
 ///
+/// - `runtime`: A runtime for the indexer to run on, or null to have the indexer create and own
+///   one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
-/// - `port`: Number representing a port, on which indexers RPC will start.
+/// - `storage_dir`: A pointer to a string naming the directory under which the indexer stores its
+///   state (`RocksDB`), or null/empty to use the current directory. The host (e.g. a Logos module's
+///   instance persistence path) owns this location.
 ///
 /// # Returns
 ///
@@ -27,27 +26,19 @@ pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, O
 ///
 /// # Safety
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a `tokio::runtime::Runtime` instance.
+/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
+/// - `storage_dir` is either null or a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn start_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
-    port: u16,
+    storage_dir: *const c_char,
 ) -> InitializedIndexerServiceFFIResult {
-    // SAFETY: The caller must ensure the validness of the `runtime` and `config_path` pointers.
-    unsafe { setup_indexer(runtime, config_path, port) }.map_or_else(
+    // SAFETY: The caller must ensure the validness of the pointer arguments.
+    unsafe { setup_indexer(runtime, config_path, storage_dir) }.map_or_else(
         InitializedIndexerServiceFFIResult::from_error,
         InitializedIndexerServiceFFIResult::from_value,
-    )
-}
-
-/// Creates a new [`tokio::runtime::Runtime`].
-#[unsafe(no_mangle)]
-pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
-    Runtime::new().map_or_else(
-        |_e| PointerResult::from_error(OperationStatus::InitializationError),
-        PointerResult::from_value,
     )
 }
 
@@ -56,8 +47,9 @@ pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
 ///
 /// # Arguments
 ///
+/// - `runtime`: A runtime for the indexer to run on, or null to create and own one.
 /// - `config_path`: A pointer to a string representing the path to the configuration file.
-/// - `port`: Number representing a port, on which indexers RPC will start.
+/// - `storage_dir`: A pointer to a string naming the storage directory, or null/empty for `.`.
 ///
 /// # Returns
 ///
@@ -66,12 +58,13 @@ pub extern "C" fn new_runtime() -> PointerResult<Runtime, OperationStatus> {
 ///
 /// # Safety
 /// The caller must ensure that:
-/// - `runtime` is a valid pointer to a `tokio::runtime::Runtime` instance.
+/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the indexer.
 /// - `config_path` is a valid pointer to a null-terminated C string.
+/// - `storage_dir` is either null or a valid pointer to a null-terminated C string.
 unsafe fn setup_indexer(
     runtime: *const Runtime,
     config_path: *const c_char,
-    port: u16,
+    storage_dir: *const c_char,
 ) -> Result<IndexerServiceFFI, OperationStatus> {
     let user_config_path = PathBuf::from(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
@@ -81,31 +74,64 @@ unsafe fn setup_indexer(
                 OperationStatus::InitializationError
             })?,
     );
-    let config = indexer_service::IndexerConfig::from_path(&user_config_path).map_err(|e| {
+    let config = IndexerConfig::from_path(&user_config_path).map_err(|e| {
         log::error!("Failed to read config: {e}");
         OperationStatus::InitializationError
     })?;
 
-    // SAFETY: The caller must ensure that `runtime` is a valid pointer to a
-    // `tokio::runtime::Runtime` instance.
-    let runtime = unsafe { &*runtime };
+    // The host owns where state lives. An empty/null `storage_dir` falls back to
+    // the current directory (matches the standalone service's `--data-dir`
+    // default), but a Logos module passes its instance persistence path.
+    let storage_dir = if storage_dir.is_null() {
+        PathBuf::from(".")
+    } else {
+        let storage_dir = unsafe { std::ffi::CStr::from_ptr(storage_dir) }
+            .to_str()
+            .map_err(|e| {
+                log::error!("Could not convert the storage dir to string: {e}");
+                OperationStatus::InitializationError
+            })?;
+        if storage_dir.is_empty() {
+            PathBuf::from(".")
+        } else {
+            PathBuf::from(storage_dir)
+        }
+    };
 
-    let indexer_handle = runtime
-        .block_on(indexer_service::run_server(config, port))
-        .map_err(|e| {
-            log::error!("Could not start indexer service: {e}");
+    // Use the caller's runtime if one was supplied, otherwise create (and own)
+    // our own. The `Runtime` wrapper drops the underlying tokio runtime only
+    // when we own it; a borrowed one is left to its external owner.
+    let runtime = if runtime.is_null() {
+        Runtime::new().map_err(|e| {
+            log::error!("Could not create tokio runtime: {e}");
             OperationStatus::InitializationError
-        })?;
+        })?
+    } else {
+        // SAFETY: the caller guarantees `runtime` is valid and outlives the indexer.
+        let caller = unsafe { &*runtime };
+        unsafe { Runtime::from_borrowed(caller.as_ref()) }
+    };
 
-    let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())?;
-    let indexer_client = runtime
-        .block_on(IndexerClient::new(&indexer_url))
-        .map_err(|e| {
-            log::error!("Could not start indexer client: {e}");
-            OperationStatus::InitializationError
-        })?;
+    let core = IndexerCore::new(config, &storage_dir).map_err(|e| {
+        log::error!("Could not initialize indexer core: {e}");
+        OperationStatus::InitializationError
+    })?;
 
-    Ok(IndexerServiceFFI::new(indexer_handle, indexer_client))
+    // The block stream writes each parsed block into the store as a side effect
+    // of being polled, so we spawn a task that simply drains it. There are no
+    // subscribers — queries read the store directly via `core()`.
+    let ingest_core = core.clone();
+    let ingest_handle = runtime.spawn(async move {
+        let mut block_stream = std::pin::pin!(ingest_core.subscribe_parse_block_stream());
+        while let Some(result) = block_stream.next().await {
+            if let Err(e) = result {
+                log::error!("Indexer ingestion error: {e:#}");
+            }
+        }
+        log::warn!("Indexer block stream ended");
+    });
+
+    Ok(IndexerServiceFFI::new(core, ingest_handle, runtime))
 }
 
 /// Stops and frees the resources associated with the given indexer service.

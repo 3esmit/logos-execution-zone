@@ -4,19 +4,25 @@ default:
     @just --list
 
 # ---- Configuration ----
-METHODS_PATH := "program_methods"
-TEST_METHODS_PATH := "test_program_methods"
 ARTIFACTS := "artifacts"
 
 # Build risc0 program artifacts.
 build-artifacts:
     @echo "🔨 Building artifacts"
-    @for methods_path in {{METHODS_PATH}} {{TEST_METHODS_PATH}}; do \
-        echo "Building artifacts for $methods_path"; \
-        CARGO_TARGET_DIR=target/$methods_path cargo risczero build --manifest-path $methods_path/guest/Cargo.toml; \
-        mkdir -p {{ARTIFACTS}}/$methods_path; \
-        cp target/$methods_path/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/$methods_path; \
-    done
+    @rm -rf {{ARTIFACTS}}
+    @just build-artifact lee/privacy_preserving_circuit
+    @just build-artifact lez/programs programs
+
+build-artifact methods_path features="":
+    @echo "Building artifacts for {{methods_path}}"
+    @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
+    @if [ "{{features}}" = "" ]; then \
+        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
+    else \
+        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
+    fi
+    @mkdir -p {{ARTIFACTS}}/{{methods_path}}
+    @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}
 
 # Format codebase.
 fmt:
@@ -59,10 +65,10 @@ run-indexer mock="":
     @echo "🔍 Running indexer"
     @if [ "{{mock}}" = "mock" ]; then \
         echo "🧪 Using mock data"; \
-        RUST_LOG=info cargo run --release --features mock-responses -p indexer_service configs/indexer_config.json; \
+        RUST_LOG=info cargo run --release --features mock-responses -p indexer_service configs/debug/indexer_config.json; \
     else \
         echo "🚀 Using real data"; \
-        RUST_LOG=info cargo run --release -p indexer_service configs/indexer_config.json; \
+        RUST_LOG=info cargo run --release -p indexer_service configs/debug/indexer_config.json; \
     fi
 
 # Run Explorer.
@@ -93,7 +99,7 @@ clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf lez/sequencer/service/bedrock_signing_key
     rm -rf lez/sequencer/service/rocksdb
-    rm -rf lez/indexer/service/rocksdb
+    rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
-    rm -rf rocksdb
+    rm -rf rocksdb*
     cd bedrock && docker compose down -v

@@ -23,7 +23,7 @@ impl NativeTokenTransfer<'_> {
             .send_privacy_preserving_tx(
                 vec![account],
                 Program::serialize_instruction(instruction).unwrap(),
-                &Program::authenticated_transfer_program().into(),
+                &programs::authenticated_transfer().into(),
             )
             .await
             .map(|(resp, secrets)| {

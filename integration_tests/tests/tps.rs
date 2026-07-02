@@ -22,7 +22,7 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -75,7 +75,7 @@ impl TpsTestManager {
         &self,
         sequencer_client: &sequencer_service_rpc::SequencerClient,
     ) -> Result<()> {
-        let vault_program_id = Program::vault().id();
+        let vault_program_id = programs::vault().id();
 
         let mut tx_hashes = Vec::with_capacity(self.public_keypairs.len());
         for (private_key, account_id) in &self.public_keypairs {
@@ -125,7 +125,7 @@ impl TpsTestManager {
     /// Must be called after `claim_vault_funds`, which sets each account's nonce to 1.
     pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
         // Create valid public transactions
-        let program = Program::authenticated_transfer_program();
+        let program = programs::authenticated_transfer();
         let public_txs: Vec<PublicTransaction> = self
             .public_keypairs
             .windows(2)
@@ -253,7 +253,7 @@ pub async fn tps_test() -> Result<()> {
 /// multiple times with the purpose of testing the node's processing performance.
 #[expect(dead_code, reason = "No idea if we need this, should we remove it?")]
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
-    let program = Program::authenticated_transfer_program();
+    let program = programs::authenticated_transfer();
     let sender_nsk = [1; 32];
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
@@ -303,6 +303,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 random_seed: [0; 32],
                 npk: recipient_npk,
                 identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             },
         ],
         &program.into(),

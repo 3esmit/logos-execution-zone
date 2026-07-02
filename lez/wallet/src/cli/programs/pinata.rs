@@ -1,6 +1,5 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
-use common::{PINATA_BASE58, transaction::LeeTransaction};
 use lee::{Account, AccountId};
 
 use crate::{
@@ -33,13 +32,13 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
                 match to {
                     AccountIdWithPrivacy::Public(to) => {
                         PinataProgramSubcommand::Public(PinataProgramSubcommandPublic::Claim {
-                            pinata_account_id: PINATA_BASE58.parse()?,
+                            pinata_account_id: system_accounts::pinata_account_id(),
                             winner_account_id: to,
                         })
                     }
                     AccountIdWithPrivacy::Private(to) => PinataProgramSubcommand::Private(
                         PinataProgramSubcommandPrivate::ClaimPrivateOwned {
-                            pinata_account_id: PINATA_BASE58.parse()?,
+                            pinata_account_id: system_accounts::pinata_account_id(),
                             winner_account_id: to,
                         },
                     ),
@@ -112,13 +111,9 @@ impl WalletSubcommand for PinataProgramSubcommandPublic {
                     .claim(pinata_account_id, winner_account_id, solution)
                     .await?;
 
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                println!("Transaction data is {transfer_tx:?}");
-
-                Ok(SubcommandReturnValue::Empty)
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
             }
         }
     }
@@ -144,24 +139,12 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
                     .claim_private_owned_account(pinata_account_id, winner_account_id, solution)
                     .await?;
 
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                println!("Transaction data is {transfer_tx:?}");
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_winner, winner_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                wallet_core
+                    .poll_and_finalize_pp_transaction(
+                        tx_hash,
+                        &[Decode(secret_winner, winner_account_id)],
+                    )
+                    .await
             }
         }
     }

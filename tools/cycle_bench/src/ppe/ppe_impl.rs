@@ -8,24 +8,14 @@ use std::{collections::HashMap, time::Instant};
 use lee::{
     execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
-    program::Program,
 };
 use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
-    program::ProgramId,
 };
 use risc0_zkvm::serde::to_vec;
 
 use super::PpeBenchResult;
-
-const AUTH_TRANSFER_ID: ProgramId = lee::program_methods::AUTHENTICATED_TRANSFER_ID;
-const AUTH_TRANSFER_ELF: &[u8] = lee::program_methods::AUTHENTICATED_TRANSFER_ELF;
-
-/// `chain_caller` bytecode shipped at `artifacts/test_program_methods/chain_caller.bin`.
-/// Loaded at compile time so we don't need a dev-dependency on `test_program_methods`.
-const CHAIN_CALLER_ELF: &[u8] =
-    include_bytes!("../../../../artifacts/test_program_methods/chain_caller.bin");
 
 pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
     let label = "auth_transfer Transfer in PPE".to_owned();
@@ -52,15 +42,16 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
 }
 
 pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let program = Program::new(AUTH_TRANSFER_ELF.to_vec())?;
-    let pwd = ProgramWithDependencies::from(program);
+    let auth_transfer = programs::authenticated_transfer();
+    let auth_transfer_id = auth_transfer.id();
+    let pwd = ProgramWithDependencies::from(auth_transfer);
 
     // For PPE to allow the sender's balance to be decremented by this
     // program, the sender must already be claimed by auth_transfer.
     // Recipient stays default-owned so the first call can claim it.
     let sender = AccountWithMetadata {
         account: Account {
-            program_owner: AUTH_TRANSFER_ID,
+            program_owner: auth_transfer_id,
             balance: 1_000_000,
             ..Account::default()
         },
@@ -114,10 +105,11 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
 fn prove_chain_caller(
     num_chain_calls: u32,
 ) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let chain_caller = Program::new(CHAIN_CALLER_ELF.to_vec())?;
-    let auth_transfer = Program::new(AUTH_TRANSFER_ELF.to_vec())?;
+    let chain_caller = test_programs::chain_caller();
+    let auth_transfer = programs::authenticated_transfer();
+    let auth_transfer_id = auth_transfer.id();
     let mut deps = HashMap::new();
-    deps.insert(AUTH_TRANSFER_ID, auth_transfer);
+    deps.insert(auth_transfer.id(), auth_transfer);
     let pwd = ProgramWithDependencies::new(chain_caller, deps);
 
     // Both accounts pre-claimed by auth_transfer. chain_caller doesn't
@@ -125,7 +117,7 @@ fn prove_chain_caller(
     // would cause a state mismatch on subsequent chained calls.
     let recipient_pre = AccountWithMetadata {
         account: Account {
-            program_owner: AUTH_TRANSFER_ID,
+            program_owner: auth_transfer_id,
             ..Account::default()
         },
         is_authorized: true,
@@ -133,7 +125,7 @@ fn prove_chain_caller(
     };
     let sender_pre = AccountWithMetadata {
         account: Account {
-            program_owner: AUTH_TRANSFER_ID,
+            program_owner: auth_transfer_id,
             balance: 1_000_000,
             ..Account::default()
         },
@@ -145,7 +137,7 @@ fn prove_chain_caller(
 
     let balance: u128 = 1;
     let pda_seed: Option<lee_core::program::PdaSeed> = None;
-    let instruction = (balance, AUTH_TRANSFER_ID, num_chain_calls, pda_seed);
+    let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];

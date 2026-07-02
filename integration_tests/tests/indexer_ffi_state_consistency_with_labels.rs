@@ -8,7 +8,6 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use indexer_ffi::Runtime;
 use indexer_service_protocol::Account;
 use integration_tests::{L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention};
 use log::info;
@@ -75,11 +74,8 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
     info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
-    // Safety: ctx runtime is valid for the lifetime of the returned Runtime
-    let runtime = unsafe { Runtime::from_borrowed(ctx.runtime()) };
     let acc1_ind_state_ffi = unsafe {
         indexer_ffi_helpers::query_account(
-            &raw const runtime,
             &raw const indexer_ffi,
             (&ctx.ctx().existing_public_accounts()[0]).into(),
         )

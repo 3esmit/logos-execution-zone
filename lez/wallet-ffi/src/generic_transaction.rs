@@ -10,7 +10,7 @@ use crate::{
     error::{print_error, WalletFfiError},
     map_execution_error,
     wallet::get_wallet,
-    FfiAccountIdentity, FfiBytes32, WalletHandle,
+    FfiAccountIdentity, FfiBytes32, FfiProgramId, WalletHandle,
 };
 
 #[repr(C)]
@@ -48,7 +48,7 @@ impl TryFrom<&FfiProgram> for Program {
             elf.push(unsafe { *value.elf_data.add(i) });
         }
 
-        Self::new(elf).map_err(|err| {
+        Self::new(elf.into()).map_err(|err| {
             print_error(format!("Invalid program bytecode, err: {err}"));
             WalletFfiError::InvalidBytecode
         })
@@ -214,7 +214,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
     account_identities_size: usize,
     instruction_words: *const u32,
     instruction_words_size: usize,
-    program_with_dependencies: *const FfiProgramWithDependencies,
+    program_id: FfiProgramId,
     out_result: *mut FfiTransactionResult,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
@@ -260,12 +260,7 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
         }
     }
 
-    let program = match unsafe { &*program_with_dependencies }.try_into() {
-        Ok(v) => v,
-        Err(err) => return err,
-    };
-
-    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), &program)) {
+    match block_on(wallet.send_pub_tx(accounts, instruction_data.to_vec(), program_id.into())) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
@@ -445,13 +440,11 @@ pub unsafe extern "C" fn wallet_ffi_free_instruction_words(words: *mut FfiInstru
 
 #[cfg(test)]
 mod tests {
-    use lee::program::Program;
-
     use crate::generic_transaction::FfiProgram;
 
     #[test]
     fn program_cast_consistency() {
-        let prog = Program::amm();
+        let prog = programs::amm();
 
         let first_5_bytes = prog.elf()[..5].to_vec();
 

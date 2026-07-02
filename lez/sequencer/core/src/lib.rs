@@ -8,7 +8,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
-use lee::{AccountId, PublicTransaction, program::Program, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -36,6 +36,7 @@ pub mod config;
 pub mod mock;
 
 /// The origin of a transaction.
+#[derive(Clone, Copy)]
 pub enum TransactionOrigin {
     /// Basic transactions submitted by users via RPC.
     User,
@@ -69,24 +70,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
-    pub async fn start_from_config(
-        config: SequencerConfig,
-    ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+    fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State, Block) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-
-        let bedrock_signing_key =
-            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-                .expect("Failed to load or create bedrock signing key");
-
         let db_path = config.home.join("rocksdb");
-        let (store, state, genesis_block) = if db_path.exists() {
-            let store =
-                SequencerStore::open_db(&db_path, signing_key.clone()).unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to open database at {} with error: {err}",
-                        db_path.display()
-                    )
-                });
+
+        if db_path.exists() {
+            let store = SequencerStore::open_db(&db_path, signing_key).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to open database at {} with error: {err}",
+                    db_path.display()
+                )
+            });
             let state = store
                 .get_lee_state()
                 .expect("Failed to read state from store");
@@ -101,7 +95,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 db_path.display()
             );
 
-            let (genesis_state, genesis_txs) = build_genesis_state(&config);
+            let (genesis_state, genesis_txs) = build_genesis_state(config);
 
             let hashable_data = HashableBlockData {
                 block_id: GENESIS_BLOCK_ID,
@@ -120,7 +114,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .expect("Failed to create database with genesis block");
 
             (store, genesis_state, genesis_block)
-        };
+        }
+    }
+
+    pub async fn start_from_config(
+        config: SequencerConfig,
+    ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        let bedrock_signing_key =
+            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+                .expect("Failed to load or create bedrock signing key");
+
+        let (store, state, genesis_block) = Self::open_or_create_store(&config);
 
         let latest_block_meta = store
             .latest_block_meta()
@@ -331,8 +335,60 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         Ok(self.chain_height)
     }
 
-    /// Builds a new block from transactions in the mempool.
-    /// Does NOT publish or store the block — the caller is responsible for that.
+    /// Validates and applies a single mempool transaction to the current state.
+    /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
+    /// it was skipped due to validation failure.
+    fn apply_mempool_transaction(
+        &mut self,
+        origin: TransactionOrigin,
+        tx: &LeeTransaction,
+        block_height: u64,
+        timestamp: u64,
+        deposit_event_ids: &mut Vec<HashType>,
+        withdrawals: &mut Vec<WithdrawArg>,
+    ) -> Result<bool> {
+        let tx_hash = tx.hash();
+        match origin {
+            TransactionOrigin::User => {
+                let validated_diff = match tx.validate_on_state(
+                    &self.state,
+                    block_height,
+                    timestamp,
+                ) {
+                    Ok(diff) => diff,
+                    Err(err) => {
+                        error!(
+                            "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                        );
+                        return Ok(false);
+                    }
+                };
+
+                if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                    withdrawals.push(withdraw_data);
+                }
+
+                self.state.apply_state_diff(validated_diff);
+            }
+            TransactionOrigin::Sequencer => {
+                let LeeTransaction::Public(public_tx) = tx else {
+                    panic!("Sequencer may only generate Public transactions, found {tx:#?}");
+                };
+
+                if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
+                    deposit_event_ids.push(deposit_op_id);
+                }
+
+                self.state
+                    .transition_from_public_transaction(public_tx, block_height, timestamp)
+                    .context("Failed to execute sequencer-generated transaction")?;
+            }
+        }
+
+        info!("Validated transaction with hash {tx_hash}, including it in block");
+        Ok(true)
+    }
+
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
@@ -353,14 +409,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
-        // Pre-create the mandatory clock tx so its size is included in the block size check.
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
         while let Some((origin, tx)) = self.mempool.pop() {
             let tx_hash = tx.hash();
 
-            // Check if block size exceeds limit (including the mandatory clock tx).
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
@@ -379,66 +433,30 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .len();
 
             if block_size > max_block_size {
-                // Block would exceed size limit, remove last transaction and push back
                 warn!(
                     "Transaction with hash {tx_hash} deferred to next block: \
                      block size {block_size} bytes would exceed limit of {max_block_size} bytes",
                 );
-
                 self.mempool.push_front((origin, tx));
                 break;
             }
 
-            match origin {
-                TransactionOrigin::User => {
-                    let validated_diff = match tx.validate_on_state(
-                        &self.state,
-                        new_block_height,
-                        new_block_timestamp,
-                    ) {
-                        Ok(diff) => diff,
-                        Err(err) => {
-                            error!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                            );
-                            continue;
-                        }
-                    };
-
-                    if let Some(withdraw_data) = extract_bridge_withdraw_data(&tx) {
-                        withdrawals.push(withdraw_data);
-                    }
-
-                    self.state.apply_state_diff(validated_diff);
-                }
-                TransactionOrigin::Sequencer => {
-                    let LeeTransaction::Public(public_tx) = &tx else {
-                        panic!("Sequencer may only generate Public transactions, found {tx:#?}");
-                    };
-
-                    if let Some(deposit_op_id) = extract_bridge_deposit_id(&tx) {
-                        deposit_event_ids.push(deposit_op_id);
-                    }
-
-                    self.state
-                        .transition_from_public_transaction(
-                            public_tx,
-                            new_block_height,
-                            new_block_timestamp,
-                        )
-                        .context("Failed to execute sequencer-generated transaction")?;
-                }
+            if self.apply_mempool_transaction(
+                origin,
+                &tx,
+                new_block_height,
+                new_block_timestamp,
+                &mut deposit_event_ids,
+                &mut withdrawals,
+            )? {
+                valid_transactions.push(tx);
             }
 
-            valid_transactions.push(tx);
-
-            info!("Validated transaction with hash {tx_hash}, including it in block");
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
                 break;
             }
         }
 
-        // Append the Clock Program invocation as the mandatory last transaction.
         self.state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
@@ -616,13 +634,13 @@ fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
     balance: u128,
 ) -> PublicTransaction {
-    let faucet_program_id = Program::faucet().id();
-    let vault_program_id = Program::vault().id();
+    let faucet_program_id = programs::faucet().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![lee::system_faucet_account_id(), recipient_vault_id],
+        vec![system_accounts::faucet_account_id(), recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
             vault_program_id,
@@ -637,12 +655,12 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
-    let faucet_program_id = Program::faucet().id();
-    let bridge_account_id = lee::system_bridge_account_id();
+    let faucet_program_id = programs::faucet().id();
+    let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![lee::system_faucet_account_id(), bridge_account_id],
+        vec![system_accounts::faucet_account_id(), bridge_account_id],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
@@ -666,14 +684,14 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::decode(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = Program::bridge().id();
-    let vault_program_id = Program::vault().id();
+    let bridge_program_id = programs::bridge().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
 
     let message = Message::try_new(
         bridge_program_id,
-        vec![lee::system_bridge_account_id(), recipient_vault_id],
+        vec![system_accounts::bridge_account_id(), recipient_vault_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
@@ -698,7 +716,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != lee::program::Program::bridge().id() {
+    if message.program_id != programs::bridge().id() {
         return None;
     }
 
@@ -721,7 +739,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != lee::program::Program::bridge().id() {
+    if message.program_id != programs::bridge().id() {
         return None;
     }
 
@@ -729,26 +747,23 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
         risc0_zkvm::serde::from_slice::<bridge_core::Instruction, u32>(&message.instruction_data)
             .ok()?;
 
-    match instruction {
-        bridge_core::Instruction::Withdraw {
-            amount,
-            bedrock_account_pk,
-        } => {
-            let recipient_pk =
-                logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
-                    BigUint::from_bytes_le(&bedrock_account_pk),
-                );
+    let bridge_core::Instruction::Withdraw {
+        amount,
+        bedrock_account_pk,
+    } = instruction
+    else {
+        return None;
+    };
 
-            Some(WithdrawArg {
-                outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
-                    logos_blockchain_core::mantle::Note::new(amount, recipient_pk),
-                ),
-            })
-        }
-        bridge_core::Instruction::Deposit { .. } => unreachable!(
-            "Deposit instructions from users should never pass validation, and thus should never be seen here"
+    let recipient_pk = logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
+        BigUint::from_bytes_le(&bedrock_account_pk),
+    );
+
+    Some(WithdrawArg {
+        outputs: logos_blockchain_core::mantle::ledger::Outputs::new(
+            logos_blockchain_core::mantle::Note::new(amount, recipient_pk),
         ),
-    }
+    })
 }
 
 fn withdraw_event_reconciliation_key(
@@ -806,890 +821,4 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
 
 #[cfg(test)]
 #[cfg(feature = "mock")]
-mod tests {
-    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
-
-    use std::{pin::pin, time::Duration};
-
-    use common::{
-        HashType,
-        block::HashableBlockData,
-        test_utils::sequencer_sign_key_for_testing,
-        transaction::{LeeTransaction, clock_invocation},
-    };
-    use key_protocol::key_management::KeyChain;
-    use lee::{
-        Account, AccountId, Data, PrivacyPreservingTransaction, V03State,
-        error::LeeError,
-        execute_and_prove,
-        privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
-        program::Program,
-        system_bridge_account_id,
-    };
-    use lee_core::{
-        Commitment, InputAccountIdentity, Nullifier,
-        account::{AccountWithMetadata, Nonce},
-    };
-    use logos_blockchain_core::mantle::ops::channel::ChannelId;
-    use mempool::MemPoolHandle;
-    use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
-    use tempfile::tempdir;
-    use testnet_initial_state::{initial_accounts, initial_pub_accounts_private_keys};
-
-    use crate::{
-        TransactionOrigin,
-        block_store::SequencerStore,
-        build_genesis_state,
-        config::{BedrockConfig, SequencerConfig},
-        mock::SequencerCoreWithMockClients,
-    };
-
-    #[derive(borsh::BorshSerialize)]
-    struct DepositMetadataForEncoding {
-        recipient_id: lee::AccountId,
-    }
-
-    fn setup_sequencer_config() -> SequencerConfig {
-        let tempdir = tempfile::tempdir().unwrap();
-        let home = tempdir.path().to_path_buf();
-
-        SequencerConfig {
-            home,
-            max_num_tx_in_block: 10,
-            max_block_size: bytesize::ByteSize::mib(1),
-            mempool_max_size: 10000,
-            block_create_timeout: Duration::from_secs(1),
-            signing_key: *sequencer_sign_key_for_testing().value(),
-            bedrock_config: BedrockConfig {
-                channel_id: ChannelId::from([0; 32]),
-                node_url: "http://not-used-in-unit-tests".parse().unwrap(),
-                auth: None,
-            },
-            retry_pending_blocks_timeout: Duration::from_mins(4),
-            genesis: vec![],
-        }
-    }
-
-    fn create_signing_key_for_account1() -> lee::PrivateKey {
-        initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
-    }
-
-    fn create_signing_key_for_account2() -> lee::PrivateKey {
-        initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
-    }
-
-    async fn common_setup() -> (
-        SequencerCoreWithMockClients,
-        MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    ) {
-        let config = setup_sequencer_config();
-        common_setup_with_config(config).await
-    }
-
-    async fn common_setup_with_config(
-        config: SequencerConfig,
-    ) -> (
-        SequencerCoreWithMockClients,
-        MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    ) {
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
-
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
-            .unwrap();
-
-        sequencer.produce_new_block().await.unwrap();
-
-        (sequencer, mempool_handle)
-    }
-
-    fn tx_is_bridge_deposit(
-        tx: &LeeTransaction,
-        deposit_op_id: [u8; 32],
-        expected_amount: u64,
-    ) -> bool {
-        let LeeTransaction::Public(public_tx) = tx else {
-            return false;
-        };
-
-        if public_tx.message.program_id != lee::program::Program::bridge().id() {
-            return false;
-        }
-
-        let instruction: bridge_core::Instruction =
-            match risc0_zkvm::serde::from_slice(&public_tx.message.instruction_data) {
-                Ok(instruction) => instruction,
-                Err(_err) => return false,
-            };
-
-        matches!(
-            instruction,
-            bridge_core::Instruction::Deposit {
-                l1_deposit_op_id,
-                amount,
-                ..
-            } if l1_deposit_op_id == deposit_op_id && amount == expected_amount
-        )
-    }
-
-    #[tokio::test]
-    async fn start_from_config() {
-        let config = setup_sequencer_config();
-        let (sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-
-        assert_eq!(sequencer.chain_height, 1);
-        assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
-
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
-
-        let balance_acc_1 = sequencer.state.get_account_by_id(acc1_account_id).balance;
-        let balance_acc_2 = sequencer.state.get_account_by_id(acc2_account_id).balance;
-
-        assert_eq!(10000, balance_acc_1);
-        assert_eq!(20000, balance_acc_2);
-    }
-
-    #[tokio::test]
-    async fn start_from_config_opens_existing_db_if_it_exists() {
-        let config = setup_sequencer_config();
-        let temp_dir = tempdir().unwrap();
-        let mut config = config;
-        config.home = temp_dir.path().to_path_buf();
-
-        let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let (genesis_state, genesis_txs) = build_genesis_state(&config);
-        let genesis_hashable_data = HashableBlockData {
-            block_id: 1,
-            transactions: genesis_txs,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-        };
-        let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
-
-        SequencerStore::create_db_with_genesis(
-            &config.home.join("rocksdb"),
-            &genesis_block,
-            &genesis_state,
-            signing_key,
-        )
-        .unwrap();
-
-        let (sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
-        assert_eq!(sequencer.chain_height, 1);
-        assert!(sequencer.store.latest_block_meta().is_ok());
-    }
-
-    #[should_panic(expected = "Failed to open database")]
-    #[tokio::test]
-    async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
-        let mut config = setup_sequencer_config();
-        let temp_dir = tempdir().unwrap();
-        config.home = temp_dir.path().to_path_buf();
-
-        let db_path = config.home.join("rocksdb");
-
-        std::fs::create_dir_all(&config.home).unwrap();
-        // Force RocksDB open to fail with an IO error by placing a file at DB path.
-        std::fs::write(&db_path, b"not-a-directory").unwrap();
-
-        let _ = SequencerCoreWithMockClients::start_from_config(config).await;
-    }
-
-    #[tokio::test]
-    async fn start_from_config_replays_unfulfilled_deposit_events_from_db() {
-        let config = setup_sequencer_config();
-        let deposit_op_id = [13_u8; 32];
-        let expected_amount = 1_u64;
-        let recipient_id = initial_accounts()[0].account_id;
-
-        {
-            let (_sequencer, _mempool_handle) =
-                SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-        }
-
-        let pending_event = PendingDepositEventRecord {
-            deposit_op_id: HashType(deposit_op_id),
-            source_tx_hash: HashType([7_u8; 32]),
-            amount: expected_amount,
-            metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
-            submitted_in_block_id: None,
-        };
-
-        {
-            let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-            let store = SequencerStore::open_db(&config.home.join("rocksdb"), signing_key).unwrap();
-
-            let inserted = store
-                .dbio()
-                .add_pending_deposit_event(pending_event)
-                .unwrap();
-            assert!(inserted);
-        }
-
-        let (mut sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
-
-        let (origin, tx) = tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if let Some((origin, tx)) = sequencer.mempool.pop() {
-                    return (origin, tx);
-                }
-
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect("Timed out waiting for pending deposit event to be replayed into mempool");
-
-        match origin {
-            TransactionOrigin::Sequencer => {}
-            TransactionOrigin::User => {
-                panic!("Unexpected user transaction in empty mempool replay test")
-            }
-        }
-
-        assert!(tx_is_bridge_deposit(&tx, deposit_op_id, expected_amount));
-
-        let pending_events = sequencer.store.get_unfulfilled_deposit_events().unwrap();
-        let replayed_event = pending_events
-            .into_iter()
-            .find(|event| event.deposit_op_id == HashType(deposit_op_id))
-            .expect("Pending deposit event should remain in DB until included in a block");
-        assert!(replayed_event.submitted_in_block_id.is_none());
-    }
-
-    #[test]
-    fn transaction_pre_check_pass() {
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        let result = tx.transaction_stateless_check();
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn transaction_pre_check_native_transfer_valid() {
-        let (_sequencer, _mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key1 = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, &sign_key1,
-        );
-        let result = tx.transaction_stateless_check();
-
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn transaction_pre_check_native_transfer_other_signature() {
-        let (mut sequencer, _mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key2 = create_signing_key_for_account2();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, &sign_key2,
-        );
-
-        // Signature is valid, stateless check pass
-        let tx = tx.transaction_stateless_check().unwrap();
-
-        // Signature is not from sender. Execution fails
-        let result = tx.execute_check_on_state(&mut sequencer.state, 0, 0);
-
-        assert!(matches!(
-            result,
-            Err(lee::error::LeeError::ProgramExecutionFailed(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn transaction_pre_check_native_transfer_sent_too_much() {
-        let (mut sequencer, _mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key1 = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10_000_000, &sign_key1,
-        );
-
-        let result = tx.transaction_stateless_check();
-
-        // Passed pre-check
-        assert!(result.is_ok());
-
-        let result = result
-            .unwrap()
-            .execute_check_on_state(&mut sequencer.state, 0, 0);
-        let is_failed_at_balance_mismatch = matches!(
-            result.err().unwrap(),
-            lee::error::LeeError::ProgramExecutionFailed(_)
-        );
-
-        assert!(is_failed_at_balance_mismatch);
-    }
-
-    #[tokio::test]
-    async fn transaction_execute_native_transfer() {
-        let (mut sequencer, _mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key1 = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, &sign_key1,
-        );
-
-        tx.execute_check_on_state(&mut sequencer.state, 0, 0)
-            .unwrap();
-
-        let bal_from = sequencer.state.get_account_by_id(acc1).balance;
-        let bal_to = sequencer.state.get_account_by_id(acc2).balance;
-
-        assert_eq!(bal_from, 9900);
-        assert_eq!(bal_to, 20100);
-    }
-
-    #[tokio::test]
-    async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
-        let config = SequencerConfig {
-            mempool_max_size: 1,
-            ..setup_sequencer_config()
-        };
-        let (mut sequencer, mempool_handle) = common_setup_with_config(config).await;
-
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-
-        // Fill the mempool
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-
-        // Check that pushing another transaction will block
-        let mut push_fut = pin!(mempool_handle.push((TransactionOrigin::User, tx.clone())));
-        let poll = futures::poll!(push_fut.as_mut());
-        assert!(poll.is_pending());
-
-        // Empty the mempool by producing a block
-        sequencer.produce_new_block().await.unwrap();
-
-        // Resolve the pending push
-        assert!(push_fut.await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn build_block_from_mempool() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-        let genesis_height = sequencer.chain_height;
-
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
-            .unwrap();
-
-        let result = sequencer.build_block_from_mempool();
-        assert!(result.is_ok());
-        assert_eq!(sequencer.chain_height, genesis_height + 1);
-    }
-
-    #[tokio::test]
-    async fn replay_transactions_are_rejected_in_the_same_block() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key1 = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, &sign_key1,
-        );
-
-        let tx_original = tx.clone();
-        let tx_replay = tx.clone();
-        // Pushing two copies of the same tx to the mempool
-        mempool_handle
-            .push((TransactionOrigin::User, tx_original))
-            .await
-            .unwrap();
-        mempool_handle
-            .push((TransactionOrigin::User, tx_replay))
-            .await
-            .unwrap();
-
-        // Create block
-        sequencer.produce_new_block().await.unwrap();
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-
-        // Only one user tx should be included; the clock tx is always appended last.
-        assert_eq!(
-            block.body.transactions,
-            vec![
-                tx.clone(),
-                LeeTransaction::Public(clock_invocation(block.header.timestamp))
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn replay_transactions_are_rejected_in_different_blocks() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        let acc1 = initial_accounts()[0].account_id;
-        let acc2 = initial_accounts()[1].account_id;
-
-        let sign_key1 = create_signing_key_for_account1();
-
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, &sign_key1,
-        );
-
-        // The transaction should be included the first time
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-        sequencer.produce_new_block().await.unwrap();
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            block.body.transactions,
-            vec![
-                tx.clone(),
-                LeeTransaction::Public(clock_invocation(block.header.timestamp))
-            ]
-        );
-
-        // Add same transaction should fail
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-        sequencer.produce_new_block().await.unwrap();
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-        // The replay is rejected, so only the clock tx is in the block.
-        assert_eq!(
-            block.body.transactions,
-            vec![LeeTransaction::Public(clock_invocation(
-                block.header.timestamp
-            ))]
-        );
-    }
-
-    #[tokio::test]
-    async fn restart_from_storage() {
-        let config = setup_sequencer_config();
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
-        let balance_to_move = 13;
-
-        // In the following code block a transaction will be processed that moves `balance_to_move`
-        // from `acc_1` to `acc_2`. The block created with that transaction will be kept stored in
-        // the temporary directory for the block storage of this test.
-        {
-            let (mut sequencer, mempool_handle) =
-                SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-            let signing_key = create_signing_key_for_account1();
-
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                acc1_account_id,
-                0,
-                acc2_account_id,
-                balance_to_move,
-                &signing_key,
-            );
-
-            mempool_handle
-                .push((TransactionOrigin::User, tx.clone()))
-                .await
-                .unwrap();
-            sequencer.produce_new_block().await.unwrap();
-            let block = sequencer
-                .store
-                .get_block_at_id(sequencer.chain_height)
-                .unwrap()
-                .unwrap();
-            assert_eq!(
-                block.body.transactions,
-                vec![
-                    tx.clone(),
-                    LeeTransaction::Public(clock_invocation(block.header.timestamp))
-                ]
-            );
-        }
-
-        // Instantiating a new sequencer from the same config. This should load the existing block
-        // with the above transaction and update the state to reflect that.
-        let (sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-        let balance_acc_1 = sequencer.state.get_account_by_id(acc1_account_id).balance;
-        let balance_acc_2 = sequencer.state.get_account_by_id(acc2_account_id).balance;
-
-        // Balances should be consistent with the stored block
-        assert_eq!(
-            balance_acc_1,
-            initial_accounts()[0].balance - balance_to_move
-        );
-        assert_eq!(
-            balance_acc_2,
-            initial_accounts()[1].balance + balance_to_move
-        );
-    }
-
-    #[tokio::test]
-    async fn get_pending_blocks() {
-        let config = setup_sequencer_config();
-        let (mut sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
-        sequencer.produce_new_block().await.unwrap();
-        sequencer.produce_new_block().await.unwrap();
-        sequencer.produce_new_block().await.unwrap();
-        assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 4);
-    }
-
-    #[tokio::test]
-    async fn delete_blocks() {
-        let config = setup_sequencer_config();
-        let (mut sequencer, _mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
-        sequencer.produce_new_block().await.unwrap();
-        sequencer.produce_new_block().await.unwrap();
-        sequencer.produce_new_block().await.unwrap();
-
-        let last_finalized_block = 3;
-        sequencer
-            .clean_finalized_blocks_from_db(last_finalized_block)
-            .unwrap();
-
-        assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn produce_block_with_correct_prev_meta_after_restart() {
-        let config = setup_sequencer_config();
-        let acc1_account_id = initial_accounts()[0].account_id;
-        let acc2_account_id = initial_accounts()[1].account_id;
-
-        // Step 1: Create initial database with some block metadata
-        let expected_prev_meta = {
-            let (mut sequencer, mempool_handle) =
-                SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-
-            let signing_key = create_signing_key_for_account1();
-
-            // Add a transaction and produce a block to set up block metadata
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                acc1_account_id,
-                0,
-                acc2_account_id,
-                100,
-                &signing_key,
-            );
-
-            mempool_handle
-                .push((TransactionOrigin::User, tx))
-                .await
-                .unwrap();
-            sequencer.produce_new_block().await.unwrap();
-
-            // Get the metadata of the last block produced
-            sequencer.store.latest_block_meta().unwrap()
-        };
-
-        // Step 2: Restart sequencer from the same storage
-        let (mut sequencer, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-
-        // Step 3: Submit a new transaction
-        let signing_key = create_signing_key_for_account1();
-        let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1_account_id,
-            1, // Next nonce
-            acc2_account_id,
-            50,
-            &signing_key,
-        );
-
-        mempool_handle
-            .push((TransactionOrigin::User, tx.clone()))
-            .await
-            .unwrap();
-
-        // Step 4: Produce new block
-        sequencer.produce_new_block().await.unwrap();
-
-        // Step 5: Verify the new block has correct previous block metadata
-        let new_block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(
-            new_block.header.prev_block_hash, expected_prev_meta.hash,
-            "New block's prev_block_hash should match the stored metadata hash"
-        );
-        assert_eq!(
-            new_block.body.transactions,
-            vec![
-                tx,
-                LeeTransaction::Public(clock_invocation(new_block.header.timestamp))
-            ],
-            "New block should contain the submitted transaction and the clock invocation"
-        );
-    }
-
-    #[tokio::test]
-    async fn transactions_touching_clock_account_are_dropped_from_block() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        // Canonical clock invocation and a crafted variant with a different timestamp — both must
-        // be dropped because their diffs touch the clock accounts.
-        let crafted_clock_tx = {
-            let message = lee::public_transaction::Message::try_new(
-                lee::program::Program::clock().id(),
-                lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
-                vec![],
-                42_u64,
-            )
-            .unwrap();
-            LeeTransaction::Public(lee::PublicTransaction::new(
-                message,
-                lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-            ))
-        };
-        mempool_handle
-            .push((
-                TransactionOrigin::User,
-                LeeTransaction::Public(clock_invocation(0)),
-            ))
-            .await
-            .unwrap();
-        mempool_handle
-            .push((TransactionOrigin::User, crafted_clock_tx))
-            .await
-            .unwrap();
-        sequencer.produce_new_block().await.unwrap();
-
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-
-        // Both transactions were dropped. Only the system-appended clock tx remains.
-        assert_eq!(
-            block.body.transactions,
-            vec![LeeTransaction::Public(clock_invocation(
-                block.header.timestamp
-            ))]
-        );
-    }
-
-    #[tokio::test]
-    async fn user_tx_that_chain_calls_clock_is_dropped() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        // Deploy the clock_chain_caller test program.
-        let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(
-                test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
-            ),
-        ));
-        mempool_handle
-            .push((TransactionOrigin::User, deploy_tx))
-            .await
-            .unwrap();
-        sequencer.produce_new_block().await.unwrap();
-
-        // Build a user transaction that invokes clock_chain_caller, which in turn chain-calls the
-        // clock program with the clock accounts. The sequencer should detect that the resulting
-        // state diff modifies clock accounts and drop the transaction.
-        let clock_chain_caller_id =
-            lee::program::Program::new(test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec())
-                .unwrap()
-                .id();
-        let clock_program_id = lee::program::Program::clock().id();
-        let timestamp: u64 = 0;
-
-        let message = lee::public_transaction::Message::try_new(
-            clock_chain_caller_id,
-            lee::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
-            vec![], // no signers
-            (clock_program_id, timestamp),
-        )
-        .unwrap();
-        let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(
-            message,
-            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-        ));
-
-        mempool_handle
-            .push((TransactionOrigin::User, user_tx))
-            .await
-            .unwrap();
-        sequencer.produce_new_block().await.unwrap();
-
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-
-        // The user tx must have been dropped; only the mandatory clock invocation remains.
-        assert_eq!(
-            block.body.transactions,
-            vec![LeeTransaction::Public(clock_invocation(
-                block.header.timestamp
-            ))]
-        );
-    }
-
-    #[tokio::test]
-    async fn block_production_aborts_when_clock_account_data_is_corrupted() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        // Corrupt the clock 01 account data so the clock program panics on deserialization.
-        let clock_account_id = lee::CLOCK_01_PROGRAM_ACCOUNT_ID;
-        let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
-        corrupted.data = vec![0xff; 3].try_into().unwrap();
-        sequencer
-            .state
-            .force_insert_account(clock_account_id, corrupted);
-
-        // Push a dummy transaction so the mempool is non-empty.
-        let tx = common::test_utils::produce_dummy_empty_transaction();
-        mempool_handle
-            .push((TransactionOrigin::User, tx))
-            .await
-            .unwrap();
-
-        // Block production must fail because the appended clock tx cannot execute.
-        let result = sequencer.produce_new_block().await;
-        assert!(
-            result.is_err(),
-            "Block production should abort when clock account data is corrupted"
-        );
-    }
-
-    #[test]
-    fn private_bridge_withdraw_invocation_is_dropped() {
-        let sender_keys = KeyChain::new_os_random();
-        let sender_account_id = AccountId::for_regular_private_account(
-            &sender_keys.nullifier_public_key,
-            &sender_keys.viewing_public_key,
-            0,
-        );
-        let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
-            balance: 100,
-            nonce: Nonce(0xdead_beef),
-            data: Data::default(),
-        };
-
-        let mut state = V03State::new_with_genesis_accounts(
-            &[],
-            vec![(
-                Commitment::new(&sender_account_id, &sender_private_account),
-                Nullifier::for_account_initialization(&sender_account_id),
-            )],
-            0,
-        );
-
-        let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
-        let bridge_account_id = system_bridge_account_id();
-
-        let sender_pre = AccountWithMetadata::new(
-            sender_private_account,
-            true,
-            (
-                &sender_keys.nullifier_public_key,
-                &sender_keys.viewing_public_key,
-                0,
-            ),
-        );
-        let bridge_pre = AccountWithMetadata::new(
-            state.get_account_by_id(bridge_account_id),
-            false,
-            bridge_account_id,
-        );
-
-        let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
-            amount: 1,
-            bedrock_account_pk: [0; 32],
-        })
-        .unwrap();
-
-        let program_with_deps = ProgramWithDependencies::new(
-            Program::bridge(),
-            [(
-                Program::authenticated_transfer_program().id(),
-                Program::authenticated_transfer_program(),
-            )]
-            .into(),
-        );
-
-        let (output, proof) = execute_and_prove(
-            vec![sender_pre, bridge_pre],
-            instruction,
-            vec![
-                InputAccountIdentity::PrivateAuthorizedUpdate {
-                    vpk: sender_keys.viewing_public_key,
-                    random_seed: [0; 32],
-                    nsk: sender_keys.private_key_holder.nullifier_secret_key,
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender commitment must be in state"),
-                    identifier: 0,
-                },
-                InputAccountIdentity::Public,
-            ],
-            &program_with_deps,
-        )
-        .expect("Execution should succeed");
-
-        let message = Message::try_from_circuit_output(vec![bridge_account_id], vec![], output)
-            .expect("Message construction should succeed");
-        let witness_set =
-            lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            message,
-            witness_set,
-        ));
-        let res = tx.execute_check_on_state(&mut state, 1, 0);
-
-        assert!(
-            matches!(res, Err(LeeError::InvalidInput(_))),
-            "Bridge withdraw invocation should be rejected in private execution"
-        );
-    }
-}
+mod tests;

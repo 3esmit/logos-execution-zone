@@ -167,9 +167,8 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     })
 }
 
-pub fn indexer_config(bedrock_addr: SocketAddr, home: PathBuf) -> Result<IndexerConfig> {
+pub fn indexer_config(bedrock_addr: SocketAddr) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
-        home,
         consensus_info_polling_interval: Duration::from_secs(1),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)

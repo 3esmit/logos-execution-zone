@@ -7,77 +7,35 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use ata_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
-    verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, create_token, get_account, new_account,
+    private_mention, public_mention, token_send, verify_commitment_is_in_state,
 };
-use lee::program::Program;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
-    programs::{ata::AtaSubcommand, token::TokenProgramAgnosticSubcommand},
-};
-
-/// Create a public account and return its ID.
-async fn new_public_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
-    let result = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-    Ok(account_id)
-}
-
-/// Create a private account and return its ID.
-async fn new_private_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
-    let result = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-    Ok(account_id)
-}
+use wallet::cli::{Command, programs::ata::AtaSubcommand};
 
 #[test]
 async fn create_ata_initializes_holding_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, false, None).await?;
 
     // Create a fungible token
     let total_supply = 100_u128;
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        total_supply,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create the ATA for owner + definition
     wallet::cli::execute_subcommand(
@@ -93,7 +51,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -105,7 +63,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -122,24 +80,19 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
 async fn create_ata_is_idempotent() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, false, None).await?;
 
     // Create a fungible token
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply: 100,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        100,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create the ATA once
     wallet::cli::execute_subcommand(
@@ -168,7 +121,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // State must be unchanged
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -180,7 +133,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -197,30 +150,25 @@ async fn create_ata_is_idempotent() -> Result<()> {
 async fn transfer_and_burn_via_ata() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let sender_account_id = new_public_account(&mut ctx).await?;
-    let recipient_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let sender_account_id = new_account(&mut ctx, false, None).await?;
+    let recipient_account_id = new_account(&mut ctx, false, None).await?;
 
     let total_supply = 1000_u128;
 
     // Create a fungible token, supply goes to supply_account_id
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        total_supply,
     )
     .await?;
 
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
     // Derive ATA addresses
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let sender_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(sender_account_id, definition_account_id),
@@ -253,22 +201,13 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
 
     // Fund sender's ATA from the supply account (direct token transfer)
     let fund_amount = 200_u128;
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: public_mention(supply_account_id),
-            to: Some(public_mention(sender_ata_id)),
-            to_npk: None,
-            to_vpk: None,
-            to_keys: None,
-            to_identifier: Some(0),
-            amount: fund_amount,
-        }),
+    token_send(
+        &mut ctx,
+        public_mention(supply_account_id),
+        public_mention(sender_ata_id),
+        fund_amount,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Transfer from sender's ATA to recipient's ATA via the ATA program
     let transfer_amount = 50_u128;
@@ -287,7 +226,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance decreased
-    let sender_ata_acc = ctx.sequencer_client().get_account(sender_ata_id).await?;
+    let sender_ata_acc = get_account(&ctx, sender_ata_id).await?;
     let sender_holding = TokenHolding::try_from(&sender_ata_acc.data)?;
     assert_eq!(
         sender_holding,
@@ -298,7 +237,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     );
 
     // Verify recipient ATA balance increased
-    let recipient_ata_acc = ctx.sequencer_client().get_account(recipient_ata_id).await?;
+    let recipient_ata_acc = get_account(&ctx, recipient_ata_id).await?;
     let recipient_holding = TokenHolding::try_from(&recipient_ata_acc.data)?;
     assert_eq!(
         recipient_holding,
@@ -324,7 +263,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance after burn
-    let sender_ata_acc = ctx.sequencer_client().get_account(sender_ata_id).await?;
+    let sender_ata_acc = get_account(&ctx, sender_ata_id).await?;
     let sender_holding = TokenHolding::try_from(&sender_ata_acc.data)?;
     assert_eq!(
         sender_holding,
@@ -335,10 +274,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     );
 
     // Verify the token definition total_supply decreased by burn_amount
-    let definition_acc = ctx
-        .sequencer_client()
-        .get_account(definition_account_id)
-        .await?;
+    let definition_acc = get_account(&ctx, definition_account_id).await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
     assert_eq!(
         token_definition,
@@ -356,24 +292,19 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
 async fn create_ata_with_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_private_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, true, None).await?;
 
     // Create a fungible token
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply: 100,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        100,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create the ATA for the private owner + definition
     wallet::cli::execute_subcommand(
@@ -389,7 +320,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -401,7 +332,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -425,30 +356,25 @@ async fn create_ata_with_private_owner() -> Result<()> {
 async fn transfer_via_ata_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let sender_account_id = new_private_account(&mut ctx).await?;
-    let recipient_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let sender_account_id = new_account(&mut ctx, true, None).await?;
+    let recipient_account_id = new_account(&mut ctx, false, None).await?;
 
     let total_supply = 1000_u128;
 
     // Create a fungible token
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        total_supply,
     )
     .await?;
 
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
     // Derive ATA addresses
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let sender_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(sender_account_id, definition_account_id),
@@ -481,22 +407,13 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
 
     // Fund sender's ATA from the supply account (direct token transfer)
     let fund_amount = 200_u128;
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: public_mention(supply_account_id),
-            to: Some(public_mention(sender_ata_id)),
-            to_npk: None,
-            to_vpk: None,
-            to_keys: None,
-            to_identifier: Some(0),
-            amount: fund_amount,
-        }),
+    token_send(
+        &mut ctx,
+        public_mention(supply_account_id),
+        public_mention(sender_ata_id),
+        fund_amount,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Transfer from sender's ATA (private owner) to recipient's ATA
     let transfer_amount = 50_u128;
@@ -515,7 +432,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance decreased
-    let sender_ata_acc = ctx.sequencer_client().get_account(sender_ata_id).await?;
+    let sender_ata_acc = get_account(&ctx, sender_ata_id).await?;
     let sender_holding = TokenHolding::try_from(&sender_ata_acc.data)?;
     assert_eq!(
         sender_holding,
@@ -526,7 +443,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     );
 
     // Verify recipient ATA balance increased
-    let recipient_ata_acc = ctx.sequencer_client().get_account(recipient_ata_id).await?;
+    let recipient_ata_acc = get_account(&ctx, recipient_ata_id).await?;
     let recipient_holding = TokenHolding::try_from(&recipient_ata_acc.data)?;
     assert_eq!(
         recipient_holding,
@@ -550,29 +467,24 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
 async fn burn_via_ata_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let holder_account_id = new_private_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let holder_account_id = new_account(&mut ctx, true, None).await?;
 
     let total_supply = 500_u128;
 
     // Create a fungible token
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: public_mention(definition_account_id),
-            supply_account_id: public_mention(supply_account_id),
-            name: "TEST".to_owned(),
-            total_supply,
-        }),
+    create_token(
+        &mut ctx,
+        public_mention(definition_account_id),
+        public_mention(supply_account_id),
+        "TEST".to_owned(),
+        total_supply,
     )
     .await?;
 
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
     // Derive holder's ATA address
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let holder_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(holder_account_id, definition_account_id),
@@ -593,22 +505,13 @@ async fn burn_via_ata_private_owner() -> Result<()> {
 
     // Fund holder's ATA from the supply account
     let fund_amount = 300_u128;
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: public_mention(supply_account_id),
-            to: Some(public_mention(holder_ata_id)),
-            to_npk: None,
-            to_vpk: None,
-            to_keys: None,
-            to_identifier: Some(0),
-            amount: fund_amount,
-        }),
+    token_send(
+        &mut ctx,
+        public_mention(supply_account_id),
+        public_mention(holder_ata_id),
+        fund_amount,
     )
     .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Burn from holder's ATA (private owner)
     let burn_amount = 100_u128;
@@ -626,7 +529,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify holder ATA balance after burn
-    let holder_ata_acc = ctx.sequencer_client().get_account(holder_ata_id).await?;
+    let holder_ata_acc = get_account(&ctx, holder_ata_id).await?;
     let holder_holding = TokenHolding::try_from(&holder_ata_acc.data)?;
     assert_eq!(
         holder_holding,
@@ -637,10 +540,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     );
 
     // Verify the token definition total_supply decreased by burn_amount
-    let definition_acc = ctx
-        .sequencer_client()
-        .get_account(definition_account_id)
-        .await?;
+    let definition_acc = get_account(&ctx, definition_account_id).await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
     assert_eq!(
         token_definition,

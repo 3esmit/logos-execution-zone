@@ -35,6 +35,7 @@ pub enum InputAccountIdentity {
         random_seed: [u8; 32],
         nsk: NullifierSecretKey,
         identifier: Identifier,
+        commitment_root: CommitmentSetDigest,
     },
     /// Update of an authorized standalone private account: existing on-chain commitment, with
     /// membership proof.
@@ -52,6 +53,7 @@ pub enum InputAccountIdentity {
         random_seed: [u8; 32],
         npk: NullifierPublicKey,
         identifier: Identifier,
+        commitment_root: CommitmentSetDigest,
     },
     /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
     /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. The identifier diversifies the
@@ -62,6 +64,7 @@ pub enum InputAccountIdentity {
         random_seed: [u8; 32],
         npk: NullifierPublicKey,
         identifier: Identifier,
+        commitment_root: CommitmentSetDigest,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
         /// external derivation check
         /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==

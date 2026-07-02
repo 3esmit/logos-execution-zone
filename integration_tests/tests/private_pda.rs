@@ -3,14 +3,13 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, PrivacyPreservingTransaction, ProgramId,
@@ -22,7 +21,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    InputAccountIdentity, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -30,10 +29,7 @@ use lee_core::{
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::{
-    AccountIdentity, WalletCore,
-    cli::{Command, account::AccountSubcommand},
-};
+use wallet::{AccountIdentity, WalletCore};
 
 /// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
@@ -74,6 +70,7 @@ async fn fund_private_pda(
             random_seed: [0; 32],
             npk,
             identifier,
+            commitment_root: DUMMY_COMMITMENT_HASH,
             seed: Some((seed, authority_program_id)),
         },
     ];
@@ -160,14 +157,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         (kc.nullifier_public_key, kc.viewing_public_key.clone())
     };
 
-    let proxy = {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../artifacts/test_program_methods")
-            .join(LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
-        Program::new(std::fs::read(&path).with_context(|| format!("reading {path:?}"))?)
-            .context("invalid pda_spend_proxy binary")?
-    };
-    let auth_transfer = Program::authenticated_transfer_program();
+    let proxy = test_programs::pda_spend_proxy();
+    let auth_transfer = programs::authenticated_transfer();
     let proxy_id = proxy.id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
@@ -219,11 +210,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // Both PDAs must be discoverable and have the correct balance.
     let pda_0_account = ctx
@@ -302,11 +289,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // After spending, PDAs should have the remaining balance.
     let pda_0_spent = ctx

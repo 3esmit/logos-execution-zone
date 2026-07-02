@@ -12,7 +12,7 @@ pub use commitment::{
 };
 pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
-    SharedSecretKey, ViewTag,
+    ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;

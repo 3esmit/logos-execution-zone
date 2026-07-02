@@ -2,6 +2,7 @@ on:
   push:
     branches:
       - main
+      - dev
     paths-ignore:
       - "**.md"
       - "!.github/workflows/*.yml"
@@ -94,7 +95,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Lint workspace
         env:
@@ -104,7 +105,7 @@ jobs:
       - name: Lint programs
         env:
           RISC0_SKIP_BUILD: "1"
-        run: cargo clippy -p "*programs" -- -D warnings
+        run: cargo clippy -p "*program" -- -D warnings
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -125,7 +126,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Install nextest
         run: cargo install --locked cargo-nextest
@@ -156,7 +157,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Install nextest
         run: cargo install --locked cargo-nextest
@@ -245,7 +246,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Test valid proof
         env:
@@ -268,7 +269,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: ci-rust-cache
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
       - name: Install just
         run: cargo install --locked just

@@ -1,6 +1,5 @@
 #![expect(
     clippy::print_stdout,
-    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -17,13 +16,14 @@ use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
 };
 use lee_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
+    account::Nonce, compute_digest_for_path, program::InstructionData,
 };
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -509,6 +509,14 @@ impl WalletCore {
         }
     }
 
+    pub async fn get_commitment_root(&self) -> Result<Option<CommitmentSetDigest>> {
+        let proof = self
+            .sequencer_client
+            .get_proof_for_commitment(DUMMY_COMMITMENT)
+            .await?;
+        Ok(proof.map(|p| compute_digest_for_path(&DUMMY_COMMITMENT, &p)))
+    }
+
     pub fn decode_insert_privacy_preserving_transaction_results(
         &mut self,
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -543,6 +551,32 @@ impl WalletCore {
 
         println!("Transaction data is {:?}", tx.message);
         Ok(())
+    }
+
+    pub(crate) async fn poll_and_finalize_public_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<cli::SubcommandReturnValue> {
+        println!("Transaction hash is {tx_hash}");
+        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
+        println!("Transaction data is {transfer_tx:?}");
+        self.store_persistent_data()?;
+        Ok(cli::SubcommandReturnValue::Empty)
+    }
+
+    /// Pass an empty slice when the recipient is foreign and no accounts need decoding.
+    pub(crate) async fn poll_and_finalize_pp_transaction(
+        &mut self,
+        tx_hash: HashType,
+        acc_decode_data: &[AccDecodeData],
+    ) -> Result<cli::SubcommandReturnValue> {
+        println!("Transaction hash is {tx_hash}");
+        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
+        if let common::transaction::LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
+            self.decode_insert_privacy_preserving_transaction_results(&tx, acc_decode_data)?;
+        }
+        self.store_persistent_data()?;
+        Ok(cli::SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
     }
 
     pub async fn send_privacy_preserving_tx(
@@ -620,9 +654,9 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
             .await
     }
 
@@ -630,7 +664,7 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -653,7 +687,6 @@ impl WalletCore {
         )?;
 
         let account_ids = acc_manager.public_account_ids();
-        let program_id = program.program.id();
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(
@@ -874,5 +907,28 @@ impl WalletCore {
     #[must_use]
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::CString, str::FromStr as _};
+
+    use bip39::Mnemonic;
+
+    #[test]
+    fn mnemonic_roundtrip() {
+        let mnemonic =
+            Mnemonic::from_entropy(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).unwrap();
+
+        let c_mnemonic_string = CString::new(mnemonic.to_string()).unwrap();
+        let c_mnemonic_string_raw = c_mnemonic_string.into_raw();
+        // Safety: Will be safe, pointer is created from CString
+        let c_str = unsafe { CString::from_raw(c_mnemonic_string_raw) };
+        let mn_string = c_str.to_str().unwrap();
+
+        let mn_ret = Mnemonic::from_str(mn_string).unwrap();
+
+        assert_eq!(mnemonic, mn_ret);
     }
 }
