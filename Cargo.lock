@@ -1914,7 +1914,6 @@ dependencies = [
  "criterion",
  "key_protocol",
  "lee_core",
- "rand 0.8.6",
 ]
 
 [[package]]
@@ -3850,7 +3849,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-stream",
- "authenticated_transfer_core",
  "borsh",
  "common",
  "futures",
@@ -4551,10 +4549,8 @@ name = "lee"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "authenticated_transfer_core",
  "borsh",
  "build_utils",
- "env_logger",
  "hex",
  "hex-literal 1.1.0",
  "k256",
@@ -4569,7 +4565,6 @@ dependencies = [
  "test-case",
  "test_methods",
  "thiserror 2.0.18",
- "token_core",
 ]
 
 [[package]]
@@ -10891,7 +10886,6 @@ dependencies = [
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde_json",
- "tempfile",
  "tokio",
  "vault_core",
  "wallet",

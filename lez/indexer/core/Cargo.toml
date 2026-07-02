@@ -30,4 +30,3 @@ tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-authenticated_transfer_core.workspace = true
