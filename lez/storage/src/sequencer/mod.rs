@@ -1,12 +1,14 @@
 use std::{path::Path, sync::Arc};
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockMeta},
 };
 use lee::V03State;
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
+    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, IteratorMode, MultiThreaded,
+    Options, WriteBatch,
 };
 
 use crate::{
@@ -44,6 +46,37 @@ pub const DB_LEE_STATE_KEY: &str = "lee_state";
 /// Name of state column family.
 pub const CF_LEE_STATE_NAME: &str = "cf_lee_state";
 
+/// A single key/value entry from a column family, used inside [`DbDump`].
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct DbDumpEntry {
+    pub cf_name: String,
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+/// Schema-agnostic single-blob snapshot of a store: every key/value pair across all column
+/// families. Lets a prebuilt store ship as one committed file instead of a rocksdb directory.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct DbDump {
+    pub entries: Vec<DbDumpEntry>,
+}
+
+impl DbDump {
+    /// Serialize the dump to a borsh blob.
+    pub fn to_bytes(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize DbDump".to_owned()))
+        })
+    }
+
+    /// Deserialize a dump produced by [`Self::to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> DbResult<Self> {
+        borsh::from_slice(bytes).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to deserialize DbDump".to_owned()))
+        })
+    }
+}
+
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
 }
@@ -80,6 +113,71 @@ impl RocksDBIO {
             })?;
             dbio.put_lee_state_in_db(genesis_state)?;
         }
+
+        Ok(dbio)
+    }
+
+    /// Dump every key/value pair across all column families into a [`DbDump`]. Column families are
+    /// discovered from disk, so new ones are captured without a hardcoded list.
+    pub fn dump_all(&self) -> DbResult<DbDump> {
+        let cf_names =
+            DBWithThreadMode::<MultiThreaded>::list_cf(&Options::default(), self.db.path())
+                .map_err(|rerr| {
+                    DbError::rocksdb_cast_message(
+                        rerr,
+                        Some("Failed to list column families for dump".to_owned()),
+                    )
+                })?;
+
+        let mut entries = Vec::new();
+        for cf_name in cf_names {
+            let cf = self.db.cf_handle(&cf_name).ok_or_else(|| {
+                DbError::db_interaction_error(format!(
+                    "Column family {cf_name:?} listed on disk but not opened; add it to `open_inner`"
+                ))
+            })?;
+            for item in self.db.iterator_cf(&cf, IteratorMode::Start) {
+                let (key, value) = item.map_err(|rerr| {
+                    DbError::rocksdb_cast_message(
+                        rerr,
+                        Some(format!(
+                            "Failed to iterate column family {cf_name:?} for dump"
+                        )),
+                    )
+                })?;
+                entries.push(DbDumpEntry {
+                    cf_name: cf_name.clone(),
+                    key: key.into_vec(),
+                    value: value.into_vec(),
+                });
+            }
+        }
+        Ok(DbDump { entries })
+    }
+
+    /// Create a fresh rocksdb at `path` populated from a [`DbDump`].
+    pub fn restore_from_dump(path: &Path, dump: &DbDump) -> DbResult<Self> {
+        let mut db_opts = Options::default();
+        db_opts.create_missing_column_families(true);
+        db_opts.create_if_missing(true);
+        let dbio = Self::open_inner(path, &db_opts)?;
+
+        let mut batch = WriteBatch::default();
+        for entry in &dump.entries {
+            let cf = dbio.db.cf_handle(&entry.cf_name).ok_or_else(|| {
+                DbError::db_interaction_error(format!(
+                    "Unknown column family {:?} in dump",
+                    entry.cf_name
+                ))
+            })?;
+            batch.put_cf(&cf, &entry.key, &entry.value);
+        }
+        dbio.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to write dump restore batch".to_owned()),
+            )
+        })?;
 
         Ok(dbio)
     }
@@ -244,6 +342,11 @@ impl RocksDBIO {
 
     pub fn put_zone_sdk_checkpoint_bytes(&self, bytes: &[u8]) -> DbResult<()> {
         self.put(&ZoneSdkCheckpointCellRef(bytes), ())
+    }
+
+    /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
+    pub fn delete_zone_sdk_checkpoint_bytes(&self) -> DbResult<()> {
+        self.del::<ZoneSdkCheckpointCellOwned>(())
     }
 
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
@@ -448,10 +551,29 @@ impl RocksDBIO {
     }
 
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
+        self.set_block_bedrock_status(block_id, BedrockStatus::Finalized)
+    }
+
+    /// Reset every stored block to [`BedrockStatus::Pending`], for snapshotting a store to replay
+    /// against a fresh Bedrock instance that knows none of the blocks yet.
+    pub fn reset_all_blocks_to_pending(&self) -> DbResult<()> {
+        let block_ids: Vec<u64> = self
+            .get_all_blocks()
+            .filter_map(Result::ok)
+            .filter(|block| !matches!(block.bedrock_status, BedrockStatus::Pending))
+            .map(|block| block.header.block_id)
+            .collect();
+        for id in block_ids {
+            self.set_block_bedrock_status(id, BedrockStatus::Pending)?;
+        }
+        Ok(())
+    }
+
+    fn set_block_bedrock_status(&self, block_id: u64, status: BedrockStatus) -> DbResult<()> {
         let mut block = self.get_block(block_id)?.ok_or_else(|| {
             DbError::db_interaction_error(format!("Block with id {block_id} not found"))
         })?;
-        block.bedrock_status = BedrockStatus::Finalized;
+        block.bedrock_status = status;
 
         let cf_block = self.block_column();
         self.db
@@ -473,7 +595,7 @@ impl RocksDBIO {
             .map_err(|rerr| {
                 DbError::rocksdb_cast_message(
                     rerr,
-                    Some(format!("Failed to mark block {block_id} as finalized")),
+                    Some(format!("Failed to set block {block_id} bedrock status")),
                 )
             })?;
 

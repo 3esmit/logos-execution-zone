@@ -8896,6 +8896,7 @@ dependencies = [
  "futures",
  "hex",
  "humantime-serde",
+ "itertools 0.14.0",
  "key_protocol",
  "lee",
  "lee_core",
@@ -9735,6 +9736,7 @@ name = "test_fixtures"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bip39",
  "bytesize",
  "common",
  "env_logger",
