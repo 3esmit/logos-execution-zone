@@ -372,24 +372,18 @@ impl UserKeyChain {
         message: &Message,
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
-        // Get the nullifier information if awaiting the nullifier.
-        let hits: Vec<(usize, Nullifier, AccountId)> = message
-            .new_nullifiers
-            .iter()
-            .enumerate()
-            .filter_map(|(i, (nullifier, _))| {
-                index.account_for(nullifier).map(|id| (i, *nullifier, id))
-            })
-            .collect();
-
         let mut handled = HashSet::new();
-        for (i, old_nullifier, account_id) in hits {
+        for (i, (old_nullifier, _)) in message.new_nullifiers.iter().enumerate() {
+            // Get the nullifier information if awaiting the nullifier.
+            let Some(account_id) = index.account_for(old_nullifier) else {
+                continue;
+            };
             // Try decrypting the commitment connectted to the nullifier and get the next
             // nullifier to await.
             if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
-                index.update(&old_nullifier, new_nullifier, account_id);
+                index.update(old_nullifier, new_nullifier, account_id);
                 // Record that this nullifier's position can be skipped for scanning.
                 handled.insert(i);
             }
