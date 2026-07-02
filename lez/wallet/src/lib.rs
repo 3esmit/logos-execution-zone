@@ -18,7 +18,8 @@ use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
-        circuit::ProgramWithDependencies, message::EncryptedAccountData,
+        circuit::ProgramWithDependencies,
+        message::{EncryptedAccountData, Message},
     },
 };
 use lee_core::{
@@ -727,15 +728,15 @@ impl WalletCore {
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
-                // Eagerly decrypt note updates using expected nullifiers.
-                let handled = if let LeeTransaction::PrivacyPreserving(pp_tx) = &tx {
-                    self.storage
-                        .key_chain_mut()
-                        .sync_updates_via_nullifiers(&pp_tx.message, &mut index)
-                } else {
-                    HashSet::new()
+                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
+                    continue;
                 };
-                self.sync_private_accounts_with_tx(tx, &mut index, &handled);
+                // Eagerly decrypt note updates using expected nullifiers.
+                let handled = self
+                    .storage
+                    .key_chain_mut()
+                    .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
+                self.sync_private_accounts_with_tx(&pp_tx.message, &mut index, &handled);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -754,14 +755,10 @@ impl WalletCore {
 
     fn sync_private_accounts_with_tx(
         &mut self,
-        tx: LeeTransaction,
+        message: &Message,
         index: &mut NullifierIndex,
         handled: &HashSet<usize>,
     ) {
-        let LeeTransaction::PrivacyPreserving(tx) = tx else {
-            return;
-        };
-
         let affected_accounts = self
             .storage
             .key_chain()
@@ -771,9 +768,9 @@ impl WalletCore {
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
-                let new_commitments = &tx.message.new_commitments;
+                let new_commitments = &message.new_commitments;
 
-                tx.message()
+                message
                     .encrypted_private_post_states
                     .iter()
                     .enumerate()
@@ -822,12 +819,12 @@ impl WalletCore {
         }
 
         // Scan for updates to shared accounts (GMS-derived).
-        self.sync_shared_private_accounts_with_tx(&tx, index, handled);
+        self.sync_shared_private_accounts_with_tx(message, index, handled);
     }
 
     fn sync_shared_private_accounts_with_tx(
         &mut self,
-        tx: &PrivacyPreservingTransaction,
+        message: &Message,
         index: &mut NullifierIndex,
         handled: &HashSet<usize>,
     ) {
@@ -848,11 +845,8 @@ impl WalletCore {
         for (account_id, npk, vpk, vsk, nsk) in shared_keys {
             let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
-            for (ciph_id, encrypted_data) in tx
-                .message()
-                .encrypted_private_post_states
-                .iter()
-                .enumerate()
+            for (ciph_id, encrypted_data) in
+                message.encrypted_private_post_states.iter().enumerate()
             {
                 // If already decrypted or the tag does nto match, skip.
                 if handled.contains(&ciph_id) || encrypted_data.view_tag != view_tag {
@@ -864,7 +858,7 @@ impl WalletCore {
                 else {
                     continue;
                 };
-                let commitment = &tx.message.new_commitments[ciph_id];
+                let commitment = &message.new_commitments[ciph_id];
 
                 if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
                     &encrypted_data.ciphertext,
