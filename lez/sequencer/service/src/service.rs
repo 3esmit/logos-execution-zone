@@ -12,7 +12,8 @@ use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, MembershipProof, Nonce,
+    ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -189,6 +190,11 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
             lee::PRIVACY_PRESERVING_CIRCUIT_ID,
         );
         Ok(program_ids)
+    }
+
+    async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned> {
+        let channel_id = self.sequencer.lock().await.block_publisher().channel_id();
+        Ok(ChannelId(*channel_id.as_ref()))
     }
 }
 

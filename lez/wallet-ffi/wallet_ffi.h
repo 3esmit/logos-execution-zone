@@ -299,6 +299,27 @@ typedef struct FfiPublicAccountKey {
   struct FfiBytes32 public_key;
 } FfiPublicAccountKey;
 
+typedef struct LabelAvailability {
+  bool is_available;
+  enum WalletFfiError error;
+} LabelAvailability;
+
+typedef struct FfiAccountIdWithPrivacy {
+  struct FfiBytes32 account_id;
+  bool is_private;
+} FfiAccountIdWithPrivacy;
+
+typedef struct AccountIdResolvedFromLabel {
+  struct FfiAccountIdWithPrivacy account_id;
+  enum WalletFfiError error;
+} AccountIdResolvedFromLabel;
+
+typedef struct LabelList {
+  const char **labels_data;
+  uintptr_t labels_size;
+  enum WalletFfiError error;
+} LabelList;
+
 typedef struct FfiCreateWalletOutput {
   struct WalletHandle *wallet;
   /**
@@ -806,6 +827,92 @@ enum WalletFfiError wallet_ffi_resolve_private_account(struct WalletHandle *hand
  * `wallet_ffi_resolve_private_account` or `wallet_ffi_resolve_public_account`.
  */
 void wallet_ffi_free_account_identity(struct FfiAccountIdentity *account_identity);
+
+/**
+ * Check if label is available.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `label`: Input null terminated C string for a label
+ *
+ * # Returns
+ * - `LabelAvailability` struct
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `label` must be a valid pointer to a null-terminated C string
+ */
+struct LabelAvailability wallet_ffi_check_label_available(struct WalletHandle *handle,
+                                                          const char *label);
+
+/**
+ * Add new label.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `label`: Input null terminated C string for a label
+ * - `account_id_with_privacy`: The account ID (32 bytes) and its privacy.
+ *
+ * # Returns
+ * - `Success` on successful query
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `label` must be a valid pointer to a null-terminated C string
+ */
+enum WalletFfiError wallet_ffi_add_label(struct WalletHandle *handle,
+                                         const char *label,
+                                         struct FfiAccountIdWithPrivacy account_id_with_privacy);
+
+/**
+ * Resolve a label.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `label`: Input null terminated C string for a label
+ *
+ * # Returns
+ * - `AccountIdResolvedFromLabel` struct
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `label` must be a valid pointer to a null-terminated C string
+ */
+struct AccountIdResolvedFromLabel wallet_ffi_resolve_label(struct WalletHandle *handle,
+                                                           const char *label);
+
+/**
+ * Get all labels for account.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `account_id_with_privacy`: The account ID (32 bytes) and its privacy.
+ *
+ * # Returns
+ * - `LabelList` struct
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *handle,
+                                                       struct FfiAccountIdWithPrivacy account_id_with_privacy);
+
+/**
+ * Free label list.
+ *
+ * # Parameters
+ * - `label_list`: Input list of labels
+ *
+ * # Returns
+ * - `Success` on successful query
+ * - Error code on failure
+ *
+ * # Safety
+ * - `label_list` must be a valid pointer to `LabelList`, received from
+ *   `wallet_ffi_get_all_labels_for_account`
+ */
+enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
 
 /**
  * Claim a pinata reward using a public transaction.

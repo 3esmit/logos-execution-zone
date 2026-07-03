@@ -173,7 +173,7 @@ impl LeeTransaction {
                 balance: pre.balance,
                 ..post.clone()
             };
-            (expected_pre == pre) && (pre.balance <= post.balance)
+            (expected_pre == pre) && (pre.balance < post.balance)
         };
 
         if only_balance_increased {

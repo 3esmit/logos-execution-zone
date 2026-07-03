@@ -11,7 +11,8 @@ use borsh::BorshSerialize;
 use common::transaction::LeeTransaction;
 use futures::StreamExt as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, wait_for_indexer_to_catch_up,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account,
+    wait_for_indexer_to_catch_up,
 };
 use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
@@ -65,6 +66,54 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
+    let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
+    let vault_balance_before = account_balance(&ctx, recipient_vault_id).await?;
+
+    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
+    let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+
+    assert_eq!(bridge_balance_after, bridge_balance_before);
+    assert_eq!(vault_balance_after, vault_balance_before);
+    assert!(
+        tx_on_chain.is_none(),
+        "Direct public bridge::Deposit invocation should be rejected"
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let recipient_id = ctx.existing_public_accounts()[0];
+    let bridge_account_id = system_accounts::bridge_account_id();
+    let vault_program_id = programs::vault().id();
+    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+
+    let message = public_transaction::Message::try_new(
+        programs::bridge().id(),
+        vec![bridge_account_id, recipient_vault_id],
+        vec![],
+        bridge_core::Instruction::Deposit {
+            l1_deposit_op_id: [0_u8; 32],
+            vault_program_id,
+            recipient_id,
+            amount: 0,
+        },
+    )
+    .context("Failed to build zero-amount public bridge deposit transaction")?;
+
+    let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+
     let bridge_balance_before = ctx
         .sequencer_client()
         .get_account_balance(bridge_account_id)
@@ -92,7 +141,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     assert_eq!(vault_balance_after, vault_balance_before);
     assert!(
         tx_on_chain.is_none(),
-        "Direct public bridge::Deposit invocation should be rejected"
+        "Public bridge::Deposit with zero amount should be rejected"
     );
 
     Ok(())
@@ -109,16 +158,12 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Get pre-state of bridge and vault accounts
     let bridge_pre = AccountWithMetadata::new(
-        ctx.sequencer_client()
-            .get_account(bridge_account_id)
-            .await?,
+        get_account(&ctx, bridge_account_id).await?,
         false,
         bridge_account_id,
     );
     let vault_pre = AccountWithMetadata::new(
-        ctx.sequencer_client()
-            .get_account(recipient_vault_id)
-            .await?,
+        get_account(&ctx, recipient_vault_id).await?,
         false,
         recipient_vault_id,
     );
@@ -169,27 +214,15 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         witness_set,
     ));
 
-    let bridge_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(bridge_account_id)
-        .await?;
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
+    let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
+    let vault_balance_before = account_balance(&ctx, recipient_vault_id).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let bridge_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(bridge_account_id)
-        .await?;
-    let vault_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
+    let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
+    let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
@@ -361,7 +394,7 @@ async fn wait_for_vault_balance(
         + Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS);
     tokio::time::timeout(timeout, async {
         loop {
-            let balance = ctx.sequencer_client().get_account_balance(vault_id).await?;
+            let balance = account_balance(ctx, vault_id).await?;
             if balance == expected_balance {
                 return Ok(());
             }
@@ -389,14 +422,8 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
 
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
-    let recipient_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_id)
-        .await?;
+    let vault_balance_before = account_balance(&ctx, recipient_vault_id).await?;
+    let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
     // Submit deposit to Bedrock
     submit_bedrock_deposit(ctx.bedrock_addr(), bedrock_account_pk, recipient_id, amount)
@@ -447,14 +474,8 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let claim_on_chain = ctx.sequencer_client().get_transaction(claim_hash).await?;
-    let vault_balance_after_claim = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_vault_id)
-        .await?;
-    let recipient_balance_after_claim = ctx
-        .sequencer_client()
-        .get_account_balance(recipient_id)
-        .await?;
+    let vault_balance_after_claim = account_balance(&ctx, recipient_vault_id).await?;
+    let recipient_balance_after_claim = account_balance(&ctx, recipient_id).await?;
 
     assert!(
         claim_on_chain.is_some(),
@@ -483,7 +504,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
             account_id.into(),
         )
         .await?;
-        let sequencer_account = ctx.sequencer_client().get_account(account_id).await?;
+        let sequencer_account = get_account(&ctx, account_id).await?;
         assert_eq!(
             indexer_account,
             sequencer_account.into(),

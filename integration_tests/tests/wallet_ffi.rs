@@ -16,6 +16,7 @@ use std::{
     ffi::{CStr, CString, c_char},
     io::Write as _,
     path::Path,
+    str::FromStr as _,
     time::Duration,
 };
 
@@ -30,9 +31,11 @@ use log::info;
 use tempfile::tempdir;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
-    FfiAccount, FfiAccountIdentity, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys,
-    FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128, WalletHandle, error,
+    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
+    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
+    label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
 };
 
@@ -257,6 +260,29 @@ unsafe extern "C" {
     fn wallet_ffi_free_transaction_result(result: *mut FfiTransactionResult);
 
     fn wallet_ffi_free_account_identity(account_identity: *mut FfiAccountIdentity);
+
+    fn wallet_ffi_check_label_available(
+        handle: *mut WalletHandle,
+        label: *const c_char,
+    ) -> LabelAvailability;
+
+    fn wallet_ffi_add_label(
+        handle: *mut WalletHandle,
+        label: *const c_char,
+        account_id_with_privacy: FfiAccountIdWithPrivacy,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_resolve_label(
+        handle: *mut WalletHandle,
+        label: *const c_char,
+    ) -> AccountIdResolvedFromLabel;
+
+    fn wallet_ffi_get_all_labels_for_account(
+        handle: *mut WalletHandle,
+        account_id_with_privacy: FfiAccountIdWithPrivacy,
+    ) -> LabelList;
+
+    fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> error::WalletFfiError;
 }
 
 fn new_wallet_ffi_with_test_context_config(
@@ -1921,6 +1947,128 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_single_label() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+
+    let mut out_account_id_1 = FfiBytes32::from_bytes([0; 32]);
+    unsafe {
+        wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
+    }
+
+    info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();
+
+    let lab_1_availability = unsafe { wallet_ffi_check_label_available(wallet_ffi_handle, lab_1) };
+
+    assert_eq!(lab_1_availability.error, error::WalletFfiError::Success);
+    assert!(lab_1_availability.is_available);
+
+    let acc_1_id_with_privacy = FfiAccountIdWithPrivacy {
+        account_id: out_account_id_1,
+        is_private: false,
+    };
+
+    let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_1, acc_1_id_with_privacy) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let lab_1_availability = unsafe { wallet_ffi_check_label_available(wallet_ffi_handle, lab_1) };
+
+    assert!(!lab_1_availability.is_available);
+
+    let acc_resolved = unsafe { wallet_ffi_resolve_label(wallet_ffi_handle, lab_1) };
+
+    assert_eq!(acc_resolved.account_id, acc_1_id_with_privacy);
+
+    unsafe {
+        wallet_ffi_free_string(lab_1);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_more_labels() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+
+    let mut out_account_id_1 = FfiBytes32::from_bytes([0; 32]);
+    unsafe {
+        wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
+    }
+
+    info!("Waiting for next block creation");
+    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+
+    let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();
+    let lab_2 = CString::from_str("LABEL2").unwrap().into_raw();
+    let lab_3 = CString::from_str("LABEL3").unwrap().into_raw();
+
+    let acc_1_id_with_privacy = FfiAccountIdWithPrivacy {
+        account_id: out_account_id_1,
+        is_private: false,
+    };
+
+    let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_1, acc_1_id_with_privacy) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_2, acc_1_id_with_privacy) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let err = unsafe { wallet_ffi_add_label(wallet_ffi_handle, lab_3, acc_1_id_with_privacy) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    let mut label_list_for_out_acc =
+        unsafe { wallet_ffi_get_all_labels_for_account(wallet_ffi_handle, acc_1_id_with_privacy) };
+
+    assert_eq!(label_list_for_out_acc.error, error::WalletFfiError::Success);
+    assert_eq!(label_list_for_out_acc.labels_size, 3);
+
+    let lab_ref_1 = unsafe { &*label_list_for_out_acc.labels_data.add(0) };
+    let lab_ref_c_str_1 = unsafe { CStr::from_ptr(*lab_ref_1) };
+
+    assert_eq!(lab_ref_c_str_1.to_str().unwrap(), "LABEL1");
+
+    let lab_ref_2 = unsafe { &*label_list_for_out_acc.labels_data.add(1) };
+    let lab_ref_c_str_2 = unsafe { CStr::from_ptr(*lab_ref_2) };
+
+    assert_eq!(lab_ref_c_str_2.to_str().unwrap(), "LABEL2");
+
+    let lab_ref_3 = unsafe { &*label_list_for_out_acc.labels_data.add(2) };
+    let lab_ref_c_str_3 = unsafe { CStr::from_ptr(*lab_ref_3) };
+
+    assert_eq!(lab_ref_c_str_3.to_str().unwrap(), "LABEL3");
+
+    let err = unsafe { wallet_ffi_free_label_list(&raw mut label_list_for_out_acc) };
+
+    assert_eq!(err, error::WalletFfiError::Success);
+
+    unsafe {
+        wallet_ffi_free_string(lab_1);
+        wallet_ffi_free_string(lab_2);
+        wallet_ffi_free_string(lab_3);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
