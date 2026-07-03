@@ -65,6 +65,7 @@ members = [
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
+  "tools/cross_zone_chat",
 ]
 
 [workspace.dependencies]
@@ -194,6 +195,7 @@ elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
 actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
 ] }
+axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 pyo3 = { version = "0.29", features = ["auto-initialize"] }

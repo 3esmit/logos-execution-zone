@@ -112,6 +112,13 @@ demo-cross-zone-bridge:
     @echo "🌉 Cross-zone bridge demo (lock on A, mint on B)"
     {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge -- --nocapture
 
+# Demo: interactive cross-zone chat. Boots two zones on one Bedrock and serves a
+# local two-column web UI; type in one zone and watch the message cross into the
+# other. Two people can chat across the zones. Dev mode, no proving.
+cross-zone-chat:
+    @echo "💬 Cross-zone chat demo — open the printed localhost URL"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
+
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"

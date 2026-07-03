@@ -1866,6 +1866,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cross_zone_chat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "common",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
+ "env_logger",
+ "lee",
+ "log",
+ "ping_core",
+ "programs",
+ "risc0-zkvm",
+ "sequencer_service_rpc",
+ "serde",
+ "test_fixtures",
+ "tokio",
+]
+
+[[package]]
 name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
