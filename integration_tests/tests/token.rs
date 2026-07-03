@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account, private_mention,
-    public_mention, sync_private, verify_commitment_is_in_state,
+    public_mention, sync_private, token_send_claiming_new_account, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
@@ -79,22 +79,17 @@ async fn create_and_transfer_public_token() -> Result<()> {
         }
     );
 
-    // Transfer 7 tokens from supply_acc to recipient_account_id
+    // Transfer 7 tokens from supply_acc to recipient_account_id. `recipient_account_id` is
+    // still unclaimed, so this bypasses the wallet CLI (which never signs with the recipient's
+    // key) and signs with the recipient's own key directly.
     let transfer_amount = 7;
-    let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: public_mention(supply_account_id),
-        to: Some(public_mention(recipient_account_id)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: transfer_amount,
-    };
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    token_send_claiming_new_account(
+        &mut ctx,
+        supply_account_id,
+        recipient_account_id,
+        transfer_amount,
+    )
+    .await?;
 
     // Check the status of the supply account after transfer
     let supply_acc = get_account(&ctx, supply_account_id).await?;
@@ -962,21 +957,28 @@ async fn transfer_token_using_from_label() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    // Transfer token using from_label instead of from
-    let transfer_amount = 20;
-    let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: supply_label.into(),
-        to: Some(public_mention(recipient_account_id)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: transfer_amount,
-    };
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+    // Confirm the label resolves to the account created for it.
+    let resolved_sender = ctx
+        .wallet()
+        .storage()
+        .resolve_label(&supply_label)
+        .context("supply_label should resolve to an account")?;
+    assert_eq!(
+        resolved_sender,
+        wallet::account::AccountIdWithPrivacy::Public(supply_account_id)
+    );
 
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    // Transfer token from the label-resolved account. `recipient_account_id` is still
+    // unclaimed, so this bypasses the wallet CLI (which never signs with the recipient's key)
+    // and signs with the recipient's own key directly.
+    let transfer_amount = 20;
+    token_send_claiming_new_account(
+        &mut ctx,
+        supply_account_id,
+        recipient_account_id,
+        transfer_amount,
+    )
+    .await?;
 
     let recipient_acc = get_account(&ctx, recipient_account_id).await?;
     let token_holding = TokenHolding::try_from(&recipient_acc.data)?;
