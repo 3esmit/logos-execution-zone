@@ -235,7 +235,7 @@ mod tests {
         // sides use, so this also guards against the two drifting.
         let home = tempdir().unwrap();
         let holder = AccountId::new([5; 32]);
-        let (id, account) = bridge_lock_core::build_holding_account(holder, 42);
+        let (id, account) = cross_zone::build_holding_account(holder, 42);
 
         let storage = IndexerStore::open_db(home.as_ref(), vec![(id, account)]).unwrap();
 

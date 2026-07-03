@@ -6,13 +6,12 @@ use std::{
 
 use anyhow::{Result, bail};
 use common::{block::Block, transaction::LeeTransaction};
+use cross_zone::{build_dispatch_from_emission, extract_emission};
 use cross_zone_inbox_core::{
-    CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId,
-    build_dispatch_from_emission, extract_emission, message_key,
+    CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::StreamExt as _;
-use lee::{PublicKey, program::Program};
-use lee_core::program::ProgramId;
+use lee::PublicKey;
 use log::{error, info};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -63,16 +62,15 @@ impl PeerBlocks {
     }
 }
 
-/// The indexer-side Option B verifier. For every cross-zone dispatch in a block
-/// it re-derives the transaction from the peer's finalized block and rejects it
-/// if the bytes differ (a forgery) or the message was already delivered (a
-/// replay), so delivery no longer relies on trusting the sequencer.
+/// The indexer-side Option B verifier.
+///
+/// For every cross-zone dispatch in a block it re-derives the transaction from
+/// the peer's finalized block and rejects it if the bytes differ (a forgery) or
+/// the message was already delivered (a replay), so delivery no longer relies on
+/// trusting the sequencer.
 #[derive(Clone)]
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
-    inbox_id: ProgramId,
-    ping_sender_id: ProgramId,
-    bridge_lock_id: ProgramId,
     /// Pinned block-signing key per peer zone, enforced during re-derivation.
     peer_pubkeys: HashMap<ZoneId, PublicKey>,
     peers: PeerBlocks,
@@ -108,9 +106,6 @@ impl CrossZoneVerifier {
 
         Some(Self {
             self_zone,
-            inbox_id: Program::cross_zone_inbox().id(),
-            ping_sender_id: Program::ping_sender().id(),
-            bridge_lock_id: Program::bridge_lock().id(),
             peer_pubkeys,
             peers,
             seen: Arc::new(RwLock::new(HashSet::new())),
@@ -121,7 +116,7 @@ impl CrossZoneVerifier {
     /// first forged or replayed dispatch. The caller halts ingestion on error.
     pub async fn verify_block(&self, block: &Block) -> Result<()> {
         for tx in &block.body.transactions {
-            let Some(msg) = self.decode_dispatch(tx) else {
+            let Some(msg) = Self::decode_dispatch(tx) else {
                 continue;
             };
 
@@ -156,11 +151,11 @@ impl CrossZoneVerifier {
 
     /// Decodes a transaction into the cross-zone message it dispatches, or `None`
     /// if it is not an inbox dispatch.
-    fn decode_dispatch(&self, tx: &LeeTransaction) -> Option<CrossZoneMessage> {
+    fn decode_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_id != self.inbox_id {
+        if public_tx.message().program_id != programs::cross_zone_inbox().id() {
             return None;
         }
         match risc0_zkvm::serde::from_slice::<InboxInstruction, _>(
@@ -180,20 +175,20 @@ impl CrossZoneVerifier {
 
         // Equivocation defense: the source block must be signed by the peer's
         // pinned block-signing key, not merely inscribed on the channel.
-        if let Some(expected) = self.peer_pubkeys.get(&msg.src_zone) {
-            if !peer_block.is_signed_by(expected) {
-                bail!(
-                    "forged cross-zone dispatch: peer zone {} block {} is not signed by the pinned block-signing key",
-                    hex::encode(msg.src_zone),
-                    msg.src_block_id
-                );
-            }
+        if let Some(expected) = self.peer_pubkeys.get(&msg.src_zone)
+            && !peer_block.is_signed_by(expected)
+        {
+            bail!(
+                "forged cross-zone dispatch: peer zone {} block {} is not signed by the pinned block-signing key",
+                hex::encode(msg.src_zone),
+                msg.src_block_id
+            );
         }
 
         let emission_tx = peer_block
             .body
             .transactions
-            .get(msg.src_tx_index as usize)
+            .get(usize::try_from(msg.src_tx_index).expect("u32 index fits in usize"))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "src_tx_index {} out of range in peer block",
@@ -205,22 +200,16 @@ impl CrossZoneVerifier {
             bail!("peer emission transaction is not public");
         };
         let message = emission_tx.message();
-        let emission = extract_emission(
-            message.program_id,
-            &message.instruction_data,
-            self.ping_sender_id,
-            self.bridge_lock_id,
-        )
-        .ok_or_else(|| {
-            anyhow::anyhow!("peer transaction at src_tx_index is not a recognized emitter")
-        })?;
+        let emission =
+            extract_emission(message.program_id, &message.instruction_data).ok_or_else(|| {
+                anyhow::anyhow!("peer transaction at src_tx_index is not a recognized emitter")
+            })?;
 
         if emission.target_zone != self.self_zone {
             bail!("peer emission targets a different zone");
         }
 
         Ok(build_dispatch_from_emission(
-            self.inbox_id,
             msg.src_zone,
             msg.src_block_id,
             msg.src_tx_index,
@@ -259,7 +248,7 @@ impl CrossZoneVerifier {
                     block_id
                 );
             }
-            if !waited.is_zero() && waited.as_secs() % LAG_LOG_INTERVAL.as_secs() == 0 {
+            if !waited.is_zero() && waited.as_secs().is_multiple_of(LAG_LOG_INTERVAL.as_secs()) {
                 info!(
                     "Waiting for peer zone {} to finalize block {} ({}s); reader is behind",
                     hex::encode(zone),
@@ -268,12 +257,16 @@ impl CrossZoneVerifier {
                 );
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
-            waited += Duration::from_secs(1);
+            waited = waited.saturating_add(Duration::from_secs(1));
         }
     }
 }
 
 /// Reads a peer zone's finalized blocks from Bedrock into the shared cache.
+#[expect(
+    clippy::infinite_loop,
+    reason = "the peer reader runs for the lifetime of the indexer process"
+)]
 async fn read_peer(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
     peer_zone: ZoneId,
@@ -319,7 +312,6 @@ mod tests {
     use common::test_utils::produce_dummy_block;
     use lee::{
         PrivateKey, PublicKey, PublicTransaction,
-        program::Program,
         public_transaction::{Message, WitnessSet},
     };
     use ping_core::{SenderInstruction, ping_record_pda};
@@ -337,27 +329,24 @@ mod tests {
     fn verifier_with_pinned_keys(peer_pubkeys: HashMap<ZoneId, PublicKey>) -> CrossZoneVerifier {
         CrossZoneVerifier {
             self_zone: SELF_ZONE,
-            inbox_id: Program::cross_zone_inbox().id(),
-            ping_sender_id: Program::ping_sender().id(),
-            bridge_lock_id: Program::bridge_lock().id(),
             peer_pubkeys,
             peers: PeerBlocks::default(),
             seen: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
-    /// A ping_sender emission addressed to `SELF_ZONE` carrying `payload`.
+    /// A `ping_sender` emission addressed to `SELF_ZONE` carrying `payload`.
     fn emission(payload: &[u8]) -> LeeTransaction {
-        let receiver_id = Program::ping_receiver().id();
+        let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
-            outbox_program_id: Program::cross_zone_outbox().id(),
+            outbox_program_id: programs::cross_zone_outbox().id(),
             target_zone: SELF_ZONE,
             target_program_id: receiver_id,
             target_accounts: vec![ping_record_pda(receiver_id).into_value()],
             payload: payload.to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(Program::ping_sender().id(), vec![], vec![], send)
+        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
             .expect("emission serializes");
         LeeTransaction::Public(PublicTransaction::new(
             message,
@@ -367,13 +356,12 @@ mod tests {
 
     /// The dispatch a watcher would inject for a `PEER_BLOCK_ID` emission of `payload`.
     fn dispatch(payload: &[u8]) -> LeeTransaction {
-        let receiver_id = Program::ping_receiver().id();
+        let receiver_id = programs::ping_receiver().id();
         LeeTransaction::Public(build_dispatch_from_emission(
-            Program::cross_zone_inbox().id(),
             PEER_ZONE,
             PEER_BLOCK_ID,
             0,
-            Program::ping_sender().id(),
+            programs::ping_sender().id(),
             receiver_id,
             &[ping_record_pda(receiver_id).into_value()],
             payload.to_vec(),

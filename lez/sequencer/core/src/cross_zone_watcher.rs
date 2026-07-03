@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use common::{block::Block, transaction::LeeTransaction};
-use cross_zone_inbox_core::{build_dispatch_from_emission, extract_emission};
+use cross_zone::{build_dispatch_from_emission, extract_emission};
 use futures::StreamExt as _;
-use lee::{PublicKey, program::Program};
+use lee::PublicKey;
 use lee_core::program::ProgramId;
 use log::{error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -17,20 +17,18 @@ use crate::{
     config::{BedrockConfig, CrossZoneConfig},
 };
 
-/// Spawns one watcher task per configured peer. Each task reads the peer's
-/// finalized blocks from Bedrock, recognizes outbound messages addressed to this
-/// zone, and injects the matching inbox dispatch as a sequencer-origin
-/// transaction into the local mempool.
+/// Spawns one watcher task per configured peer.
+///
+/// Each task reads the peer's finalized blocks from Bedrock, recognizes outbound
+/// messages addressed to this zone, and injects the matching inbox dispatch as a
+/// sequencer-origin transaction into the local mempool.
 pub fn spawn_watchers(
     bedrock_config: &BedrockConfig,
     cross_zone: &CrossZoneConfig,
     poll_interval: Duration,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let self_zone: [u8; 32] = *bedrock_config.channel_id.as_ref();
-    let inbox_id = Program::cross_zone_inbox().id();
-    let ping_sender_id = Program::ping_sender().id();
-    let bridge_lock_id = Program::bridge_lock().id();
 
     for peer in cross_zone.peers.clone() {
         let node = NodeHttpClient::new(
@@ -46,9 +44,6 @@ pub fn spawn_watchers(
             peer.allowed_targets,
             expected_pubkey,
             self_zone,
-            inbox_id,
-            ping_sender_id,
-            bridge_lock_id,
             poll_interval,
             mempool_handle.clone(),
         ));
@@ -56,8 +51,8 @@ pub fn spawn_watchers(
 }
 
 #[expect(
-    clippy::too_many_arguments,
-    reason = "Each parameter is an independent piece of per-peer watcher state"
+    clippy::infinite_loop,
+    reason = "the peer watcher runs for the lifetime of the sequencer process"
 )]
 async fn watch_peer(
     zone_indexer: ZoneIndexer<NodeHttpClient>,
@@ -65,9 +60,6 @@ async fn watch_peer(
     allowed_targets: Vec<ProgramId>,
     expected_pubkey: Option<PublicKey>,
     self_zone: [u8; 32],
-    inbox_id: ProgramId,
-    ping_sender_id: ProgramId,
-    bridge_lock_id: ProgramId,
     poll_interval: Duration,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
@@ -115,9 +107,6 @@ async fn watch_peer(
                             &block,
                             peer_zone,
                             self_zone,
-                            inbox_id,
-                            ping_sender_id,
-                            bridge_lock_id,
                             &allowed_targets,
                             &mempool_handle,
                         )
@@ -135,17 +124,10 @@ async fn watch_peer(
 }
 
 /// Scans one peer block for outbound messages and injects a dispatch per match.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Each parameter is an independent piece of per-block delivery state"
-)]
 async fn deliver_block(
     block: &Block,
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
-    inbox_id: ProgramId,
-    ping_sender_id: ProgramId,
-    bridge_lock_id: ProgramId,
     allowed_targets: &[ProgramId],
     mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
@@ -154,12 +136,7 @@ async fn deliver_block(
             continue;
         };
         let message = public_tx.message();
-        let Some(emission) = extract_emission(
-            message.program_id,
-            &message.instruction_data,
-            ping_sender_id,
-            bridge_lock_id,
-        ) else {
+        let Some(emission) = extract_emission(message.program_id, &message.instruction_data) else {
             continue;
         };
 
@@ -175,7 +152,6 @@ async fn deliver_block(
         }
 
         let dispatch = build_dispatch_from_emission(
-            inbox_id,
             peer_zone,
             block.header.block_id,
             u32::try_from(index).unwrap_or(u32::MAX),

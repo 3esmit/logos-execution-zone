@@ -12,8 +12,6 @@ pub mod transaction;
 // TODO: Compile only for tests
 pub mod test_utils;
 
-pub const PINATA_BASE58: &str = "EfQhKQAkX2FJiwNii2WFQsGndjvF1Mzd7RuVe7QdPLw7";
-
 #[derive(
     Default,
     Copy,

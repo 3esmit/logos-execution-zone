@@ -5,30 +5,17 @@ license = "MIT or Apache-2.0"
 resolver = "3"
 members = [
   "integration_tests",
+
   "lez/storage",
   "lee/key_protocol",
   "lee/state_machine",
   "lee/state_machine/core",
-  "lez/mempool",
-  "lez/wallet",
-  "lez/wallet-ffi",
-  "lez/common",
-  "programs/amm/core",
-  "programs/amm",
-  "programs/clock/core",
-  "programs/token/core",
-  "programs/token",
-  "programs/associated_token_account/core",
-  "programs/associated_token_account",
-  "programs/authenticated_transfer/core",
-  "programs/faucet/core",
-  "programs/bridge/core",
-  "programs/vault/core",
-  "programs/cross_zone_outbox/core",
-  "programs/cross_zone_inbox/core",
-  "programs/ping/core",
-  "programs/wrapped_token/core",
-  "programs/bridge_lock/core",
+  "lee/privacy_preserving_circuit",
+  "lee/state_machine/test_methods",
+  "lee/state_machine/test_methods/guest",
+
+  "lez",
+  "lez/system_accounts",
   "lez/sequencer/core",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
@@ -38,18 +25,43 @@ members = [
   "lez/indexer/service/protocol",
   "lez/indexer/service/rpc",
   "lez/explorer_service",
-  "program_methods",
-  "program_methods/guest",
-  "test_program_methods",
-  "test_program_methods/guest",
+  "lez/testnet_initial_state",
+  "lez/indexer/ffi",
+  "lez/keycard_wallet",
+  "lez/mempool",
+  "lez/wallet",
+  "lez/wallet-ffi",
+  "lez/common",
+  "lez/programs",
+  "lez/programs/amm",
+  "lez/programs/associated_token_account",
+  "lez/programs/authenticated_transfer",
+  "lez/programs/bridge",
+  "lez/programs/clock",
+  "lez/programs/faucet",
+  "lez/programs/pinata",
+  "lez/programs/pinata_token",
+  "lez/programs/token",
+  "lez/programs/vault",
+  "lez/programs/cross_zone_inbox",
+  "lez/programs/cross_zone_outbox",
+  "lez/programs/bridge_lock",
+  "lez/programs/wrapped_token",
+  "lez/programs/ping_sender",
+  "lez/programs/ping_receiver",
+  "lez/cross_zone",
+
+  "test_programs",
+  "test_programs/guest",
+
   "examples/program_deployment",
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
-  "lez/testnet_initial_state",
-  "lez/indexer/ffi",
-  "lez",
-  "lez/keycard_wallet",
+
+  "build_utils",
+
   "test_fixtures",
+
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
@@ -74,23 +86,29 @@ wallet = { path = "lez/wallet" }
 wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
 indexer_ffi = { path = "lez/indexer/ffi" }
 lez = { path = "lez" }
-clock_core = { path = "programs/clock/core" }
-token_core = { path = "programs/token/core" }
-token_program = { path = "programs/token" }
-amm_core = { path = "programs/amm/core" }
-amm_program = { path = "programs/amm" }
-ata_core = { path = "programs/associated_token_account/core" }
-ata_program = { path = "programs/associated_token_account" }
-authenticated_transfer_core = { path = "programs/authenticated_transfer/core" }
-faucet_core = { path = "programs/faucet/core" }
-bridge_core = { path = "programs/bridge/core" }
-vault_core = { path = "programs/vault/core" }
-cross_zone_outbox_core = { path = "programs/cross_zone_outbox/core" }
-cross_zone_inbox_core = { path = "programs/cross_zone_inbox/core" }
-ping_core = { path = "programs/ping/core" }
-wrapped_token_core = { path = "programs/wrapped_token/core" }
-bridge_lock_core = { path = "programs/bridge_lock/core" }
-test_program_methods = { path = "test_program_methods" }
+programs = { path = "lez/programs", default-features = false, features = [
+  "artifacts",
+] }
+system_accounts = { path = "lez/system_accounts" }
+clock_core = { path = "lez/programs/clock/core" }
+token_core = { path = "lez/programs/token/core" }
+token_program = { path = "lez/programs/token" }
+amm_core = { path = "lez/programs/amm/core" }
+amm_program = { path = "lez/programs/amm" }
+associated_token_account_core = { path = "lez/programs/associated_token_account/core" }
+ata_program = { path = "lez/programs/associated_token_account" }
+authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
+faucet_core = { path = "lez/programs/faucet/core" }
+bridge_core = { path = "lez/programs/bridge/core" }
+vault_core = { path = "lez/programs/vault/core" }
+cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
+cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
+bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
+wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
+ping_core = { path = "lez/programs/ping_core" }
+cross_zone = { path = "lez/cross_zone" }
+build_utils = { path = "build_utils" }
+test_programs = { path = "test_programs" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
 keycard_wallet = { path = "lez/keycard_wallet" }
 test_fixtures = { path = "test_fixtures" }
@@ -127,6 +145,7 @@ hex = "0.4.3"
 bytemuck = "1.24.0"
 bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
+arc-swap = "1.7"
 humantime = "2.1"
 aes-gcm = "0.10.3"
 toml = "0.9.8"

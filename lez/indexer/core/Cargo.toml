@@ -12,13 +12,14 @@ common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
 lee_core.workspace = true
-cross_zone_inbox_core = { workspace = true, features = ["host"] }
-bridge_lock_core = { workspace = true, features = ["host"] }
-ping_core.workspace = true
+cross_zone.workspace = true
+cross_zone_inbox_core.workspace = true
+programs.workspace = true
 storage.workspace = true
 testnet_initial_state.workspace = true
 
 anyhow.workspace = true
+arc-swap.workspace = true
 log.workspace = true
 serde.workspace = true
 humantime-serde.workspace = true
@@ -35,3 +36,5 @@ hex.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 authenticated_transfer_core.workspace = true
+ping_core.workspace = true
+bridge_lock_core.workspace = true

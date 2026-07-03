@@ -42,6 +42,7 @@ pub use types::*;
 use crate::error::print_error;
 
 pub mod account;
+pub mod bridge;
 pub mod error;
 pub mod generic_transaction;
 pub mod keys;
@@ -50,6 +51,7 @@ pub mod program_deployment;
 pub mod sync;
 pub mod transfer;
 pub mod types;
+pub mod vault;
 pub mod wallet;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();

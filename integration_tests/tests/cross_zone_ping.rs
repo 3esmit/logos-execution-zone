@@ -1,7 +1,6 @@
 #![expect(
     clippy::tests_outside_test_module,
-    clippy::arithmetic_side_effects,
-    reason = "We don't care about these in tests"
+    reason = "top-level test functions are conventional for integration tests"
 )]
 
 //! End-to-end cross-zone round trip: a ping submitted on zone A is delivered by
@@ -21,7 +20,7 @@ use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{setup_bedrock_node, setup_sequencer},
 };
-use lee::{AccountId, PublicTransaction, program::Program, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer};
@@ -44,7 +43,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     let zone_a: [u8; 32] = *channel_a.as_ref();
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
-    let receiver_id = Program::ping_receiver().id();
+    let receiver_id = programs::ping_receiver().id();
 
     // Zone B watches zone A and allows delivery only to ping_receiver.
     let cross_zone = CrossZoneConfig {
@@ -81,10 +80,10 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     Ok(())
 }
 
-/// Builds a top-level ping_sender transaction that chains into the outbox to emit
+/// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
 /// a message carrying a `ping_receiver::Record` instruction for the target zone.
 fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransaction {
-    let outbox_id = Program::cross_zone_outbox().id();
+    let outbox_id = programs::cross_zone_outbox().id();
     let ordinal = 0;
 
     // The payload is the ping_receiver instruction, serialized as risc0 words in
@@ -106,7 +105,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
 
     let outbox_account = outbox_pda(outbox_id, &target_zone, ordinal);
     let message = Message::try_new(
-        Program::ping_sender().id(),
+        programs::ping_sender().id(),
         vec![outbox_account],
         vec![],
         send,

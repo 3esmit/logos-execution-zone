@@ -1,0 +1,11 @@
+[package]
+name = "build_utils"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+
+[dependencies]
+anyhow.workspace = true
+risc0-binfmt = "3.0.2"

@@ -1,6 +1,5 @@
 #![expect(
     clippy::print_stdout,
-    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -17,7 +16,7 @@ use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
@@ -620,9 +619,9 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program, |_| Ok(()))
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
             .await
     }
 
@@ -630,7 +629,7 @@ impl WalletCore {
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
-        program: &ProgramWithDependencies,
+        program_id: ProgramId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
@@ -653,7 +652,6 @@ impl WalletCore {
         )?;
 
         let account_ids = acc_manager.public_account_ids();
-        let program_id = program.program.id();
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(
@@ -870,5 +868,28 @@ impl WalletCore {
     #[must_use]
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{ffi::CString, str::FromStr as _};
+
+    use bip39::Mnemonic;
+
+    #[test]
+    fn mnemonic_roundtrip() {
+        let mnemonic =
+            Mnemonic::from_entropy(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]).unwrap();
+
+        let c_mnemonic_string = CString::new(mnemonic.to_string()).unwrap();
+        let c_mnemonic_string_raw = c_mnemonic_string.into_raw();
+        // Safety: Will be safe, pointer is created from CString
+        let c_str = unsafe { CString::from_raw(c_mnemonic_string_raw) };
+        let mn_string = c_str.to_str().unwrap();
+
+        let mn_ret = Mnemonic::from_str(mn_string).unwrap();
+
+        assert_eq!(mnemonic, mn_ret);
     }
 }

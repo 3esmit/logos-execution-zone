@@ -22,7 +22,6 @@ use integration_tests::{
 };
 use lee::{
     PublicTransaction,
-    program::Program,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -40,13 +39,13 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .context("Failed to set up sequencer")?;
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
-    let inbox_id = Program::cross_zone_inbox().id();
+    let inbox_id = programs::cross_zone_inbox().id();
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 1,
         src_tx_index: 0,
         src_program_id: [9; 8],
-        target_program_id: Program::ping_receiver().id(),
+        target_program_id: programs::ping_receiver().id(),
         payload: vec![],
         l1_inclusion_witness: None,
     };

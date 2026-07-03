@@ -1,16 +1,18 @@
 //! Wallet lifecycle management functions.
 
 use std::{
-    ffi::{c_char, CStr},
+    ffi::{c_char, CStr, CString},
     path::PathBuf,
     ptr,
+    str::FromStr as _,
     sync::Mutex,
 };
 
-use wallet::WalletCore;
+use bip39::Mnemonic;
+use wallet::{cli::execute_keys_restoration, WalletCore};
 
 use crate::{
-    c_str_to_string,
+    block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::WalletHandle,
 };
@@ -18,6 +20,22 @@ use crate::{
 /// Internal wrapper around `WalletCore` with mutex for thread safety.
 pub(crate) struct WalletWrapper {
     pub core: Mutex<WalletCore>,
+}
+
+#[repr(C)]
+pub struct FfiCreateWalletOutput {
+    pub wallet: *mut WalletHandle,
+    /// C compatible(null terminated) string.
+    pub mnemonic: *mut c_char,
+}
+
+impl Default for FfiCreateWalletOutput {
+    fn default() -> Self {
+        Self {
+            wallet: std::ptr::null_mut(),
+            mnemonic: std::ptr::null_mut(),
+        }
+    }
 }
 
 /// Helper to get the wallet wrapper from an opaque handle.
@@ -71,8 +89,8 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
 /// - `password`: Password for encrypting the wallet seed
 ///
 /// # Returns
-/// - Opaque wallet handle on success
-/// - Null pointer on error (call `wallet_ffi_get_last_error()` for details)
+/// - Result, which contains opaque wallet handle and mnemonic words on success
+/// - Result with null pointers on error (call `wallet_ffi_get_last_error()` for details)
 ///
 /// # Safety
 /// All string parameters must be valid null-terminated UTF-8 strings.
@@ -81,29 +99,40 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
     config_path: *const c_char,
     storage_path: *const c_char,
     password: *const c_char,
-) -> *mut WalletHandle {
+) -> FfiCreateWalletOutput {
     let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
-        return ptr::null_mut();
+        return FfiCreateWalletOutput::default();
     };
 
     let Ok(storage_path) = c_str_to_path(storage_path, "storage_path") else {
-        return ptr::null_mut();
+        return FfiCreateWalletOutput::default();
     };
 
     let Ok(password) = c_str_to_string(password, "password") else {
-        return ptr::null_mut();
+        return FfiCreateWalletOutput::default();
     };
 
     match WalletCore::new_init_storage(config_path, storage_path, None, &password) {
-        Ok((core, _mnemonic)) => {
+        Ok((core, mnemonic)) => {
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });
-            Box::into_raw(wrapper).cast::<WalletHandle>()
+            let handle = Box::into_raw(wrapper).cast::<WalletHandle>();
+
+            let Ok(c_mnemonic_string) = CString::new(mnemonic.to_string()) else {
+                return FfiCreateWalletOutput::default();
+            };
+
+            let raw_pointer = CString::into_raw(c_mnemonic_string);
+
+            FfiCreateWalletOutput {
+                wallet: handle,
+                mnemonic: raw_pointer,
+            }
         }
         Err(e) => {
             print_error(format!("Failed to create wallet: {e}"));
-            ptr::null_mut()
+            FfiCreateWalletOutput::default()
         }
     }
 }
@@ -201,6 +230,81 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
             print_error(format!("Failed to save wallet: {e}"));
             WalletFfiError::StorageError
         }
+    }
+}
+
+/// Restore wallet data from mnemonic and password.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `mnemonic`: Valid pointer to instance of `* char`, provided by `wallet_ffi_create_new`
+/// - `password`: Valid pointer to C string.
+/// - `depth`: Depth of a reconstructed tree
+///
+/// # Returns
+/// - `Success` on successful restoration
+/// - Error code on failure
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `mnemonic` must be a valid pointer to instance of `* char`, provided by
+///   `wallet_ffi_create_new`
+/// - `password` must be a valid pointer to C string.
+/// - `depth` parameter induces exponential growth in execution time, be aware of it.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_restore_data(
+    handle: *mut WalletHandle,
+    mnemonic: *const c_char,
+    password: *const c_char,
+    depth: u32,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let mut wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let Ok(password) = c_str_to_string(password, "password") else {
+        return WalletFfiError::NullPointer;
+    };
+
+    let Ok(mnemonic) = c_str_to_string(mnemonic, "mnemonic") else {
+        return WalletFfiError::NullPointer;
+    };
+
+    let mnemonic = match Mnemonic::from_str(&mnemonic) {
+        Ok(mn) => mn,
+        Err(e) => {
+            print_error(format!("Failed to parse mnemonic: {e}"));
+            return WalletFfiError::SerializationError;
+        }
+    };
+
+    let res = match wallet.restore_storage(&mnemonic, &password) {
+        Ok(()) => WalletFfiError::Success,
+        Err(e) => {
+            print_error(format!("Failed to restore wallet data: {e}"));
+            WalletFfiError::StorageError
+        }
+    };
+
+    if res == WalletFfiError::Success {
+        match block_on(execute_keys_restoration(&mut wallet, depth)) {
+            Ok(()) => WalletFfiError::Success,
+            Err(err) => {
+                print_error(format!("Failed to restore wallet data: {err}"));
+                WalletFfiError::StorageError
+            }
+        }
+    } else {
+        res
     }
 }
 

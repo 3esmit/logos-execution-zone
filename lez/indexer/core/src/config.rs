@@ -1,9 +1,4 @@
-use std::{
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fs::File, io::BufReader, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
@@ -23,8 +18,6 @@ pub struct ClientConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexerConfig {
-    /// Home dir of indexer storage.
-    pub home: PathBuf,
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,

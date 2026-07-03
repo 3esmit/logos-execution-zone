@@ -429,7 +429,7 @@ async fn initialize_private_account() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
     assert_eq!(account.balance, 0);
     assert!(account.data.is_empty());
@@ -526,7 +526,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
 
     info!("Successfully initialized private account using label");
@@ -646,23 +646,20 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let binary = std::fs::read(
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
-    )?;
+    let faucet_chain_caller = test_programs::faucet_chain_caller();
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(binary.clone()),
+        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     info!("Waiting for deploy block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_account_id = lee::system_faucet_account_id();
+    let faucet_account_id = system_accounts::faucet_account_id();
     let attacker_id = ctx.existing_public_accounts()[0];
-    let faucet_program_id = Program::faucet().id();
-    let vault_program_id = Program::vault().id();
-    let auth_transfer_program_id = Program::authenticated_transfer_program().id();
+    let faucet_program_id = programs::faucet().id();
+    let vault_program_id = programs::vault().id();
+    let auth_transfer_program_id = programs::authenticated_transfer().id();
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
@@ -689,16 +686,12 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         attacker_vault_id,
     );
 
-    let faucet_chain_caller = Program::new(binary)?;
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
-            (faucet_program_id, Program::faucet()),
-            (vault_program_id, Program::vault()),
-            (
-                auth_transfer_program_id,
-                Program::authenticated_transfer_program(),
-            ),
+            (faucet_program_id, programs::faucet()),
+            (vault_program_id, programs::vault()),
+            (auth_transfer_program_id, programs::authenticated_transfer()),
         ]
         .into(),
     );

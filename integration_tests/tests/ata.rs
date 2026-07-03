@@ -7,12 +7,11 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use ata_core::{compute_ata_seed, get_associated_token_account_id};
+use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
-use lee::program::Program;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
@@ -93,7 +92,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -105,7 +104,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -168,7 +167,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // State must be unchanged
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -180,7 +179,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -220,7 +219,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive ATA addresses
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let sender_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(sender_account_id, definition_account_id),
@@ -389,7 +388,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(owner_account_id, definition_account_id),
@@ -401,7 +400,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
         .await
         .context("ATA account not found")?;
 
-    assert_eq!(ata_acc.program_owner, Program::token().id());
+    assert_eq!(ata_acc.program_owner, programs::token().id());
     let holding = TokenHolding::try_from(&ata_acc.data)?;
     assert_eq!(
         holding,
@@ -448,7 +447,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive ATA addresses
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let sender_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(sender_account_id, definition_account_id),
@@ -572,7 +571,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive holder's ATA address
-    let ata_program_id = Program::ata().id();
+    let ata_program_id = programs::ata().id();
     let holder_ata_id = get_associated_token_account_id(
         &ata_program_id,
         &compute_ata_seed(holder_account_id, definition_account_id),

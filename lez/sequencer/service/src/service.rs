@@ -5,7 +5,7 @@ use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
 };
-use lee::{self, program::Program};
+use lee;
 use log::warn;
 use mempool::MemPoolHandle;
 use sequencer_core::{
@@ -77,15 +77,14 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         // watcher; a user must not invoke them top-level, or anyone could forge
         // an inbound cross-zone delivery. Chained user calls are already rejected
         // by the inbox guest's caller-is-none assertion.
-        if let LeeTransaction::Public(public_tx) = &authenticated_tx {
-            if sequencer_core::is_sequencer_only_program(public_tx.message().program_id) {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    "Program is sequencer-only and cannot be invoked by a user transaction"
-                        .to_string(),
-                    None::<()>,
-                ));
-            }
+        if let LeeTransaction::Public(public_tx) = &authenticated_tx
+            && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+        {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                "Program is sequencer-only and cannot be invoked by a user transaction".to_owned(),
+                None::<()>,
+            ));
         }
 
         self.mempool_handle
@@ -176,14 +175,15 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
+        // TODO: Get programs from state
         let mut program_ids = BTreeMap::new();
         program_ids.insert(
             "authenticated_transfer".to_owned(),
-            Program::authenticated_transfer_program().id(),
+            programs::authenticated_transfer().id(),
         );
-        program_ids.insert("token".to_owned(), Program::token().id());
-        program_ids.insert("pinata".to_owned(), Program::pinata().id());
-        program_ids.insert("amm".to_owned(), Program::amm().id());
+        program_ids.insert("token".to_owned(), programs::token().id());
+        program_ids.insert("pinata".to_owned(), programs::pinata().id());
+        program_ids.insert("amm".to_owned(), programs::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),
             lee::PRIVACY_PRESERVING_CIRCUIT_ID,

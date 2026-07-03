@@ -18,8 +18,10 @@ testnet_initial_state.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
-cross_zone_inbox_core = { workspace = true, features = ["host"] }
-bridge_lock_core = { workspace = true, features = ["host"] }
+programs.workspace = true
+system_accounts.workspace = true
+cross_zone.workspace = true
+cross_zone_inbox_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
@@ -48,6 +50,7 @@ mock = []
 
 [dev-dependencies]
 futures.workspace = true
-test_program_methods.workspace = true
+test_programs.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
+token_core.workspace = true

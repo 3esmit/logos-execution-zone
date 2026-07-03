@@ -1,7 +1,6 @@
 #![expect(
     clippy::tests_outside_test_module,
-    clippy::arithmetic_side_effects,
-    reason = "We don't care about these in tests"
+    reason = "top-level test functions are conventional for integration tests"
 )]
 
 //! Two zones (sequencer + indexer each, on separate channels) sharing one

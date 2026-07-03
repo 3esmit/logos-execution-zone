@@ -1,15 +1,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use clock_core::ClockAccountData;
-pub use clock_core::{
-    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    CLOCK_PROGRAM_ACCOUNT_IDS,
-};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId, Nonce},
+    account::{Account, AccountId},
     program::ProgramId,
 };
 
@@ -124,18 +119,15 @@ pub struct V03State {
 
 impl Default for V03State {
     fn default() -> Self {
-        let faucet_account_id = system_faucet_account_id();
-        let faucet_account = system_faucet_account();
-        let bridge_account_id = system_bridge_account_id();
-        let bridge_account = system_bridge_account();
-        let mut public_state = HashMap::new();
-        public_state.insert(faucet_account_id, faucet_account);
-        public_state.insert(bridge_account_id, bridge_account);
+        let mut commitment_set = CommitmentSet::with_capacity(32);
+        commitment_set.extend(&[DUMMY_COMMITMENT]);
+        let nullifier_set = NullifierSet::new();
+        let private_state = (commitment_set, nullifier_set);
 
         Self {
-            public_state,
-            private_state: (CommitmentSet::with_capacity(32), NullifierSet::new()),
-            programs: HashMap::new(),
+            public_state: HashMap::default(),
+            private_state,
+            programs: HashMap::default(),
         }
     }
 }
@@ -146,106 +138,68 @@ impl V03State {
         Self::default()
     }
 
+    /// Initializes state with given public account balances leaving other account fields at their
+    /// default values.
     #[must_use]
-    pub fn new_with_genesis_accounts(
-        initial_data: &[(AccountId, u128)],
-        initial_private_accounts: Vec<(Commitment, Nullifier)>,
-        genesis_timestamp: lee_core::Timestamp,
+    pub fn with_public_account_balances(
+        mut self,
+        balances: impl IntoIterator<Item = (AccountId, u128)>,
     ) -> Self {
-        let faucet_account_id = system_faucet_account_id();
-        let bridge_account_id = system_bridge_account_id();
-        let authenticated_transfer_program = Program::authenticated_transfer_program();
-        let mut public_state: HashMap<_, _> = initial_data
-            .iter()
-            .copied()
-            .map(|(account_id, balance)| {
-                let account = Account {
-                    balance,
-                    program_owner: authenticated_transfer_program.id(),
-                    ..Account::default()
-                };
-                (account_id, account)
-            })
-            .collect();
-        let faucet_account = system_faucet_account();
-        let bridge_account = system_bridge_account();
-        public_state.insert(faucet_account_id, faucet_account);
-        public_state.insert(bridge_account_id, bridge_account);
-
-        let mut commitment_set = CommitmentSet::with_capacity(32);
-        commitment_set.extend(&[DUMMY_COMMITMENT]);
-        let (commitments, nullifiers): (Vec<Commitment>, Vec<Nullifier>) =
-            initial_private_accounts.into_iter().unzip();
-        commitment_set.extend(&commitments);
-        let mut nullifier_set = NullifierSet::new();
-        nullifier_set.extend(&nullifiers);
-        let private_state = (commitment_set, nullifier_set);
-
-        let mut this = Self {
-            public_state,
-            private_state,
-            programs: HashMap::new(),
-        };
-
-        this.insert_program(Program::clock());
-        this.insert_clock_accounts(genesis_timestamp);
-
-        this.insert_program(Program::authenticated_transfer_program());
-        this.insert_program(Program::token());
-        this.insert_program(Program::amm());
-        this.insert_program(Program::ata());
-        this.insert_program(Program::vault());
-        this.insert_program(Program::faucet());
-        this.insert_program(Program::bridge());
-        this.insert_program(Program::cross_zone_outbox());
-        this.insert_program(Program::cross_zone_inbox());
-        this.insert_program(Program::ping_sender());
-        this.insert_program(Program::ping_receiver());
-        this.insert_program(Program::bridge_lock());
-        this.insert_program(Program::wrapped_token());
-
-        // Seed the wrapped-token config with its authorized minter (the cross-zone
-        // inbox), so the guest can pin its caller without importing the inbox id.
-        let wrapped_token_id = Program::wrapped_token().id();
-        this.public_state.insert(
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            Account {
-                program_owner: wrapped_token_id,
-                data: wrapped_token_core::minter_bytes(Program::cross_zone_inbox().id())
-                    .to_vec()
-                    .try_into()
-                    .expect("minter id fits in account data"),
-                ..Account::default()
-            },
-        );
-
-        this
-    }
-
-    fn insert_clock_accounts(&mut self, genesis_timestamp: lee_core::Timestamp) {
-        let data = ClockAccountData {
-            block_id: 0,
-            timestamp: genesis_timestamp,
-        }
-        .to_bytes();
-        let clock_program_id = Program::clock().id();
-        for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
-            self.public_state.insert(
+        let public_accounts = balances.into_iter().map(|(account_id, balance)| {
+            (
                 account_id,
                 Account {
-                    program_owner: clock_program_id,
-                    data: data
-                        .clone()
-                        .try_into()
-                        .expect("Clock account data should fit within accounts data"),
+                    balance,
                     ..Account::default()
                 },
-            );
+            )
+        });
+        self.public_state.extend(public_accounts);
+        self
+    }
+
+    /// Initializes state with given public accounts.
+    #[must_use]
+    pub fn with_public_accounts(
+        mut self,
+        public_accounts: impl IntoIterator<Item = (AccountId, Account)>,
+    ) -> Self {
+        self.public_state.extend(public_accounts);
+        self
+    }
+
+    /// Initializes state with given private accounts.
+    #[must_use]
+    pub fn with_private_accounts(
+        mut self,
+        private_accounts: impl IntoIterator<Item = (Commitment, Nullifier)>,
+    ) -> Self {
+        let (commitments, nullifiers): (Vec<Commitment>, Vec<Nullifier>) =
+            private_accounts.into_iter().unzip();
+        self.private_state.0.extend(&commitments);
+        self.private_state.1.extend(&nullifiers);
+        self
+    }
+
+    /// Initializes state with given builtin programs.
+    #[must_use]
+    pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
+        for program in programs {
+            self.insert_program(program);
         }
+        self
     }
 
     pub(crate) fn insert_program(&mut self, program: Program) {
         self.programs.insert(program.id(), program);
+    }
+
+    /// Seeds a single genesis account that is not produced by any transaction
+    /// (e.g. the cross-zone inbox config or a bridge-lock holding). Lets the
+    /// sequencer and indexer seed identical zone-specific state after building
+    /// the shared initial state.
+    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
+        self.public_state.insert(account_id, account);
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -363,75 +317,11 @@ impl V03State {
     }
 }
 
-// TODO: Testnet only. Refactor to prevent compilation on mainnet.
-impl V03State {
-    pub fn add_pinata_program(&mut self, account_id: AccountId) {
-        self.insert_program(Program::pinata());
-
-        self.public_state.insert(
-            account_id,
-            Account {
-                program_owner: Program::pinata().id(),
-                balance: 1_500_000,
-                // Difficulty: 3
-                data: vec![3; 33].try_into().expect("should fit"),
-                nonce: Nonce::default(),
-            },
-        );
-    }
-
-    pub fn add_pinata_token_program(&mut self, account_id: AccountId) {
-        self.insert_program(Program::pinata_token());
-
-        self.public_state.insert(
-            account_id,
-            Account {
-                program_owner: Program::pinata_token().id(),
-                // Difficulty: 3
-                data: vec![3; 33].try_into().expect("should fit"),
-                ..Account::default()
-            },
-        );
-    }
-
-    /// Inserts an account directly into genesis state, bypassing execution.
-    /// Genesis-only: used to seed configuration accounts that are not produced by
-    /// any transaction. Must never be reachable from transaction processing.
-    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
-        self.public_state.insert(account_id, account);
-    }
-}
-
 #[cfg(any(test, feature = "test-utils"))]
 impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
-}
-
-fn system_faucet_account() -> Account {
-    Account {
-        program_owner: Program::authenticated_transfer_program().id(),
-        balance: u128::MAX,
-        ..Account::default()
-    }
-}
-
-fn system_bridge_account() -> Account {
-    Account {
-        program_owner: Program::authenticated_transfer_program().id(),
-        ..Account::default()
-    }
-}
-
-#[must_use]
-pub fn system_faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(Program::faucet().id())
-}
-
-#[must_use]
-pub fn system_bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(Program::bridge().id())
 }
 
 #[cfg(test)]
@@ -444,15 +334,14 @@ pub mod tests {
 
     use std::collections::HashMap;
 
-    use authenticated_transfer_core::Instruction as AuthTransferInstruction;
     use lee_core::{
         BlockId, Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
         NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{
-            BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
-            TimestampValidityWindow, WrappedBalanceSum,
+            BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
+            ProgramId, TimestampValidityWindow, WrappedBalanceSum,
         },
     };
 
@@ -469,37 +358,41 @@ pub mod tests {
         program::Program,
         public_transaction,
         signature::PrivateKey,
-        state::{
-            CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-            CLOCK_PROGRAM_ACCOUNT_IDS, MAX_NUMBER_CHAINED_CALLS, system_bridge_account,
-            system_faucet_account,
-        },
-        system_bridge_account_id, system_faucet_account_id,
     };
 
     impl V03State {
         /// Include test programs in the builtin programs map.
         #[must_use]
         pub fn with_test_programs(mut self) -> Self {
-            self.insert_program(Program::nonce_changer_program());
-            self.insert_program(Program::extra_output_program());
-            self.insert_program(Program::missing_output_program());
-            self.insert_program(Program::program_owner_changer());
-            self.insert_program(Program::simple_balance_transfer());
-            self.insert_program(Program::data_changer());
-            self.insert_program(Program::minter());
-            self.insert_program(Program::burner());
-            self.insert_program(Program::chain_caller());
-            self.insert_program(Program::amm());
-            self.insert_program(Program::claimer());
-            self.insert_program(Program::changer_claimer());
-            self.insert_program(Program::validity_window());
-            self.insert_program(Program::flash_swap_initiator());
-            self.insert_program(Program::flash_swap_callback());
-            self.insert_program(Program::malicious_self_program_id());
-            self.insert_program(Program::malicious_caller_program_id());
-            self.insert_program(Program::time_locked_transfer());
-            self.insert_program(Program::pinata_cooldown());
+            self.insert_program(crate::test_methods::simple_balance_transfer());
+            self.insert_program(crate::test_methods::nonce_changer());
+            self.insert_program(crate::test_methods::extra_output());
+            self.insert_program(crate::test_methods::missing_output());
+            self.insert_program(crate::test_methods::program_owner_changer());
+            self.insert_program(crate::test_methods::data_changer());
+            self.insert_program(crate::test_methods::minter());
+            self.insert_program(crate::test_methods::burner());
+            self.insert_program(crate::test_methods::auth_asserting_noop());
+            self.insert_program(crate::test_methods::private_pda_delegator());
+            self.insert_program(crate::test_methods::pda_claimer());
+            self.insert_program(crate::test_methods::two_pda_claimer());
+            self.insert_program(crate::test_methods::noop());
+            self.insert_program(crate::test_methods::chain_caller());
+            self.insert_program(crate::test_methods::modified_transfer_program());
+            self.insert_program(crate::test_methods::malicious_authorization_changer());
+            self.insert_program(crate::test_methods::validity_window());
+            self.insert_program(crate::test_methods::flash_swap_initiator());
+            self.insert_program(crate::test_methods::flash_swap_callback());
+            self.insert_program(crate::test_methods::malicious_self_program_id());
+            self.insert_program(crate::test_methods::malicious_caller_program_id());
+            self.insert_program(crate::test_methods::pda_spend_proxy());
+            self.insert_program(crate::test_methods::claimer());
+            self.insert_program(crate::test_methods::changer_claimer());
+            self.insert_program(crate::test_methods::validity_window_chain_caller());
+            self.insert_program(crate::test_methods::simple_transfer_proxy());
+            self.insert_program(crate::test_methods::malicious_injector());
+            self.insert_program(crate::test_methods::malicious_launderer());
+            self.insert_program(crate::test_methods::modified_transfer_program());
             self
         }
 
@@ -535,7 +428,7 @@ pub mod tests {
         #[must_use]
         pub fn with_account_owned_by_burner_program(mut self) -> Self {
             let account = Account {
-                program_owner: Program::burner().id(),
+                program_owner: crate::test_methods::burner().id(),
                 balance: 100,
                 ..Default::default()
             };
@@ -600,6 +493,25 @@ pub mod tests {
         },
     }
 
+    fn public_state_from_balances(
+        initial_data: &[(AccountId, u128)],
+    ) -> HashMap<AccountId, Account> {
+        initial_data
+            .iter()
+            .copied()
+            .map(|(account_id, balance)| {
+                (
+                    account_id,
+                    Account {
+                        program_owner: crate::test_methods::simple_balance_transfer().id(),
+                        balance,
+                        ..Account::default()
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn transfer_transaction(
         from: AccountId,
         from_key: &PrivateKey,
@@ -611,14 +523,9 @@ pub mod tests {
     ) -> PublicTransaction {
         let account_ids = vec![from, to];
         let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-        let program_id = Program::authenticated_transfer_program().id();
-        let message = public_transaction::Message::try_new(
-            program_id,
-            account_ids,
-            nonces,
-            AuthTransferInstruction::Transfer { amount: balance },
-        )
-        .unwrap();
+        let program_id = crate::test_methods::simple_balance_transfer().id();
+        let message =
+            public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
         let witness_set =
             public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
         PublicTransaction::new(message, witness_set)
@@ -642,63 +549,17 @@ pub mod tests {
     }
 
     #[test]
-    fn genesis_system_accounts_have_expected_contents() {
-        // System-account IDs must be distinct and non-default, and the genesis
-        // faucet/bridge accounts must carry their expected field values.  Catches
-        // mutations that replace `system_faucet_account`/`system_bridge_account`
-        // with `Default::default()`, delete their `balance`/`program_owner`
-        // fields, or replace `system_bridge_account_id` with `Default::default()`.
-        let faucet_id = system_faucet_account_id();
-        let bridge_id = system_bridge_account_id();
-        assert_ne!(bridge_id, AccountId::default());
-        assert_ne!(faucet_id, bridge_id);
-
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        let default_owner = Account::default().program_owner;
-
-        let faucet = state.get_account_by_id(faucet_id);
-        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
-        assert_ne!(
-            faucet.program_owner, default_owner,
-            "faucet must have a non-default program_owner"
-        );
-
-        let bridge = state.get_account_by_id(bridge_id);
-        assert_ne!(
-            bridge.program_owner, default_owner,
-            "bridge must have a non-default program_owner"
-        );
-    }
-
-    #[test]
-    fn genesis_commitment_set_digest_differs_from_empty_state() {
-        // The genesis state inserts DUMMY_COMMITMENT, so its commitment-set digest
-        // must differ from a freshly-created empty state's all-zero root.  Catches
-        // the mutation that replaces `commitment_set_digest` with `Default::default()`.
-        let genesis = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        let empty = V03State::new();
-        assert_ne!(
-            genesis.commitment_set_digest(),
-            empty.commitment_set_digest()
-        );
-    }
-
-    #[test]
-    fn new_with_genesis() {
+    fn new_works() {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
         let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        let initial_data = [(addr1, 100_u128), (addr2, 151_u128)];
-        let authenticated_transfers_program = Program::authenticated_transfer_program();
-        let clock_program = Program::clock();
         let expected_public_state = {
             let mut this = HashMap::new();
             this.insert(
                 addr1,
                 Account {
                     balance: 100,
-                    program_owner: authenticated_transfers_program.id(),
                     ..Account::default()
                 },
             );
@@ -706,77 +567,27 @@ pub mod tests {
                 addr2,
                 Account {
                     balance: 151,
-                    program_owner: authenticated_transfers_program.id(),
-                    ..Account::default()
-                },
-            );
-            this.insert(system_faucet_account_id(), system_faucet_account());
-            this.insert(system_bridge_account_id(), system_bridge_account());
-            for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
-                this.insert(
-                    account_id,
-                    Account {
-                        program_owner: clock_program.id(),
-                        data: [0_u8; 16].to_vec().try_into().unwrap(),
-                        ..Account::default()
-                    },
-                );
-            }
-            this.insert(
-                wrapped_token_core::config_account_id(Program::wrapped_token().id()),
-                Account {
-                    program_owner: Program::wrapped_token().id(),
-                    data: wrapped_token_core::minter_bytes(Program::cross_zone_inbox().id())
-                        .to_vec()
-                        .try_into()
-                        .unwrap(),
                     ..Account::default()
                 },
             );
             this
         };
-        let expected_builtin_programs = {
-            let mut this = HashMap::new();
-            this.insert(
-                authenticated_transfers_program.id(),
-                authenticated_transfers_program,
-            );
-            this.insert(clock_program.id(), clock_program);
-            this.insert(Program::token().id(), Program::token());
-            this.insert(Program::amm().id(), Program::amm());
-            this.insert(Program::ata().id(), Program::ata());
-            this.insert(Program::vault().id(), Program::vault());
-            this.insert(Program::faucet().id(), Program::faucet());
-            this.insert(Program::bridge().id(), Program::bridge());
-            this.insert(
-                Program::cross_zone_outbox().id(),
-                Program::cross_zone_outbox(),
-            );
-            this.insert(
-                Program::cross_zone_inbox().id(),
-                Program::cross_zone_inbox(),
-            );
-            this.insert(Program::ping_sender().id(), Program::ping_sender());
-            this.insert(Program::ping_receiver().id(), Program::ping_receiver());
-            this.insert(Program::bridge_lock().id(), Program::bridge_lock());
-            this.insert(Program::wrapped_token().id(), Program::wrapped_token());
-            this
-        };
+        let expected_builtin_programs = HashMap::new();
 
-        let state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let state =
+            V03State::new().with_public_account_balances([(addr1, 100_u128), (addr2, 151_u128)]);
 
         assert_eq!(state.public_state, expected_public_state);
         assert_eq!(state.programs, expected_builtin_programs);
     }
 
     #[test]
-    fn new_with_genesis_includes_nullifiers_for_private_accounts() {
+    fn new_includes_nullifiers_for_private_accounts() {
         let keys1 = test_private_account_keys_1();
         let keys2 = test_private_account_keys_2();
 
         let account = Account {
             balance: 100,
-            program_owner: Program::authenticated_transfer_program().id(),
             ..Account::default()
         };
 
@@ -793,7 +604,7 @@ pub mod tests {
             (init_commitment2, init_nullifier2),
         ];
 
-        let state = V03State::new_with_genesis_accounts(&[], initial_private_accounts, 0);
+        let state = V03State::new().with_private_accounts(initial_private_accounts);
 
         assert!(state.private_state.1.contains(&init_nullifier1));
         assert!(state.private_state.1.contains(&init_nullifier2));
@@ -801,8 +612,8 @@ pub mod tests {
 
     #[test]
     fn insert_program() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        let program_to_insert = Program::simple_balance_transfer();
+        let mut state = V03State::new();
+        let program_to_insert = crate::test_methods::simple_balance_transfer();
         let program_id = program_to_insert.id();
         assert!(!state.programs.contains_key(&program_id));
 
@@ -815,8 +626,15 @@ pub mod tests {
     fn get_account_by_account_id_non_default_account() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-        let initial_data = [(account_id, 100_u128)];
-        let state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let initial_data = [(
+            account_id,
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        )];
+        let state = V03State::new().with_public_accounts(initial_data);
         let expected_account = &state.public_state[&account_id];
 
         let account = state.get_account_by_id(account_id);
@@ -827,7 +645,7 @@ pub mod tests {
     #[test]
     fn get_account_by_account_id_default_account() {
         let addr2 = AccountId::new([0; 32]);
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let state = V03State::new();
         let expected_account = Account::default();
 
         let account = state.get_account_by_id(addr2);
@@ -837,7 +655,7 @@ pub mod tests {
 
     #[test]
     fn builtin_programs_getter() {
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let state = V03State::new();
 
         let builtin_programs = state.programs();
 
@@ -848,8 +666,17 @@ pub mod tests {
     fn transition_from_authenticated_transfer_program_invocation_default_account_destination() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-        let initial_data = [(account_id, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let initial_data = [(
+            account_id,
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        )];
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
+            .with_test_programs();
         let from = account_id;
         let to_key = PrivateKey::try_new([2; 32]).unwrap();
         let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
@@ -869,8 +696,9 @@ pub mod tests {
     fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-        let initial_data = [(account_id, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let mut state = V03State::new()
+            .with_public_account_balances([(account_id, 100)])
+            .with_test_programs();
         let from = account_id;
         let from_key = key;
         let to_key = PrivateKey::try_new([2; 32]).unwrap();
@@ -894,8 +722,27 @@ pub mod tests {
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
         let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        let initial_data = [(account_id1, 100), (account_id2, 200)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let initial_data = [
+            (
+                account_id1,
+                Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    balance: 100,
+                    ..Account::default()
+                },
+            ),
+            (
+                account_id2,
+                Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    balance: 200,
+                    ..Account::default()
+                },
+            ),
+        ];
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
+            .with_test_programs();
         let from = account_id2;
         let from_key = key2;
         let to = account_id1;
@@ -918,8 +765,17 @@ pub mod tests {
         let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        let initial_data = [(account_id1, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let initial_data = [(
+            account_id1,
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        )];
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
+            .with_test_programs();
         let key3 = PrivateKey::try_new([3; 32]).unwrap();
         let account_id3 = AccountId::from(&PublicKey::new_from_private_key(&key3));
         let balance_to_move = 5;
@@ -954,157 +810,14 @@ pub mod tests {
         assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(1));
     }
 
-    fn clock_transaction(timestamp: lee_core::Timestamp) -> PublicTransaction {
-        let message = public_transaction::Message::try_new(
-            Program::clock().id(),
-            CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
-            vec![],
-            timestamp,
-        )
-        .unwrap();
-        PublicTransaction::new(
-            message,
-            public_transaction::WitnessSet::from_raw_parts(vec![]),
-        )
-    }
-
-    fn clock_account_data(state: &V03State, account_id: AccountId) -> (u64, lee_core::Timestamp) {
-        let data = state.get_account_by_id(account_id).data.into_inner();
-        let parsed = clock_core::ClockAccountData::from_bytes(&data);
-        (parsed.block_id, parsed.timestamp)
-    }
-
-    #[test]
-    fn clock_genesis_state_has_zero_block_id_and_genesis_timestamp() {
-        let genesis_timestamp = 1_000_000_u64;
-        let state = V03State::new_with_genesis_accounts(&[], vec![], genesis_timestamp);
-
-        let (block_id, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-
-        assert_eq!(block_id, 0);
-        assert_eq!(timestamp, genesis_timestamp);
-    }
-
-    #[test]
-    fn clock_invocation_increments_block_id() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        let tx = clock_transaction(1234);
-        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-
-        let (block_id, _) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-        assert_eq!(block_id, 1);
-    }
-
-    #[test]
-    fn clock_invocation_stores_timestamp_from_instruction() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        let block_timestamp = 1_700_000_000_000_u64;
-
-        let tx = clock_transaction(block_timestamp);
-        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-
-        let (_, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-        assert_eq!(timestamp, block_timestamp);
-    }
-
-    #[test]
-    fn clock_invocation_sequence_correctly_increments_block_id() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        for expected_block_id in 1_u64..=5 {
-            let tx = clock_transaction(expected_block_id * 1000);
-            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-
-            let (block_id, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-            assert_eq!(block_id, expected_block_id);
-            assert_eq!(timestamp, expected_block_id * 1000);
-        }
-    }
-
-    #[test]
-    fn clock_10_account_not_updated_when_block_id_not_multiple_of_10() {
-        let genesis_timestamp = 0_u64;
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], genesis_timestamp);
-
-        // Run 9 clock ticks (block_ids 1..=9), none of which are multiples of 10.
-        for tick in 1_u64..=9 {
-            let tx = clock_transaction(tick * 1000);
-            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-        }
-
-        let (block_id_10, timestamp_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
-        // The 10-block account should still reflect genesis state.
-        assert_eq!(block_id_10, 0);
-        assert_eq!(timestamp_10, genesis_timestamp);
-    }
-
-    #[test]
-    fn clock_10_account_updated_when_block_id_is_multiple_of_10() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        // Run 10 clock ticks so block_id reaches 10.
-        for tick in 1_u64..=10 {
-            let tx = clock_transaction(tick * 1000);
-            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-        }
-
-        let (block_id_1, timestamp_1) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-        let (block_id_10, timestamp_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
-        assert_eq!(block_id_1, 10);
-        assert_eq!(block_id_10, 10);
-        assert_eq!(timestamp_10, timestamp_1);
-    }
-
-    #[test]
-    fn clock_50_account_only_updated_at_multiples_of_50() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        // After 49 ticks the 50-block account should be unchanged.
-        for tick in 1_u64..=49 {
-            let tx = clock_transaction(tick * 1000);
-            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-        }
-        let (block_id_50, _) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
-        assert_eq!(block_id_50, 0);
-
-        // Tick 50 — now the 50-block account should update.
-        let tx = clock_transaction(50 * 1000);
-        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-        let (block_id_50, timestamp_50) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
-        assert_eq!(block_id_50, 50);
-        assert_eq!(timestamp_50, 50 * 1000);
-    }
-
-    #[test]
-    fn all_three_clock_accounts_updated_at_multiple_of_50() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-
-        // Advance to block 50 (a multiple of both 10 and 50).
-        for tick in 1_u64..=50 {
-            let tx = clock_transaction(tick * 1000);
-            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
-        }
-
-        let (block_id_1, ts_1) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
-        let (block_id_10, ts_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
-        let (block_id_50, ts_50) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
-
-        assert_eq!(block_id_1, 50);
-        assert_eq!(block_id_10, 50);
-        assert_eq!(block_id_50, 50);
-        assert_eq!(ts_1, ts_10);
-        assert_eq!(ts_1, ts_50);
-    }
-
     #[test]
     fn program_should_fail_if_modifies_nonces() {
         let account_id = AccountId::new([1; 32]);
-        let initial_data = [(account_id, 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_account_balances([(account_id, 100)])
+            .with_test_programs();
         let account_ids = vec![account_id];
-        let program_id = Program::nonce_changer_program().id();
+        let program_id = crate::test_methods::nonce_changer().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1124,11 +837,11 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_output_accounts_exceed_inputs() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_account_balances([(AccountId::new([1; 32]), 0)])
+            .with_test_programs();
         let account_ids = vec![AccountId::new([1; 32])];
-        let program_id = Program::extra_output_program().id();
+        let program_id = crate::test_methods::extra_output().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1151,11 +864,11 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_with_missing_output_accounts() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_account_balances([(AccountId::new([1; 32]), 100)])
+            .with_test_programs();
         let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
-        let program_id = Program::missing_output_program().id();
+        let program_id = crate::test_methods::missing_output().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1178,9 +891,16 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
-        let initial_data = [(AccountId::new([1; 32]), 0)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let initial_data = [(
+            AccountId::new([1; 32]),
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                ..Account::default()
+            },
+        )];
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
+            .with_test_programs();
         let account_id = AccountId::new([1; 32]);
         let account = state.get_account_by_id(account_id);
         // Assert the target account only differs from the default account in the program owner
@@ -1189,7 +909,7 @@ pub mod tests {
         assert_eq!(account.balance, Account::default().balance);
         assert_eq!(account.nonce, Account::default().nonce);
         assert_eq!(account.data, Account::default().data);
-        let program_id = Program::program_owner_changer().id();
+        let program_id = crate::test_methods::program_owner_changer().id();
         let message =
             public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1207,8 +927,9 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_balance() {
-        let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([255; 32]);
@@ -1218,7 +939,7 @@ pub mod tests {
         assert_ne!(account.balance, Account::default().balance);
         assert_eq!(account.nonce, Account::default().nonce);
         assert_eq!(account.data, Account::default().data);
-        let program_id = Program::program_owner_changer().id();
+        let program_id = crate::test_methods::program_owner_changer().id();
         let message =
             public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1236,8 +957,9 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
-        let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([254; 32]);
@@ -1247,7 +969,7 @@ pub mod tests {
         assert_eq!(account.balance, Account::default().balance);
         assert_ne!(account.nonce, Account::default().nonce);
         assert_eq!(account.data, Account::default().data);
-        let program_id = Program::program_owner_changer().id();
+        let program_id = crate::test_methods::program_owner_changer().id();
         let message =
             public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1265,8 +987,9 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
-        let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([253; 32]);
@@ -1276,7 +999,7 @@ pub mod tests {
         assert_eq!(account.balance, Account::default().balance);
         assert_eq!(account.nonce, Account::default().nonce);
         assert_ne!(account.data, Account::default().data);
-        let program_id = Program::program_owner_changer().id();
+        let program_id = crate::test_methods::program_owner_changer().id();
         let message =
             public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -1296,11 +1019,11 @@ pub mod tests {
     fn program_should_fail_if_transfers_balance_from_non_owned_account() {
         let sender_account_id = AccountId::new([1; 32]);
         let receiver_account_id = AccountId::new([2; 32]);
-        let initial_data = [(sender_account_id, 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_account_balances([(sender_account_id, 100)])
+            .with_test_programs();
         let balance_to_move: u128 = 1;
-        let program_id = Program::simple_balance_transfer().id();
+        let program_id = crate::test_methods::simple_balance_transfer().id();
         assert_ne!(
             state.get_account_by_id(sender_account_id).program_owner,
             program_id
@@ -1327,12 +1050,13 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_data_of_non_owned_account() {
-        let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([255; 32]);
-        let program_id = Program::data_changer().id();
+        let program_id = crate::test_methods::data_changer().id();
 
         assert_ne!(state.get_account_by_id(account_id), Account::default());
         assert_ne!(
@@ -1357,11 +1081,12 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
-        let initial_data = [];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
+            .with_test_programs();
         let account_id = AccountId::new([1; 32]);
-        let program_id = Program::minter().id();
+        let program_id = crate::test_methods::minter().id();
 
         let message =
             public_transaction::Message::try_new(program_id, vec![account_id], vec![], ()).unwrap();
@@ -1380,11 +1105,12 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
-        let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
+        let initial_data = HashMap::new();
+        let mut state = V03State::new()
+            .with_public_accounts(initial_data)
             .with_test_programs()
             .with_account_owned_by_burner_program();
-        let program_id = Program::burner().id();
+        let program_id = crate::test_methods::burner().id();
         let account_id = AccountId::new([252; 32]);
         assert_eq!(
             state.get_account_by_id(account_id).program_owner,
@@ -1462,10 +1188,7 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender, recipient],
-            Program::serialize_instruction(AuthTransferInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance_to_move).unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -1479,7 +1202,7 @@ pub mod tests {
                     identifier: 0,
                 },
             ],
-            &Program::authenticated_transfer_program().into(),
+            &crate::test_methods::simple_balance_transfer().into(),
         )
         .unwrap();
 
@@ -1501,7 +1224,7 @@ pub mod tests {
         balance_to_move: u128,
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
@@ -1520,10 +1243,7 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(AuthTransferInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance_to_move).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     epk: epk_1,
@@ -1567,7 +1287,7 @@ pub mod tests {
         balance_to_move: u128,
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
@@ -1586,10 +1306,7 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(AuthTransferInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance_to_move).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     epk,
@@ -1623,8 +1340,14 @@ pub mod tests {
         let sender_keys = test_public_account_keys_1();
         let recipient_keys = test_private_account_keys_1();
 
-        let mut state =
-            V03State::new_with_genesis_accounts(&[(sender_keys.account_id(), 200)], vec![], 0);
+        let mut state = V03State::new().with_public_accounts([(
+            sender_keys.account_id(),
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                balance: 200,
+                ..Account::default()
+            },
+        )]);
 
         let balance_to_move = 37;
 
@@ -1665,15 +1388,14 @@ pub mod tests {
         let sender_nonce = Nonce(0xdead_beef);
 
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             nonce: sender_nonce,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0)
-            .with_private_account(&sender_keys, &sender_private_account);
+        let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
 
         let balance_to_move = 37;
 
@@ -1690,7 +1412,7 @@ pub mod tests {
         let expected_new_commitment_1 = Commitment::new(
             &sender_account_id,
             &Account {
-                program_owner: Program::authenticated_transfer_program().id(),
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
@@ -1704,7 +1426,7 @@ pub mod tests {
         let expected_new_commitment_2 = Commitment::new(
             &recipient_account_id,
             &Account {
-                program_owner: Program::authenticated_transfer_program().id(),
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 nonce: Nonce::private_account_nonce_init(&recipient_account_id),
                 balance: balance_to_move,
                 ..Account::default()
@@ -1731,14 +1453,13 @@ pub mod tests {
     fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
         let sender_keys = test_private_account_keys_1();
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             nonce: Nonce(0xdead_beef),
             ..Account::default()
         };
         let recipient_keys = test_private_account_keys_2();
-        let state = V03State::new_with_genesis_accounts(&[], vec![], 0)
-            .with_private_account(&sender_keys, &sender_private_account);
+        let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
         let tx = private_balance_transfer_for_tests(
             &sender_keys,
             &sender_private_account,
@@ -1807,19 +1528,23 @@ pub mod tests {
         let sender_nonce = Nonce(0xdead_beef);
 
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             nonce: sender_nonce,
             data: Data::default(),
         };
         let recipient_keys = test_public_account_keys_1();
         let recipient_initial_balance = 400;
-        let mut state = V03State::new_with_genesis_accounts(
-            &[(recipient_keys.account_id(), recipient_initial_balance)],
-            vec![],
-            0,
-        )
-        .with_private_account(&sender_keys, &sender_private_account);
+        let mut state = V03State::new()
+            .with_public_accounts([(
+                recipient_keys.account_id(),
+                Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    balance: recipient_initial_balance,
+                    ..Account::default()
+                },
+            )])
+            .with_private_account(&sender_keys, &sender_private_account);
 
         let balance_to_move = 37;
 
@@ -1841,7 +1566,7 @@ pub mod tests {
         let expected_new_commitment = Commitment::new(
             &sender_account_id,
             &Account {
-                program_owner: Program::authenticated_transfer_program().id(),
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
                 nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
@@ -1873,7 +1598,7 @@ pub mod tests {
 
     #[test]
     fn burner_program_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::burner();
+        let program = crate::test_methods::burner();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -1896,7 +1621,7 @@ pub mod tests {
 
     #[test]
     fn minter_program_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::minter();
+        let program = crate::test_methods::minter();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -1919,7 +1644,7 @@ pub mod tests {
 
     #[test]
     fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::nonce_changer_program();
+        let program = crate::test_methods::nonce_changer();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -1942,7 +1667,7 @@ pub mod tests {
 
     #[test]
     fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_circuit() {
-        let program = Program::data_changer();
+        let program = crate::test_methods::data_changer();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
@@ -1965,7 +1690,7 @@ pub mod tests {
 
     #[test]
     fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
-        let program = Program::data_changer();
+        let program = crate::test_methods::data_changer();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -1996,7 +1721,7 @@ pub mod tests {
 
     #[test]
     fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::extra_output_program();
+        let program = crate::test_methods::extra_output();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2019,7 +1744,7 @@ pub mod tests {
 
     #[test]
     fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::missing_output_program();
+        let program = crate::test_methods::missing_output();
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2051,7 +1776,7 @@ pub mod tests {
 
     #[test]
     fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::program_owner_changer();
+        let program = crate::test_methods::program_owner_changer();
         let public_account = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2074,7 +1799,7 @@ pub mod tests {
 
     #[test]
     fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
@@ -2106,7 +1831,7 @@ pub mod tests {
 
     #[test]
     fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2139,7 +1864,7 @@ pub mod tests {
 
     #[test]
     fn circuit_fails_if_invalid_auth_keys_are_provided() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2202,7 +1927,7 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provided() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2268,7 +1993,7 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_provided() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2334,7 +2059,7 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2400,7 +2125,7 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2467,7 +2192,7 @@ pub mod tests {
     #[test]
     fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
      {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let private_account_1 = AccountWithMetadata::new(
@@ -2534,7 +2259,7 @@ pub mod tests {
     /// second account, leaving position 1 unbound.
     #[test]
     fn private_pda_without_binding_fails() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let shared_secret =
@@ -2578,7 +2303,7 @@ pub mod tests {
     /// and binds the supplied npk to the `account_id`.
     #[test]
     fn private_pda_claim_succeeds() {
-        let program = Program::pda_claimer();
+        let program = crate::test_methods::pda_claimer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -2616,7 +2341,7 @@ pub mod tests {
     fn private_pda_npk_mismatch_fails() {
         // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
         // the mismatched pair supplied in `private_account_keys` for that pre_state.
-        let program = Program::pda_claimer();
+        let program = crate::test_methods::pda_claimer();
         let keys_a = test_private_account_keys_1();
         let keys_b = test_private_account_keys_2();
         let npk_a = keys_a.npk();
@@ -2655,8 +2380,8 @@ pub mod tests {
     /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
     #[test]
     fn caller_pda_seeds_authorize_private_pda_for_callee() {
-        let delegator = Program::private_pda_delegator();
-        let callee = Program::auth_asserting_noop();
+        let delegator = crate::test_methods::private_pda_delegator();
+        let callee = crate::test_methods::auth_asserting_noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([77; 32]);
@@ -2696,8 +2421,8 @@ pub mod tests {
     /// assertion rejects.
     #[test]
     fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
-        let delegator = Program::private_pda_delegator();
-        let callee = Program::auth_asserting_noop();
+        let delegator = crate::test_methods::private_pda_delegator();
+        let callee = crate::test_methods::auth_asserting_noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let claim_seed = PdaSeed::new([77; 32]);
@@ -2739,7 +2464,7 @@ pub mod tests {
     /// tries to record `(program, seed) → PDA_bob` and panics.
     #[test]
     fn two_private_pda_claims_under_same_seed_are_rejected() {
-        let program = Program::two_pda_claimer();
+        let program = crate::test_methods::two_pda_claimer();
         let keys_a = test_private_account_keys_1();
         let keys_b = test_private_account_keys_2();
         let seed = PdaSeed::new([55; 32]);
@@ -2786,7 +2511,7 @@ pub mod tests {
     /// the correct path for top-level reuse; this test pins the failure when no seed is provided.
     #[test]
     fn private_pda_top_level_reuse_rejected_by_binding_check() {
-        let program = Program::noop();
+        let program = crate::test_methods::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let shared_secret =
@@ -2828,15 +2553,14 @@ pub mod tests {
         let sender_nonce = Nonce(0xdead_beef);
 
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             nonce: sender_nonce,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0)
-            .with_private_account(&sender_keys, &sender_private_account);
+        let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
 
         let balance_to_move = 37;
         let balance_to_move_2 = 30;
@@ -2854,7 +2578,7 @@ pub mod tests {
             .unwrap();
 
         let sender_private_account = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: 100,
             nonce: sender_nonce,
             data: Data::default(),
@@ -2880,7 +2604,7 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_there_are_repeated_ids() {
-        let program = Program::simple_balance_transfer();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let private_account_1 = AccountWithMetadata::new(
             Account {
@@ -2929,13 +2653,14 @@ pub mod tests {
 
     #[test]
     fn claiming_mechanism() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let from_key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
         let initial_balance = 100;
         let initial_data = [(from, initial_balance)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let to_key = PrivateKey::try_new([2; 32]).unwrap();
         let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         let amount: u128 = 37;
@@ -2954,7 +2679,7 @@ pub mod tests {
             program.id(),
             vec![from, to],
             vec![Nonce(0), Nonce(0)],
-            AuthTransferInstruction::Transfer { amount },
+            amount,
         )
         .unwrap();
         let witness_set =
@@ -2970,20 +2695,16 @@ pub mod tests {
 
     #[test]
     fn unauthorized_public_account_claiming_fails() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let account_key = PrivateKey::try_new([9; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let mut state = V03State::new().with_test_programs();
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-        let message = public_transaction::Message::try_new(
-            program.id(),
-            vec![account_id],
-            vec![],
-            AuthTransferInstruction::Initialize,
-        )
-        .unwrap();
+        let message =
+            public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
+                .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
@@ -2995,10 +2716,10 @@ pub mod tests {
 
     #[test]
     fn authorized_public_account_claiming_succeeds() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let account_key = PrivateKey::try_new([10; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let mut state = V03State::new().with_test_programs();
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
 
@@ -3006,7 +2727,7 @@ pub mod tests {
             program.id(),
             vec![account_id],
             vec![Nonce(0)],
-            AuthTransferInstruction::Initialize,
+            0_u128,
         )
         .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
@@ -3026,25 +2747,26 @@ pub mod tests {
 
     #[test]
     fn public_chained_call() {
-        let program = Program::chain_caller();
+        let program = crate::test_methods::chain_caller();
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&key));
         let to = AccountId::new([2; 32]);
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let from_key = key;
         let amount: u128 = 37;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             2,
             None,
         );
 
         let expected_to_post = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: amount * 2, // The `chain_caller` chains the program twice
             ..Account::default()
         };
@@ -3071,19 +2793,20 @@ pub mod tests {
 
     #[test]
     fn execution_fails_if_chained_calls_exceeds_depth() {
-        let program = Program::chain_caller();
+        let program = crate::test_methods::chain_caller();
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&key));
         let to = AccountId::new([2; 32]);
         let initial_balance = 100;
         let initial_data = [(from, initial_balance), (to, 0)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let from_key = key;
         let amount: u128 = 0;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32")
                 + 1,
             None,
@@ -3109,24 +2832,25 @@ pub mod tests {
 
     #[test]
     fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
-        let chain_caller = Program::chain_caller();
+        let chain_caller = crate::test_methods::chain_caller();
         let pda_seed = PdaSeed::new([37; 32]);
         let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
         let to = AccountId::new([2; 32]);
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let amount: u128 = 58;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             1,
             Some(pda_seed),
         );
 
         let expected_to_post = Account {
-            program_owner: Program::authenticated_transfer_program().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
             balance: amount, // The `chain_caller` chains the program twice
             ..Account::default()
         };
@@ -3155,14 +2879,15 @@ pub mod tests {
         // The transfer is made from an initialized sender to an uninitialized recipient. And
         // it is expected that the recipient account is claimed by the authenticated transfer
         // program and not the chained_caller program.
-        let chain_caller = Program::chain_caller();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let chain_caller = crate::test_methods::chain_caller();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let from_key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
         let initial_balance = 100;
         let initial_data = [(from, initial_balance)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let to_key = PrivateKey::try_new([2; 32]).unwrap();
         let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         let amount: u128 = 37;
@@ -3172,7 +2897,7 @@ pub mod tests {
 
         let expected_to_post = Account {
             // The expected program owner is the authenticated transfer program
-            program_owner: auth_transfer.id(),
+            program_owner: simple_transfer.id(),
             balance: amount,
             nonce: Nonce(1),
             ..Account::default()
@@ -3182,7 +2907,7 @@ pub mod tests {
         // authenticated_transfer program
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             1,
             None,
         );
@@ -3208,13 +2933,13 @@ pub mod tests {
 
     #[test]
     fn unauthorized_public_account_claiming_fails_when_executed_privately() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let account_id = AccountId::new([11; 32]);
         let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![public_account],
-            Program::serialize_instruction(AuthTransferInstruction::Initialize).unwrap(),
+            Program::serialize_instruction(0_u128).unwrap(),
             vec![InputAccountIdentity::Public],
             &program.into(),
         );
@@ -3224,7 +2949,7 @@ pub mod tests {
 
     #[test]
     fn authorized_public_account_claiming_succeeds_when_executed_privately() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let program_id = program.id();
         let sender_keys = test_private_account_keys_1();
         let sender_private_account = Account {
@@ -3235,11 +2960,8 @@ pub mod tests {
         let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
         let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
-        let mut state = V03State::new_with_genesis_accounts(
-            &[],
-            vec![(sender_commitment.clone(), sender_init_nullifier)],
-            0,
-        );
+        let mut state = V03State::new()
+            .with_private_accounts([(sender_commitment.clone(), sender_init_nullifier)]);
         let sender_pre =
             AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
@@ -3254,10 +2976,7 @@ pub mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: balance,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     epk,
@@ -3307,14 +3026,14 @@ pub mod tests {
     #[test_case::test_case(2; "two calls")]
     fn private_chained_call(number_of_calls: u32) {
         // Arrange
-        let chain_caller = Program::chain_caller();
-        let auth_transfers = Program::authenticated_transfer_program();
+        let chain_caller = crate::test_methods::chain_caller();
+        let simple_transfers = crate::test_methods::simple_balance_transfer();
         let from_keys = test_private_account_keys_1();
         let to_keys = test_private_account_keys_2();
         let initial_balance = 100;
         let from_account = AccountWithMetadata::new(
             Account {
-                program_owner: auth_transfers.id(),
+                program_owner: simple_transfers.id(),
                 balance: initial_balance,
                 ..Account::default()
             },
@@ -3323,7 +3042,7 @@ pub mod tests {
         );
         let to_account = AccountWithMetadata::new(
             Account {
-                program_owner: auth_transfers.id(),
+                program_owner: simple_transfers.id(),
                 ..Account::default()
             },
             true,
@@ -3336,19 +3055,16 @@ pub mod tests {
         let to_commitment = Commitment::new(&to_account_id, &to_account.account);
         let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
         let to_init_nullifier = Nullifier::for_account_initialization(&to_account_id);
-        let mut state = V03State::new_with_genesis_accounts(
-            &[],
-            vec![
+        let mut state = V03State::new()
+            .with_private_accounts([
                 (from_commitment.clone(), from_init_nullifier),
                 (to_commitment.clone(), to_init_nullifier),
-            ],
-            0,
-        )
-        .with_test_programs();
+            ])
+            .with_test_programs();
         let amount: u128 = 37;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
-            Program::authenticated_transfer_program().id(),
+            crate::test_methods::simple_balance_transfer().id(),
             number_of_calls,
             None,
         );
@@ -3361,7 +3077,7 @@ pub mod tests {
 
         let mut dependencies = HashMap::new();
 
-        dependencies.insert(auth_transfers.id(), auth_transfers);
+        dependencies.insert(simple_transfers.id(), simple_transfers);
         let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
         let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk);
@@ -3439,100 +3155,9 @@ pub mod tests {
     }
 
     #[test]
-    fn pda_mechanism_with_pinata_token_program() {
-        let pinata_token = Program::pinata_token();
-        let token = Program::token();
-
-        let pinata_definition_id = AccountId::new([1; 32]);
-        let pinata_token_definition_id = AccountId::new([2; 32]);
-        // Total supply of pinata token will be in an account under a PDA.
-        let pinata_token_holding_id =
-            AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
-        let winner_token_holding_id = AccountId::new([3; 32]);
-
-        let expected_winner_account_holding = token_core::TokenHolding::Fungible {
-            definition_id: pinata_token_definition_id,
-            balance: 150,
-        };
-        let expected_winner_token_holding_post = Account {
-            program_owner: token.id(),
-            data: Data::from(&expected_winner_account_holding),
-            ..Account::default()
-        };
-
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
-        state.add_pinata_token_program(pinata_definition_id);
-
-        // Set up the token accounts directly (bypassing public transactions which
-        // would require signers for Claim::Authorized). The focus of this test is
-        // the PDA mechanism in the pinata program's chained call, not token creation.
-        let total_supply: u128 = 10_000_000;
-        let token_definition = token_core::TokenDefinition::Fungible {
-            name: String::from("PINATA"),
-            total_supply,
-            metadata_id: None,
-        };
-        let token_holding = token_core::TokenHolding::Fungible {
-            definition_id: pinata_token_definition_id,
-            balance: total_supply,
-        };
-        let winner_holding = token_core::TokenHolding::Fungible {
-            definition_id: pinata_token_definition_id,
-            balance: 0,
-        };
-        state.force_insert_account(
-            pinata_token_definition_id,
-            Account {
-                program_owner: token.id(),
-                data: Data::from(&token_definition),
-                ..Account::default()
-            },
-        );
-        state.force_insert_account(
-            pinata_token_holding_id,
-            Account {
-                program_owner: token.id(),
-                data: Data::from(&token_holding),
-                ..Account::default()
-            },
-        );
-        state.force_insert_account(
-            winner_token_holding_id,
-            Account {
-                program_owner: token.id(),
-                data: Data::from(&winner_holding),
-                ..Account::default()
-            },
-        );
-
-        // Submit a solution to the pinata program to claim the prize
-        let solution: u128 = 989_106;
-        let message = public_transaction::Message::try_new(
-            pinata_token.id(),
-            vec![
-                pinata_definition_id,
-                pinata_token_holding_id,
-                winner_token_holding_id,
-            ],
-            vec![],
-            solution,
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-        let winner_token_holding_post = state.get_account_by_id(winner_token_holding_id);
-        assert_eq!(
-            winner_token_holding_post,
-            expected_winner_token_holding_post
-        );
-    }
-
-    #[test]
     fn claiming_mechanism_cannot_claim_initialied_accounts() {
-        let claimer = Program::claimer();
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let claimer = crate::test_methods::claimer();
+        let mut state = V03State::new().with_test_programs();
         let account_id = AccountId::new([2; 32]);
 
         // Insert an account with non-default program owner
@@ -3572,16 +3197,28 @@ pub mod tests {
         let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
         let recipient_init_balance: u128 = 10;
 
-        let mut state = V03State::new_with_genesis_accounts(
-            &[
-                (sender_id, sender_init_balance),
-                (recipient_id, recipient_init_balance),
-            ],
-            vec![],
-            0,
-        );
+        let modified_transfer_id = crate::test_methods::modified_transfer_program().id();
 
-        state.insert_program(Program::modified_transfer_program());
+        let mut state = V03State::new()
+            .with_public_accounts([
+                (
+                    sender_id,
+                    Account {
+                        program_owner: modified_transfer_id,
+                        balance: sender_init_balance,
+                        ..Account::default()
+                    },
+                ),
+                (
+                    recipient_id,
+                    Account {
+                        program_owner: modified_transfer_id,
+                        balance: recipient_init_balance,
+                        ..Account::default()
+                    },
+                ),
+            ])
+            .with_test_programs();
 
         let balance_to_move: u128 = 4;
 
@@ -3593,7 +3230,7 @@ pub mod tests {
             AccountWithMetadata::new(state.get_account_by_id(recipient_id), false, sender_id);
 
         let message = public_transaction::Message::try_new(
-            Program::modified_transfer_program().id(),
+            modified_transfer_id,
             vec![sender_id, recipient_id],
             vec![sender_nonce],
             balance_to_move,
@@ -3643,7 +3280,7 @@ pub mod tests {
 
     #[test]
     fn private_authorized_uninitialized_account() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let mut state = V03State::new().with_test_programs();
 
         // Set up keys for the authorized private account
         let private_keys = test_private_account_keys_1();
@@ -3652,13 +3289,13 @@ pub mod tests {
         let authorized_account =
             AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
 
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
 
         // Set up parameters for the new account
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
-        let instruction = authenticated_transfer_core::Instruction::Initialize;
+        let instruction: u128 = 0;
 
         // Execute and prove the circuit with the authorized account but no commitment proof
         let (output, proof) = execute_and_prove(
@@ -3694,7 +3331,7 @@ pub mod tests {
 
     #[test]
     fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
 
         let private_keys = test_private_account_keys_1();
         // This is intentional: claim authorization was introduced to protect public accounts,
@@ -3704,13 +3341,13 @@ pub mod tests {
         let unauthorized_account =
             AccountWithMetadata::new(Account::default(), false, (&private_keys.npk(), 0));
 
-        let program = Program::claimer();
+        let program = crate::test_methods::claimer();
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
         let (output, proof) = execute_and_prove(
             vec![unauthorized_account],
-            Program::serialize_instruction(0_u128).unwrap(),
+            Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
                 epk,
                 view_tag: EncryptedAccountData::compute_view_tag(
@@ -3741,7 +3378,7 @@ pub mod tests {
 
     #[test]
     fn private_account_claimed_then_used_without_init_flag_should_fail() {
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
 
         // Set up keys for the private account
         let private_keys = test_private_account_keys_1();
@@ -3750,13 +3387,13 @@ pub mod tests {
         let authorized_account =
             AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
 
-        let claimer_program = Program::claimer();
+        let claimer_program = crate::test_methods::claimer();
 
         // Set up parameters for claiming the new account
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0);
 
-        let instruction = authenticated_transfer_core::Instruction::Initialize;
+        let instruction = ();
 
         // Step 2: Execute claimer program to claim the account with authentication
         let (output, proof) = execute_and_prove(
@@ -3796,11 +3433,11 @@ pub mod tests {
         // Prepare new state of account
         let account_metadata = {
             let mut acc = authorized_account;
-            acc.account.program_owner = Program::claimer().id();
+            acc.account.program_owner = crate::test_methods::claimer().id();
             acc
         };
 
-        let noop_program = Program::noop();
+        let noop_program = crate::test_methods::noop();
         let shared_secret2 =
             SharedSecretKey::encapsulate_deterministic(&private_keys.vpk(), &[0_u8; 32], 0).0;
 
@@ -3827,10 +3464,11 @@ pub mod tests {
     #[test]
     fn public_changer_claimer_no_data_change_no_claim_succeeds() {
         let initial_data = [];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let account_id = AccountId::new([1; 32]);
-        let program_id = Program::changer_claimer().id();
+        let program_id = crate::test_methods::changer_claimer().id();
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -3851,10 +3489,11 @@ pub mod tests {
     #[test]
     fn public_changer_claimer_data_change_no_claim_fails() {
         let initial_data = [];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let mut state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let account_id = AccountId::new([1; 32]);
-        let program_id = Program::changer_claimer().id();
+        let program_id = crate::test_methods::changer_claimer().id();
         // Change data but don't claim (false) - should fail
         let new_data = vec![1, 2, 3, 4, 5];
         let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
@@ -3880,7 +3519,7 @@ pub mod tests {
 
     #[test]
     fn private_changer_claimer_no_data_change_no_claim_succeeds() {
-        let program = Program::changer_claimer();
+        let program = crate::test_methods::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
             AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
@@ -3911,7 +3550,7 @@ pub mod tests {
 
     #[test]
     fn private_changer_claimer_data_change_no_claim_fails() {
-        let program = Program::changer_claimer();
+        let program = crate::test_methods::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
             AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
@@ -3944,14 +3583,14 @@ pub mod tests {
     #[test]
     fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         // Arrange
-        let malicious_program = Program::malicious_authorization_changer();
-        let auth_transfers = Program::authenticated_transfer_program();
+        let malicious_program = crate::test_methods::malicious_authorization_changer();
+        let simple_transfers = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_public_account_keys_1();
         let recipient_keys = test_private_account_keys_1();
 
         let sender_account = AccountWithMetadata::new(
             Account {
-                program_owner: auth_transfers.id(),
+                program_owner: simple_transfers.id(),
                 balance: 100,
                 ..Default::default()
             },
@@ -3965,21 +3604,22 @@ pub mod tests {
         let recipient_commitment =
             Commitment::new(&recipient_account_id, &recipient_account.account);
         let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
-        let state = V03State::new_with_genesis_accounts(
-            &[(sender_account.account_id, sender_account.account.balance)],
-            vec![(recipient_commitment.clone(), recipient_init_nullifier)],
-            0,
-        )
-        .with_test_programs();
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&[(
+                sender_account.account_id,
+                sender_account.account.balance,
+            )]))
+            .with_private_accounts([(recipient_commitment.clone(), recipient_init_nullifier)])
+            .with_test_programs();
 
         let balance_to_transfer = 10_u128;
-        let instruction = (balance_to_transfer, auth_transfers.id());
+        let instruction = (balance_to_transfer, simple_transfers.id());
 
         let recipient =
             SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0).0;
 
         let mut dependencies = HashMap::new();
-        dependencies.insert(auth_transfers.id(), auth_transfers);
+        dependencies.insert(simple_transfers.id(), simple_transfers);
         let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
 
         // Act - execute the malicious program - this should fail during proving
@@ -4027,10 +3667,10 @@ pub mod tests {
         block_id: BlockId,
     ) {
         let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
-        let validity_window_program = Program::validity_window();
+        let validity_window_program = crate::test_methods::validity_window();
         let account_keys = test_public_account_keys_1();
         let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         let tx = {
             let account_ids = vec![pre.account_id];
             let nonces = vec![];
@@ -4079,10 +3719,10 @@ pub mod tests {
     ) {
         let timestamp_validity_window: TimestampValidityWindow =
             validity_window.try_into().unwrap();
-        let validity_window_program = Program::validity_window();
+        let validity_window_program = crate::test_methods::validity_window();
         let account_keys = test_public_account_keys_1();
         let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         let tx = {
             let account_ids = vec![pre.account_id];
             let nonces = vec![];
@@ -4132,10 +3772,10 @@ pub mod tests {
         block_id: BlockId,
     ) {
         let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
-        let validity_window_program = Program::validity_window();
+        let validity_window_program = crate::test_methods::validity_window();
         let account_keys = test_private_account_keys_1();
         let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         let tx = {
             let (shared_secret, epk) =
                 SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
@@ -4200,10 +3840,10 @@ pub mod tests {
     ) {
         let timestamp_validity_window: TimestampValidityWindow =
             validity_window.try_into().unwrap();
-        let validity_window_program = Program::validity_window();
+        let validity_window_program = crate::test_methods::validity_window();
         let account_keys = test_private_account_keys_1();
         let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         let tx = {
             let (shared_secret, epk) =
                 SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
@@ -4251,234 +3891,14 @@ pub mod tests {
         }
     }
 
-    fn time_locked_transfer_transaction(
-        from: AccountId,
-        from_key: &PrivateKey,
-        from_nonce: u128,
-        to: AccountId,
-        clock_account_id: AccountId,
-        amount: u128,
-        deadline: u64,
-    ) -> PublicTransaction {
-        let program_id = Program::time_locked_transfer().id();
-        let message = public_transaction::Message::try_new(
-            program_id,
-            vec![from, to, clock_account_id],
-            vec![Nonce(from_nonce)],
-            (amount, deadline),
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
-        PublicTransaction::new(message, witness_set)
-    }
-
-    #[test]
-    fn time_locked_transfer_succeeds_when_deadline_has_passed() {
-        let recipient_id = AccountId::new([42; 32]);
-        let genesis_timestamp = 500_u64;
-        let mut state =
-            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], genesis_timestamp)
-                .with_test_programs();
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        state.force_insert_account(
-            sender_id,
-            Account {
-                program_owner: Program::time_locked_transfer().id(),
-                balance: 100,
-                ..Account::default()
-            },
-        );
-
-        let amount = 100_u128;
-        // Deadline in the past: transfer should succeed.
-        let deadline = 0_u64;
-
-        let tx = time_locked_transfer_transaction(
-            sender_id,
-            &key1,
-            0,
-            recipient_id,
-            CLOCK_01_PROGRAM_ACCOUNT_ID,
-            amount,
-            deadline,
-        );
-
-        let block_id = 1;
-        let timestamp = genesis_timestamp + 100;
-        state
-            .transition_from_public_transaction(&tx, block_id, timestamp)
-            .unwrap();
-
-        // Balances changed.
-        assert_eq!(state.get_account_by_id(sender_id).balance, 0);
-        assert_eq!(state.get_account_by_id(recipient_id).balance, 100);
-    }
-
-    #[test]
-    fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
-        let recipient_id = AccountId::new([42; 32]);
-        let genesis_timestamp = 500_u64;
-        let mut state =
-            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], genesis_timestamp)
-                .with_test_programs();
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        state.force_insert_account(
-            sender_id,
-            Account {
-                program_owner: Program::time_locked_transfer().id(),
-                balance: 100,
-                ..Account::default()
-            },
-        );
-
-        let amount = 100_u128;
-        // Far-future deadline: program should panic.
-        let deadline = u64::MAX;
-
-        let tx = time_locked_transfer_transaction(
-            sender_id,
-            &key1,
-            0,
-            recipient_id,
-            CLOCK_01_PROGRAM_ACCOUNT_ID,
-            amount,
-            deadline,
-        );
-
-        let block_id = 1;
-        let timestamp = genesis_timestamp + 100;
-        let result = state.transition_from_public_transaction(&tx, block_id, timestamp);
-
-        assert!(
-            result.is_err(),
-            "Transfer should fail when deadline is in the future"
-        );
-        // Balances unchanged.
-        assert_eq!(state.get_account_by_id(sender_id).balance, 100);
-        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
-    }
-
-    fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(32);
-        buf.extend_from_slice(&prize.to_le_bytes());
-        buf.extend_from_slice(&cooldown_ms.to_le_bytes());
-        buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
-        buf
-    }
-
-    fn pinata_cooldown_transaction(
-        pinata_id: AccountId,
-        winner_id: AccountId,
-        clock_account_id: AccountId,
-    ) -> PublicTransaction {
-        let program_id = Program::pinata_cooldown().id();
-        let message = public_transaction::Message::try_new(
-            program_id,
-            vec![pinata_id, winner_id, clock_account_id],
-            vec![],
-            (),
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        PublicTransaction::new(message, witness_set)
-    }
-
-    #[test]
-    fn pinata_cooldown_claim_succeeds_after_cooldown() {
-        let winner_id = AccountId::new([11; 32]);
-        let pinata_id = AccountId::new([99; 32]);
-
-        let genesis_timestamp = 1000_u64;
-        let mut state =
-            V03State::new_with_genesis_accounts(&[(winner_id, 0)], vec![], genesis_timestamp)
-                .with_test_programs();
-
-        let prize = 50_u128;
-        let cooldown_ms = 500_u64;
-        // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
-        let last_claim_timestamp = genesis_timestamp;
-
-        state.force_insert_account(
-            pinata_id,
-            Account {
-                program_owner: Program::pinata_cooldown().id(),
-                balance: 1000,
-                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
-                    .try_into()
-                    .unwrap(),
-                ..Account::default()
-            },
-        );
-
-        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
-
-        let block_id = 1;
-        let block_timestamp = genesis_timestamp + cooldown_ms;
-        // Advance clock so the cooldown check reads an updated timestamp.
-        let clock_tx = clock_transaction(block_timestamp);
-        state
-            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
-            .unwrap();
-
-        state
-            .transition_from_public_transaction(&tx, block_id, block_timestamp)
-            .unwrap();
-
-        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
-        assert_eq!(state.get_account_by_id(winner_id).balance, prize);
-    }
-
-    #[test]
-    fn pinata_cooldown_claim_fails_during_cooldown() {
-        let winner_id = AccountId::new([11; 32]);
-        let pinata_id = AccountId::new([99; 32]);
-
-        let genesis_timestamp = 1000_u64;
-        let mut state =
-            V03State::new_with_genesis_accounts(&[(winner_id, 0)], vec![], genesis_timestamp)
-                .with_test_programs();
-
-        let prize = 50_u128;
-        let cooldown_ms = 500_u64;
-        let last_claim_timestamp = genesis_timestamp;
-
-        state.force_insert_account(
-            pinata_id,
-            Account {
-                balance: 1000,
-                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
-                    .try_into()
-                    .unwrap(),
-                ..Account::default()
-            },
-        );
-
-        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
-
-        let block_id = 1;
-        // Timestamp is only 100ms after last claim, well within the 500ms cooldown.
-        let block_timestamp = genesis_timestamp + 100;
-        let clock_tx = clock_transaction(block_timestamp);
-        state
-            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
-            .unwrap();
-
-        let result = state.transition_from_public_transaction(&tx, block_id, block_timestamp);
-
-        assert!(result.is_err(), "Claim should fail during cooldown period");
-        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
-        assert_eq!(state.get_account_by_id(winner_id).balance, 0);
-    }
-
     #[test]
     fn state_serialization_roundtrip() {
         let account_id_1 = AccountId::new([1; 32]);
         let account_id_2 = AccountId::new([2; 32]);
         let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
-        let state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let state = V03State::new()
+            .with_public_accounts(public_state_from_balances(&initial_data))
+            .with_test_programs();
         let bytes = borsh::to_vec(&state).unwrap();
         let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
         assert_eq!(state, state_from_bytes);
@@ -4486,9 +3906,9 @@ pub mod tests {
 
     #[test]
     fn flash_swap_successful() {
-        let initiator = Program::flash_swap_initiator();
-        let callback = Program::flash_swap_callback();
-        let token = Program::authenticated_transfer_program();
+        let initiator = crate::test_methods::flash_swap_initiator();
+        let callback = crate::test_methods::flash_swap_callback();
+        let token = crate::test_methods::simple_balance_transfer();
 
         let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
         let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
@@ -4507,7 +3927,7 @@ pub mod tests {
             ..Account::default()
         };
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
@@ -4537,9 +3957,9 @@ pub mod tests {
 
     #[test]
     fn flash_swap_callback_keeps_funds_rollback() {
-        let initiator = Program::flash_swap_initiator();
-        let callback = Program::flash_swap_callback();
-        let token = Program::authenticated_transfer_program();
+        let initiator = crate::test_methods::flash_swap_initiator();
+        let callback = crate::test_methods::flash_swap_callback();
+        let token = crate::test_methods::simple_balance_transfer();
 
         let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
         let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
@@ -4558,7 +3978,7 @@ pub mod tests {
             ..Account::default()
         };
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
@@ -4595,9 +4015,9 @@ pub mod tests {
     fn flash_swap_self_call_targets_correct_program() {
         // Zero-amount flash swap: the invariant self-call still runs and succeeds
         // because vault balance doesn't decrease.
-        let initiator = Program::flash_swap_initiator();
-        let callback = Program::flash_swap_callback();
-        let token = Program::authenticated_transfer_program();
+        let initiator = crate::test_methods::flash_swap_initiator();
+        let callback = crate::test_methods::flash_swap_callback();
+        let token = crate::test_methods::simple_balance_transfer();
 
         let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
         let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
@@ -4615,7 +4035,7 @@ pub mod tests {
             ..Account::default()
         };
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
@@ -4645,8 +4065,8 @@ pub mod tests {
     fn flash_swap_standalone_invariant_check_rejected() {
         // Calling InvariantCheck directly (not as a chained self-call) should fail
         // because caller_program_id will be None.
-        let initiator = Program::flash_swap_initiator();
-        let token = Program::authenticated_transfer_program();
+        let initiator = crate::test_methods::flash_swap_initiator();
+        let token = crate::test_methods::simple_balance_transfer();
 
         let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
 
@@ -4656,7 +4076,7 @@ pub mod tests {
             ..Account::default()
         };
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(vault_id, vault_account);
 
         let instruction = FlashSwapInstruction::InvariantCheck {
@@ -4682,11 +4102,11 @@ pub mod tests {
 
     #[test]
     fn malicious_self_program_id_rejected_in_public_execution() {
-        let program = Program::malicious_self_program_id();
+        let program = crate::test_methods::malicious_self_program_id();
         let acc_id = AccountId::new([99; 32]);
         let account = Account::default();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(acc_id, account);
 
         let message =
@@ -4703,11 +4123,11 @@ pub mod tests {
 
     #[test]
     fn malicious_caller_program_id_rejected_in_public_execution() {
-        let program = Program::malicious_caller_program_id();
+        let program = crate::test_methods::malicious_caller_program_id();
         let acc_id = AccountId::new([99; 32]);
         let account = Account::default();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let mut state = V03State::new().with_test_programs();
         state.force_insert_account(acc_id, account);
 
         let message =
@@ -4728,15 +4148,17 @@ pub mod tests {
         let alice_keys = test_private_account_keys_1();
         let alice_npk = alice_keys.npk();
 
-        let proxy = Program::pda_spend_proxy();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let proxy = crate::test_methods::pda_spend_proxy();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let proxy_id = proxy.id();
-        let auth_transfer_id = auth_transfer.id();
+        let simple_transfer_id = simple_transfer.id();
         let seed = PdaSeed::new([42; 32]);
         let amount: u128 = 100;
 
-        let spend_with_deps =
-            ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer.clone())].into());
+        let spend_with_deps = ProgramWithDependencies::new(
+            proxy,
+            [(simple_transfer_id, simple_transfer.clone())].into(),
+        );
 
         let funder_id = funder_keys.account_id();
         let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
@@ -4744,16 +4166,17 @@ pub mod tests {
         let recipient_id = test_public_account_keys_2().account_id();
         let recipient_signing_key = test_public_account_keys_2().signing_key;
 
-        let mut state = V03State::new_with_genesis_accounts(&[(funder_id, 500)], vec![], 0);
+        let mut state =
+            V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
 
         let alice_pda_0_account = Account {
-            program_owner: auth_transfer_id,
+            program_owner: simple_transfer_id,
             balance: amount,
             nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),
             ..Account::default()
         };
         let alice_pda_1_account = Account {
-            program_owner: auth_transfer_id,
+            program_owner: simple_transfer_id,
             balance: amount,
             nonce: Nonce::private_account_nonce_init(&alice_pda_1_id),
             ..Account::default()
@@ -4773,8 +4196,7 @@ pub mod tests {
                     AccountWithMetadata::new(funder_account, true, funder_id),
                     AccountWithMetadata::new(Account::default(), false, alice_pda_0_id),
                 ],
-                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
-                    .unwrap(),
+                Program::serialize_instruction(amount).unwrap(),
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
@@ -4789,7 +4211,7 @@ pub mod tests {
                         seed: Some((seed, proxy_id)),
                     },
                 ],
-                &auth_transfer.clone().into(),
+                &simple_transfer.clone().into(),
             )
             .unwrap();
             let message =
@@ -4814,8 +4236,7 @@ pub mod tests {
                     AccountWithMetadata::new(funder_account, true, funder_id),
                     AccountWithMetadata::new(Account::default(), false, alice_pda_1_id),
                 ],
-                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
-                    .unwrap(),
+                Program::serialize_instruction(amount).unwrap(),
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
@@ -4830,7 +4251,7 @@ pub mod tests {
                         seed: Some((seed, proxy_id)),
                     },
                 ],
-                &auth_transfer.into(),
+                &simple_transfer.into(),
             )
             .unwrap();
             let message =
@@ -4860,7 +4281,7 @@ pub mod tests {
                     AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
                     AccountWithMetadata::new(recipient_account, true, recipient_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+                Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         epk: alice_epk_0,
@@ -4902,7 +4323,7 @@ pub mod tests {
                     AccountWithMetadata::new(alice_pda_1_account.clone(), true, alice_pda_1_id),
                     AccountWithMetadata::new(recipient_account, false, recipient_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+                Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         epk: alice_epk_1,
@@ -4937,10 +4358,10 @@ pub mod tests {
 
         assert_eq!(state.get_account_by_id(recipient_id).balance, 2 * amount);
 
-        // Re-fund alice_pda_1 top-level via auth_transfer using PrivatePdaUpdate with an
+        // Re-fund alice_pda_1 top-level via simple_transfer using PrivatePdaUpdate with an
         // external seed.
         let alice_pda_1_account_after_spend = Account {
-            program_owner: auth_transfer_id,
+            program_owner: simple_transfer_id,
             balance: 0,
             nonce: alice_pda_1_account
                 .nonce
@@ -4962,8 +4383,7 @@ pub mod tests {
                         alice_pda_1_id,
                     ),
                 ],
-                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
-                    .unwrap(),
+                Program::serialize_instruction(amount).unwrap(),
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaUpdate {
@@ -4981,7 +4401,7 @@ pub mod tests {
                         seed: Some((seed, proxy_id)),
                     },
                 ],
-                &Program::authenticated_transfer_program().into(),
+                &crate::test_methods::simple_balance_transfer().into(),
             )
             .unwrap();
             let message =

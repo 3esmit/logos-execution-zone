@@ -5,7 +5,6 @@
 
 use anyhow::{Context as _, Result};
 use integration_tests::{TestContext, private_mention, public_mention};
-use lee::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{Command, SubcommandReturnValue, programs::vault::VaultSubcommand};
@@ -18,7 +17,7 @@ async fn public_transfer_and_public_claim() -> Result<()> {
     let sender = ctx.existing_public_accounts()[0];
     let recipient = ctx.existing_public_accounts()[1];
 
-    let vault_program_id = Program::vault().id();
+    let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
     let sender_balance_before = ctx.sequencer_client().get_account_balance(sender).await?;
@@ -109,7 +108,7 @@ async fn private_transfer_and_private_claim() -> Result<()> {
     let sender = ctx.existing_private_accounts()[0];
     let owner = ctx.existing_private_accounts()[1];
 
-    let vault_program_id = Program::vault().id();
+    let vault_program_id = programs::vault().id();
     let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner);
 
     let sender_balance_before = ctx

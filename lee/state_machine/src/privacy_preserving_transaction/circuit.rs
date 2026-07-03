@@ -9,9 +9,9 @@ use lee_core::{
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
 use crate::{
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
-    program_methods::{PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID},
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() {
         let recipient_keys = test_private_account_keys_1();
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -261,10 +261,7 @@ mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance_to_move).unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -278,7 +275,7 @@ mod tests {
                     identifier: 0,
                 },
             ],
-            &Program::authenticated_transfer_program().into(),
+            &crate::test_methods::simple_balance_transfer().into(),
         )
         .unwrap();
 
@@ -304,7 +301,7 @@ mod tests {
 
     #[test]
     fn prove_privacy_preserving_execution_circuit_fully_private() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
 
@@ -339,7 +336,7 @@ mod tests {
             ),
         ];
 
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_balance_transfer();
 
         let expected_private_account_1 = Account {
             program_owner: program.id(),
@@ -366,10 +363,7 @@ mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
+            Program::serialize_instruction(balance_to_move).unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     epk: EphemeralPublicKey(Vec::new()),
@@ -434,8 +428,8 @@ mod tests {
             AccountId::for_regular_private_account(&account_keys.npk(), 0),
         );
 
-        let validity_window_chain_caller = Program::validity_window_chain_caller();
-        let validity_window = Program::validity_window();
+        let validity_window_chain_caller = crate::test_methods::validity_window_chain_caller();
+        let validity_window = crate::test_methods::validity_window();
 
         let instruction = Program::serialize_instruction((
             Some(1_u64),
@@ -477,7 +471,7 @@ mod tests {
     /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
     #[test]
     fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
-        let program = Program::pda_claimer();
+        let program = crate::test_methods::pda_claimer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -513,13 +507,13 @@ mod tests {
         );
     }
 
-    /// PDA init: initializes a new PDA under `authenticated_transfer`'s ownership.
-    /// The `auth_transfer_proxy` program chains to `authenticated_transfer` with `pda_seeds`
+    /// PDA init: initializes a new PDA under `simple_balance_transfer`'s ownership.
+    /// The `simple_transfer_proxy` program chains to `simple_balance_transfer` with `pda_seeds`
     /// to establish authorization and the private PDA binding.
     #[test]
     fn private_pda_init() {
-        let program = Program::auth_transfer_proxy();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_transfer_proxy();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -530,9 +524,9 @@ mod tests {
         let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, 0);
         let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
-        let auth_id = auth_transfer.id();
+        let auth_id = simple_transfer.id();
         let program_with_deps =
-            ProgramWithDependencies::new(program, [(auth_id, auth_transfer)].into());
+            ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
 
         // is_withdraw=false triggers init path (1 pre-state)
         let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, false)).unwrap();
@@ -555,13 +549,13 @@ mod tests {
         assert_eq!(output.new_commitments.len(), 1);
     }
 
-    /// PDA withdraw: chains to `authenticated_transfer` to move balance from PDA to recipient.
+    /// PDA withdraw: chains to `simple_balance_transfer` to move balance from PDA to recipient.
     /// Uses a default PDA (amount=0) because testing with a pre-funded PDA requires a
     /// two-tx sequence with membership proofs.
     #[test]
     fn private_pda_withdraw() {
-        let program = Program::auth_transfer_proxy();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let program = crate::test_methods::simple_transfer_proxy();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -576,7 +570,7 @@ mod tests {
         let recipient_id = AccountId::new([88; 32]);
         let recipient_pre = AccountWithMetadata::new(
             Account {
-                program_owner: auth_transfer.id(),
+                program_owner: simple_transfer.id(),
                 balance: 10000,
                 ..Account::default()
             },
@@ -584,9 +578,9 @@ mod tests {
             recipient_id,
         );
 
-        let auth_id = auth_transfer.id();
+        let auth_id = simple_transfer.id();
         let program_with_deps =
-            ProgramWithDependencies::new(program, [(auth_id, auth_transfer)].into());
+            ProgramWithDependencies::new(program, [(auth_id, simple_transfer)].into());
 
         // is_withdraw=true, amount=0 (PDA has no balance yet)
         let instruction = Program::serialize_instruction((seed, auth_id, 0_u128, true)).unwrap();
@@ -618,8 +612,8 @@ mod tests {
     /// uses the standard unauthorized private account path and works with auth-transfer's
     /// transfer path like any other private account.
     #[test]
-    fn shared_account_receives_via_auth_transfer() {
-        let program = Program::authenticated_transfer_program();
+    fn shared_account_receives_via_simple_transfer() {
+        let program = crate::test_methods::simple_balance_transfer();
         let shared_keys = test_private_account_keys_1();
         let shared_npk = shared_keys.npk();
         let shared_identifier: u128 = 42;
@@ -643,11 +637,7 @@ mod tests {
         let recipient = AccountWithMetadata::new(Account::default(), false, shared_account_id);
 
         let balance_to_move: u128 = 100;
-        let instruction =
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap();
+        let instruction = Program::serialize_instruction(balance_to_move).unwrap();
 
         let result = execute_and_prove(
             vec![sender, recipient],
@@ -677,7 +667,7 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_authorized_init_encrypts_regular_kind_with_identifier() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::claimer();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
@@ -686,8 +676,7 @@ mod tests {
 
         let (output, _) = execute_and_prove(
             vec![pre],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Initialize)
-                .unwrap(),
+            Program::serialize_instruction(()).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 epk: EphemeralPublicKey(Vec::new()),
                 view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
@@ -709,39 +698,23 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::claimer();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
-
-        let sender = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 1,
-                ..Account::default()
-            },
-            true,
-            AccountId::new([0; 32]),
-        );
         let recipient_id = AccountId::for_regular_private_account(&keys.npk(), identifier);
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let (output, _) = execute_and_prove(
-            vec![sender, recipient],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: 1,
-            })
-            .unwrap(),
-            vec![
-                InputAccountIdentity::Public,
-                InputAccountIdentity::PrivateUnauthorized {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
-                    npk: keys.npk(),
-                    ssk,
-                    identifier,
-                },
-            ],
+            vec![recipient],
+            Program::serialize_instruction(()).unwrap(),
+            vec![InputAccountIdentity::PrivateUnauthorized {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                npk: keys.npk(),
+                ssk,
+                identifier,
+            }],
             &program.into(),
         )
         .unwrap();
@@ -756,7 +729,7 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_authorized_update_encrypts_regular_kind_with_identifier() {
-        let program = Program::authenticated_transfer_program();
+        let program = crate::test_methods::noop();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
@@ -771,25 +744,18 @@ mod tests {
         commitment_set.extend(std::slice::from_ref(&commitment));
 
         let sender = AccountWithMetadata::new(account, true, account_id);
-        let recipient = AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
 
         let (output, _) = execute_and_prove(
-            vec![sender, recipient],
-            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-                amount: 1,
-            })
-            .unwrap(),
-            vec![
-                InputAccountIdentity::PrivateAuthorizedUpdate {
-                    epk: EphemeralPublicKey(Vec::new()),
-                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
-                    ssk,
-                    nsk: keys.nsk,
-                    membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
-                    identifier,
-                },
-                InputAccountIdentity::Public,
-            ],
+            vec![sender],
+            Program::serialize_instruction(()).unwrap(),
+            vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                ssk,
+                nsk: keys.nsk,
+                membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+                identifier,
+            }],
             &program.into(),
         )
         .unwrap();
@@ -804,18 +770,18 @@ mod tests {
     /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
     #[test]
     fn private_pda_update_encrypts_pda_kind_with_identifier() {
-        let program = Program::pda_spend_proxy();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let program = crate::test_methods::pda_spend_proxy();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
 
-        let auth_transfer_id = auth_transfer.id();
+        let simple_transfer_id = simple_transfer.id();
         let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, identifier);
         let pda_account = Account {
-            program_owner: auth_transfer_id,
+            program_owner: simple_transfer_id,
             balance: 1,
             ..Account::default()
         };
@@ -829,12 +795,12 @@ mod tests {
 
         let program_with_deps = ProgramWithDependencies::new(
             program.clone(),
-            [(auth_transfer_id, auth_transfer)].into(),
+            [(simple_transfer_id, simple_transfer)].into(),
         );
 
         let (output, _) = execute_and_prove(
             vec![pda_pre, recipient_pre],
-            Program::serialize_instruction((seed, 1_u128, auth_transfer_id, false)).unwrap(),
+            Program::serialize_instruction((seed, 1_u128, simple_transfer_id, false)).unwrap(),
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     epk: EphemeralPublicKey(Vec::new()),
@@ -863,7 +829,7 @@ mod tests {
 
     #[test]
     fn private_pda_init_identifier_mismatch_fails() {
-        let program = Program::pda_claimer();
+        let program = crate::test_methods::pda_claimer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -892,17 +858,17 @@ mod tests {
 
     #[test]
     fn private_pda_update_identifier_mismatch_fails() {
-        let program = Program::pda_spend_proxy();
-        let auth_transfer = Program::authenticated_transfer_program();
+        let program = crate::test_methods::pda_spend_proxy();
+        let simple_transfer = crate::test_methods::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
 
-        let auth_transfer_id = auth_transfer.id();
+        let simple_transfer_id = simple_transfer.id();
         let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, 5);
         let pda_account = Account {
-            program_owner: auth_transfer_id,
+            program_owner: simple_transfer_id,
             balance: 1,
             ..Account::default()
         };
@@ -915,11 +881,11 @@ mod tests {
             AccountWithMetadata::new(Account::default(), true, AccountId::new([0; 32]));
 
         let program_with_deps =
-            ProgramWithDependencies::new(program, [(auth_transfer_id, auth_transfer)].into());
+            ProgramWithDependencies::new(program, [(simple_transfer_id, simple_transfer)].into());
 
         let result = execute_and_prove(
             vec![pda_pre, recipient_pre],
-            Program::serialize_instruction((seed, 1_u128, auth_transfer_id, false)).unwrap(),
+            Program::serialize_instruction((seed, 1_u128, simple_transfer_id, false)).unwrap(),
             vec![
                 InputAccountIdentity::PrivatePdaUpdate {
                     epk: EphemeralPublicKey(Vec::new()),

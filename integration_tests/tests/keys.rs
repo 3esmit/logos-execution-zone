@@ -12,7 +12,7 @@ use integration_tests::{
     public_mention, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee::{AccountId, program::Program};
+use lee::AccountId;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -257,11 +257,11 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     assert_eq!(
         acc1.account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
     assert_eq!(
         acc2.account.program_owner,
-        Program::authenticated_transfer_program().id()
+        programs::authenticated_transfer().id()
     );
 
     assert_eq!(acc1.account.balance, 100);

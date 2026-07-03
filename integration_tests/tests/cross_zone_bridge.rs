@@ -1,14 +1,13 @@
 #![expect(
     clippy::tests_outside_test_module,
-    clippy::arithmetic_side_effects,
-    reason = "We don't care about these in tests"
+    reason = "top-level test functions are conventional for integration tests"
 )]
 
 //! Demo 2: a wrapped-token bridge over the cross-zone spine. A holder locks part
 //! of their bridgeable balance on zone A; the watcher carries the emitted mint to
 //! zone B, where the indexer re-derives and verifies it (Option B) before the
 //! wrapped token is minted to the recipient. Reuses the M3/M4 spine unchanged;
-//! only the source caller (bridge_lock) and target (wrapped_token) are new.
+//! only the source caller (`bridge_lock`) and target (`wrapped_token`) are new.
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -22,7 +21,6 @@ use integration_tests::{
 };
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction,
-    program::Program,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, GenesisAction};
@@ -49,7 +47,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
 
-    let wrapped_token_id = Program::wrapped_token().id();
+    let wrapped_token_id = programs::wrapped_token().id();
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
@@ -105,7 +103,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // has already landed (it preceded delivery), so zone A reflects the debit and
     // escrow now.
     let seq_a_client = sequencer_client(seq_a.addr())?;
-    let escrow_id = bridge_lock_core::escrow_account_id(Program::bridge_lock().id());
+    let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
     let escrowed = bridge_lock_core::read_balance(
         &seq_a_client.get_account(escrow_id).await?.data.into_inner(),
     );
@@ -124,16 +122,16 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     Ok(())
 }
 
-/// Builds a signed bridge_lock Lock that forwards a wrapped-token Mint of the
+/// Builds a signed `bridge_lock` Lock that forwards a wrapped-token Mint of the
 /// locked amount to the recipient on the target zone.
 fn build_lock_tx(
     holder_key: &PrivateKey,
     holder_id: AccountId,
     target_zone: [u8; 32],
 ) -> LeeTransaction {
-    let bridge_lock_id = Program::bridge_lock().id();
-    let wrapped_token_id = Program::wrapped_token().id();
-    let outbox_id = Program::cross_zone_outbox().id();
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let outbox_id = programs::cross_zone_outbox().id();
     let ordinal = 0;
 
     let mint = wrapped_token_core::Instruction::Mint {

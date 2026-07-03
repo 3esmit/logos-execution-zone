@@ -1,10 +1,11 @@
-use common::PINATA_BASE58;
+use std::collections::HashMap;
+
 use key_protocol::key_management::{
     KeyChain,
     key_tree::chain_index::ChainIndex,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey},
 };
-use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
+use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
 use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
@@ -130,8 +131,7 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
     ]
 }
 
-#[must_use]
-pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
+fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
     let key_chain_1 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
@@ -178,8 +178,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
     ]
 }
 
-#[must_use]
-pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
+fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
     initial_priv_accounts_private_keys()
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
@@ -189,8 +188,27 @@ pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .collect()
 }
 
+fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)> {
+    initial_commitments()
+        .iter()
+        .map(|init_comm_data| {
+            let npk = &init_comm_data.npk;
+            let account_id = lee::AccountId::for_regular_private_account(npk, 0);
+
+            let mut acc = init_comm_data.account.clone();
+
+            acc.program_owner = programs::authenticated_transfer().id();
+
+            (
+                lee_core::Commitment::new(&account_id, &acc),
+                lee_core::Nullifier::for_account_initialization(&account_id),
+            )
+        })
+        .collect()
+}
+
 #[must_use]
-pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
+pub fn initial_public_user_accounts() -> Vec<PublicAccountPublicInitialData> {
     let initial_account_ids = initial_pub_accounts_private_keys()
         .into_iter()
         .map(|data| data.account_id)
@@ -208,41 +226,100 @@ pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
     ]
 }
 
+fn initial_public_accounts() -> HashMap<AccountId, Account> {
+    initial_public_user_accounts()
+        .iter()
+        .map(|acc_data| {
+            (
+                acc_data.account_id,
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: acc_data.balance,
+                    ..Default::default()
+                },
+            )
+        })
+        .chain([
+            (
+                system_accounts::faucet_account_id(),
+                system_accounts::faucet_account(),
+            ),
+            (
+                system_accounts::bridge_account_id(),
+                system_accounts::bridge_account(),
+            ),
+        ])
+        .chain(
+            system_accounts::clock_account_ids()
+                .into_iter()
+                .map(|clock_id| (clock_id, system_accounts::clock_account())),
+        )
+        .chain(std::iter::once(wrapped_token_config_account()))
+        .collect()
+}
+
+/// The wrapped-token config account.
+///
+/// Seeded so the `wrapped_token` guest can pin its authorized minter (the
+/// cross-zone inbox) without importing the inbox id. Fixed for every zone, so it
+/// lives in the shared initial state.
+fn wrapped_token_config_account() -> (AccountId, Account) {
+    let wrapped_token_id = programs::wrapped_token().id();
+    (
+        wrapped_token_core::config_account_id(wrapped_token_id),
+        Account {
+            program_owner: wrapped_token_id,
+            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
+                .to_vec()
+                .try_into()
+                .expect("minter id fits in account data"),
+            ..Default::default()
+        },
+    )
+}
+
+fn initial_programs() -> Vec<Program> {
+    vec![
+        programs::authenticated_transfer(),
+        programs::token(),
+        programs::amm(),
+        programs::clock(),
+        programs::ata(),
+        programs::vault(),
+        programs::faucet(),
+        programs::bridge(),
+        programs::cross_zone_outbox(),
+        programs::cross_zone_inbox(),
+        programs::ping_sender(),
+        programs::ping_receiver(),
+        programs::bridge_lock(),
+        programs::wrapped_token(),
+    ]
+}
+
 #[must_use]
 pub fn initial_state() -> V03State {
-    let initial_private_accounts: Vec<(lee_core::Commitment, lee_core::Nullifier)> =
-        initial_commitments()
-            .iter()
-            .map(|init_comm_data| {
-                let npk = &init_comm_data.npk;
-                let account_id = lee::AccountId::for_regular_private_account(npk, 0);
-
-                let mut acc = init_comm_data.account.clone();
-
-                acc.program_owner = lee::program::Program::authenticated_transfer_program().id();
-
-                (
-                    lee_core::Commitment::new(&account_id, &acc),
-                    lee_core::Nullifier::for_account_initialization(&account_id),
-                )
-            })
-            .collect();
-
-    let init_accs: Vec<(lee::AccountId, u128)> = initial_accounts()
-        .iter()
-        .map(|acc_data| (acc_data.account_id, acc_data.balance))
-        .collect();
-
-    lee::V03State::new_with_genesis_accounts(&init_accs, initial_private_accounts, 0)
+    lee::V03State::new()
+        .with_public_accounts(initial_public_accounts())
+        .with_private_accounts(initial_private_accounts())
+        .with_programs(initial_programs())
 }
 
 #[must_use]
 pub fn initial_state_testnet() -> V03State {
-    let mut state = initial_state();
+    let mut initial_public_accounts = initial_public_accounts();
+    initial_public_accounts.insert(
+        system_accounts::pinata_account_id(),
+        system_accounts::pinata_account(),
+    );
 
-    state.add_pinata_program(PINATA_BASE58.parse().unwrap());
+    let mut programs = initial_programs();
+    programs.push(programs::pinata());
 
-    state
+    V03State::new()
+        .with_public_accounts(initial_public_accounts)
+        .with_private_accounts(initial_private_accounts())
+        .with_programs(programs)
 }
 
 #[cfg(test)]
@@ -260,7 +337,7 @@ mod tests {
     #[test]
     fn pub_state_consistency() {
         let init_accs_private_data = initial_pub_accounts_private_keys();
-        let init_accs_pub_data = initial_accounts();
+        let init_accs_pub_data = initial_public_user_accounts();
 
         assert_eq!(
             init_accs_private_data[0].account_id,
@@ -410,6 +487,35 @@ mod tests {
                     nonce: 0.into(),
                 },
             }
+        );
+    }
+
+    #[test]
+    fn genesis_system_accounts_have_expected_contents() {
+        // System-account IDs must be distinct and non-default, and the genesis
+        // faucet/bridge accounts must carry their expected field values.  Catches
+        // mutations that replace `system_faucet_account`/`system_bridge_account`
+        // with `Default::default()`, delete their `balance`/`program_owner`
+        // fields, or replace `system_bridge_account_id` with `Default::default()`.
+        let faucet_id = system_accounts::faucet_account_id();
+        let bridge_id = system_accounts::bridge_account_id();
+        assert_ne!(bridge_id, AccountId::default());
+        assert_ne!(faucet_id, bridge_id);
+
+        let state = initial_state();
+        let default_owner = Account::default().program_owner;
+
+        let faucet = state.get_account_by_id(faucet_id);
+        assert_eq!(faucet.balance, u128::MAX, "faucet must hold u128::MAX");
+        assert_ne!(
+            faucet.program_owner, default_owner,
+            "faucet must have a non-default program_owner"
+        );
+
+        let bridge = state.get_account_by_id(bridge_id);
+        assert_ne!(
+            bridge.program_owner, default_owner,
+            "bridge must have a non-default program_owner"
         );
     }
 }

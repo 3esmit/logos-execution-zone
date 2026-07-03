@@ -168,12 +168,10 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
 
 pub fn indexer_config(
     bedrock_addr: SocketAddr,
-    home: PathBuf,
     channel_id: ChannelId,
     cross_zone: Option<CrossZoneConfig>,
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
-        home,
         consensus_info_polling_interval: Duration::from_secs(1),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -208,9 +206,8 @@ pub fn bedrock_channel_id() -> ChannelId {
     ChannelId::from(channel_id)
 }
 
-/// Second channel on the same Bedrock node, for two-zone tests.
-/// Distinct from [`bedrock_channel_id`] so two zones settle independently on
-/// one shared L1.
+/// A second zone's channel id, distinct from [`bedrock_channel_id`] so two zones
+/// settle independently on one shared Bedrock node in the cross-zone tests.
 #[must_use]
 pub fn bedrock_channel_id_b() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 2]

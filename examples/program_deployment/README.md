@@ -46,7 +46,7 @@ export EXAMPLE_PROGRAMS_BUILD_DIR=$(pwd)/target/riscv32im-risc0-zkvm-elf/docker
 > [!IMPORTANT]
 > **All remaining commands must be run from the `examples/program_deployment` directory.**
 
-# 3. Hello world example 
+# 3. Hello world example
 
 The Hello world program reads an arbitrary sequence of bytes from its instruction and appends them to the data field of the input account.
 Execution succeeds only if the account is:
@@ -211,7 +211,7 @@ This is the account that the program will claim and write data into.
 ### 3. Loading the program bytecode
 ```rust
 let bytecode: Vec<u8> = std::fs::read(program_path).unwrap();
-let program = Program::new(bytecode).unwrap();
+let program = Program::new(bytecode.into()).unwrap();
 ```
 The Risc0 ELF is read from disk and wrapped in a Program object, which can be used to compute the program ID. The ID is used by the node to identify which program is invoked by the transaction.
 
@@ -266,7 +266,7 @@ The relevant part for this tutorial is the account id `7EDHyxejuynBpmbLuiEym9HMU
 > [!NOTE]
 > As with public accounts, you can use the `--label` option to assign a label: `wallet account new private --label "my-private-account"`.
 
-You can check it's uninitialized with 
+You can check it's uninitialized with
 
 ```bash
 wallet account get --account-id Private/7EDHyxejuynBpmbLuiEym9HMUyCYxZDuF8X3B89ADeMr
@@ -452,7 +452,7 @@ Because these operations may involve multiple accounts, we'll see how public and
 > See `methods/guest/src/bin/hello_world_with_move_function.rs`. The program just reads the instruction bytes and updates the accounts state.
 > All privacy handling happens on the runner side. When constructing the transaction, the runner decides which accounts are public or private and prepares the appropriate proofs. The program itself can't differentiate between privacy modes.
 
-Let's start by deploying the program 
+Let's start by deploying the program
 ```bash
 wallet deploy-program $EXAMPLE_PROGRAMS_BUILD_DIR/hello_world_with_move_function.bin
 ```
@@ -486,7 +486,7 @@ Output:
 Generated new account with account_id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEVkReU at path /1
 ```
 
-Let's execute the write function 
+Let's execute the write function
 
 ```bash
 cargo run --bin run_hello_world_with_move_function \

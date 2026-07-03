@@ -22,8 +22,7 @@ impl Amm<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::amm();
-        let amm_program_id = Program::amm().id();
+        let amm_program_id = programs::amm().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -67,7 +66,7 @@ impl Amm<'_> {
                     user_holding_lp,
                 ],
                 instruction_data,
-                &program.into(),
+                amm_program_id,
             )
             .await
     }
@@ -87,8 +86,7 @@ impl Amm<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::amm();
-        let amm_program_id = Program::amm().id();
+        let amm_program_id = programs::amm().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -149,7 +147,7 @@ impl Amm<'_> {
                     user_b_signing_identity,
                 ],
                 instruction_data,
-                &program.into(),
+                amm_program_id,
             )
             .await
     }
@@ -169,8 +167,7 @@ impl Amm<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::amm();
-        let amm_program_id = Program::amm().id();
+        let amm_program_id = programs::amm().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -231,7 +228,7 @@ impl Amm<'_> {
                     user_b_signing_identity,
                 ],
                 instruction_data,
-                &program.into(),
+                amm_program_id,
             )
             .await
     }
@@ -252,8 +249,7 @@ impl Amm<'_> {
             .public_account_id()
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
-        let program = Program::amm();
-        let amm_program_id = Program::amm().id();
+        let amm_program_id = programs::amm().id();
         let user_a_acc = self
             .0
             .get_account_public(a_id)
@@ -297,7 +293,7 @@ impl Amm<'_> {
                     user_holding_lp,
                 ],
                 instruction_data,
-                &program.into(),
+                amm_program_id,
             )
             .await
     }
@@ -311,8 +307,7 @@ impl Amm<'_> {
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let program = Program::amm();
-        let amm_program_id = Program::amm().id();
+        let amm_program_id = programs::amm().id();
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -356,7 +351,7 @@ impl Amm<'_> {
                     user_holding_lp,
                 ],
                 instruction_data,
-                &program.into(),
+                amm_program_id,
             )
             .await
     }

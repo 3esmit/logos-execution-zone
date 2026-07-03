@@ -63,7 +63,7 @@ async fn main() {
 
     // Load the program
     let bytecode: Vec<u8> = std::fs::read(cli.program_path).unwrap();
-    let program = Program::new(bytecode).unwrap();
+    let program = Program::new(bytecode.into()).unwrap();
 
     // Initialize wallet
     let wallet_core = WalletCore::from_env().unwrap();
