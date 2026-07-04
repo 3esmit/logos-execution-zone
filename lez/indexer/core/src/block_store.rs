@@ -23,7 +23,12 @@ impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
     pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
+        #[cfg(not(feature = "testnet"))]
         let mut initial_state = testnet_initial_state::initial_state();
+
+        #[cfg(feature = "testnet")]
+        let mut initial_state = testnet_initial_state::initial_state_testnet();
+
         // Seed any zone-specific genesis accounts (the cross-zone inbox config and
         // bridge-lock holdings) so the indexer's replayed state matches the
         // sequencer's; none are produced by a transaction.
