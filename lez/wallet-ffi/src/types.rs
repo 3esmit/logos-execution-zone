@@ -45,6 +45,12 @@ impl From<FfiNullifierPublicKey> for NullifierPublicKey {
     }
 }
 
+impl From<NullifierPublicKey> for FfiNullifierPublicKey {
+    fn from(value: NullifierPublicKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
 /// Program ID - 8 u32 values (32 bytes total).
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
