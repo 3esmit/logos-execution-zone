@@ -749,13 +749,9 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(
-            accounts,
-            instruction_data,
-            program,
-            |_| Ok(()),
-            0,
-        )
+        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
+            Ok(())
+        })
         .await
     }
 
@@ -765,7 +761,6 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-        dummy_count: usize,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
@@ -784,7 +779,7 @@ impl WalletCore {
                 pre_states,
                 instruction_data,
                 acc_manager.account_identities(),
-                acc_manager.dummy_inputs(dummy_count),
+                acc_manager.dummy_inputs_default(),
                 &program.to_owned(),
             )?;
 
