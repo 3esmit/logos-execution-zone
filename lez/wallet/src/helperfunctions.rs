@@ -66,6 +66,15 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
     Ok(accs_path)
 }
 
+/// Fetch path to metrics storage from default home.
+///
+/// File must be created through setup beforehand.
+pub fn fetch_metrics_path() -> Result<PathBuf> {
+    let home = get_home()?;
+    let metrics_path = home.join("metrics.json");
+    Ok(metrics_path)
+}
+
 #[expect(dead_code, reason = "Maybe used later")]
 pub(crate) fn produce_random_nonces(size: usize) -> Vec<Nonce> {
     let mut result = vec![[0; 16]; size];

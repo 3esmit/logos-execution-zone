@@ -37,7 +37,7 @@ impl ConfigSubcommand {
         } else if let Some(key) = key {
             match key.as_str() {
                 "sequencer_addr" => {
-                    println!("{}", config.sequencer_addr);
+                    println!("{:?}", config.sequencers_conn_data);
                 }
                 "seq_poll_timeout" => {
                     println!("{:?}", config.seq_poll_timeout);
@@ -50,13 +50,6 @@ impl ConfigSubcommand {
                 }
                 "seq_block_poll_max_amount" => {
                     println!("{}", config.seq_block_poll_max_amount);
-                }
-                "basic_auth" => {
-                    if let Some(basic_auth) = &config.basic_auth {
-                        println!("{basic_auth}");
-                    } else {
-                        println!("Not set");
-                    }
                 }
                 _ => {
                     println!("Unknown field");
@@ -76,9 +69,6 @@ impl ConfigSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let mut config = wallet_core.config().clone();
         match key.as_str() {
-            "sequencer_addr" => {
-                config.sequencer_addr = value.parse()?;
-            }
             "seq_poll_timeout" => {
                 config.seq_poll_timeout = humantime::parse_duration(&value)
                     .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
@@ -91,9 +81,6 @@ impl ConfigSubcommand {
             }
             "seq_block_poll_max_amount" => {
                 config.seq_block_poll_max_amount = value.parse()?;
-            }
-            "basic_auth" => {
-                config.basic_auth = Some(value.parse()?);
             }
             "initial_accounts" => {
                 anyhow::bail!("Setting this field from wallet is not supported");

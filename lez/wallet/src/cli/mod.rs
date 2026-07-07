@@ -219,7 +219,7 @@ pub async fn execute_subcommand(
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
-                .sequencer_client
+                .optimal_sequencer_client()
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
@@ -287,7 +287,7 @@ pub async fn execute_subcommand(
             let message = lee::program_deployment_transaction::Message::new(bytecode);
             let transaction = ProgramDeploymentTransaction::new(message);
             let _response = wallet_core
-                .sequencer_client
+                .optimal_sequencer_client()
                 .send_transaction(LeeTransaction::ProgramDeployment(transaction))
                 .await
                 .context("Transaction submission error")?;
@@ -384,12 +384,13 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
+    let optimal_sequencer_client = wallet_core.optimal_sequencer_client_owned();
+
     wallet_core
         .storage
         .key_chain_mut()
         .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            wallet_core
-                .sequencer_client
+            optimal_sequencer_client
                 .get_account(account_id)
                 .map_err(Into::into)
         })

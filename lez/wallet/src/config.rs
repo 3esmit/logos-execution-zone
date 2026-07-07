@@ -8,6 +8,15 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SequencerConnectionData {
+    /// Connection data of all known sequencers.
+    pub sequencer_addr: Url,
+    /// Basic authentication credentials
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub basic_auth: Option<BasicAuth>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
     /// Gas spent per deploying one byte of data.
     pub gas_fee_per_byte_deploy: u64,
@@ -28,8 +37,8 @@ pub struct GasConfig {
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    /// Sequencer URL.
-    pub sequencer_addr: Url,
+    /// Connection data of all known sequencers.
+    pub sequencers_conn_data: Vec<SequencerConnectionData>,
     /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
@@ -39,20 +48,19 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Basic authentication credentials
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub basic_auth: Option<BasicAuth>,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
-            sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
+            sequencers_conn_data: vec![SequencerConnectionData {
+                sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
+                basic_auth: None,
+            }],
             seq_poll_timeout: Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            basic_auth: None,
         }
     }
 }
@@ -97,26 +105,24 @@ impl WalletConfig {
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
-            sequencer_addr,
+            sequencers_conn_data,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            basic_auth,
         } = self;
 
         let WalletConfigOverrides {
-            sequencer_addr: o_sequencer_addr,
+            sequencers_conn_data: o_sequencers_conn_data,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            basic_auth: o_basic_auth,
         } = overrides;
 
-        if let Some(v) = o_sequencer_addr {
-            warn!("Overriding wallet config 'sequencer_addr' to {v}");
-            *sequencer_addr = v;
+        if let Some(v) = o_sequencers_conn_data {
+            warn!("Overriding wallet config 'sequencers_conn_data' to {v:?}");
+            *sequencers_conn_data = v;
         }
         if let Some(v) = o_seq_poll_timeout {
             warn!("Overriding wallet config 'seq_poll_timeout' to {v:?}");
@@ -133,10 +139,6 @@ impl WalletConfig {
         if let Some(v) = o_seq_block_poll_max_amount {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
-        }
-        if let Some(v) = o_basic_auth {
-            warn!("Overriding wallet config 'basic_auth' to {v:#?}");
-            *basic_auth = v;
         }
     }
 }

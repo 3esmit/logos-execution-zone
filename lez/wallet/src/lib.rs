@@ -26,13 +26,14 @@ use lee_core::{
     account::Nonce, compute_digest_for_path, program::InstructionData,
 };
 use log::info;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
+    multi_client::{Metrics, MultiSequencerClient},
     poller::TxPoller,
     storage::key_chain::SharedAccountEntry,
 };
@@ -42,6 +43,7 @@ mod account_manager;
 pub mod cli;
 pub mod config;
 pub mod helperfunctions;
+pub mod multi_client;
 pub mod poller;
 pub mod program_facades;
 pub mod signing;
@@ -92,8 +94,9 @@ pub struct WalletCore {
     storage: Storage,
     storage_path: PathBuf,
 
-    poller: TxPoller,
-    pub sequencer_client: SequencerClient,
+    _metrics_path: PathBuf,
+
+    pub multi_sequencer_client: MultiSequencerClient,
 }
 
 impl WalletCore {
@@ -101,29 +104,44 @@ impl WalletCore {
     pub fn from_env() -> Result<Self> {
         let config_path = helperfunctions::fetch_config_path()?;
         let storage_path = helperfunctions::fetch_persistent_storage_path()?;
+        let metrics_path = helperfunctions::fetch_metrics_path()?;
 
-        Self::new_update_chain(config_path, storage_path, None)
+        Self::new_update_chain(config_path, storage_path, metrics_path, None)
     }
 
     pub fn new_update_chain(
         config_path: PathBuf,
         storage_path: PathBuf,
+        metrics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
     ) -> Result<Self> {
         let storage = Storage::from_path(&storage_path)
             .with_context(|| format!("Failed to load storage from {}", storage_path.display()))?;
 
-        Self::new(config_path, storage_path, config_overrides, storage)
+        Self::new(
+            config_path,
+            storage_path,
+            metrics_path,
+            config_overrides,
+            storage,
+        )
     }
 
     pub fn new_init_storage(
         config_path: PathBuf,
         storage_path: PathBuf,
+        metrics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
     ) -> Result<(Self, Mnemonic)> {
         let (storage, mnemonic) = Storage::new(password).context("Failed to create storage")?;
-        let wallet = Self::new(config_path, storage_path, config_overrides, storage)?;
+        let wallet = Self::new(
+            config_path,
+            storage_path,
+            metrics_path,
+            config_overrides,
+            storage,
+        )?;
 
         Ok((wallet, mnemonic))
     }
@@ -131,6 +149,7 @@ impl WalletCore {
     fn new(
         config_path: PathBuf,
         storage_path: PathBuf,
+        metrics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         storage: Storage,
     ) -> Result<Self> {
@@ -145,25 +164,7 @@ impl WalletCore {
             config.apply_overrides(config_overrides);
         }
 
-        let sequencer_client = {
-            let mut builder = SequencerClientBuilder::default();
-            if let Some(basic_auth) = &config.basic_auth {
-                builder = builder.set_headers(
-                    std::iter::once((
-                        "Authorization".parse().expect("Header name is valid"),
-                        format!("Basic {basic_auth}")
-                            .parse()
-                            .context("Invalid basic auth format")?,
-                    ))
-                    .collect(),
-                );
-            }
-            builder
-                .build(config.sequencer_addr.clone())
-                .context("Failed to create sequencer client")?
-        };
-
-        let tx_poller = TxPoller::new(&config, sequencer_client.clone());
+        let multi_sequencer_client = MultiSequencerClient::new(&config.sequencers_conn_data)?;
 
         Ok(Self {
             config_path,
@@ -171,8 +172,8 @@ impl WalletCore {
             config,
             storage_path,
             storage,
-            poller: tx_poller,
-            sequencer_client,
+            _metrics_path: metrics_path,
+            multi_sequencer_client,
         })
     }
 
@@ -184,6 +185,27 @@ impl WalletCore {
 
     pub fn set_config(&mut self, config: WalletConfig) {
         self.config = config;
+    }
+
+    pub fn optimal_poller(&self) -> TxPoller {
+        let metrics = self.get_metrics();
+
+        TxPoller::new(
+            self.config(),
+            self.multi_sequencer_client.optimal_client_clone(&metrics),
+        )
+    }
+
+    pub fn optimal_sequencer_client(&self) -> &SequencerClient {
+        let metrics = self.get_metrics();
+
+        self.multi_sequencer_client.optimal_client_ref(&metrics)
+    }
+
+    pub fn optimal_sequencer_client_owned(&self) -> SequencerClient {
+        let metrics = self.get_metrics();
+
+        self.multi_sequencer_client.optimal_client_clone(&metrics)
     }
 
     /// Get storage.
@@ -430,14 +452,24 @@ impl WalletCore {
         })
     }
 
+    pub fn get_metrics(&self) -> Vec<Metrics> {
+        todo!();
+    }
+
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
-        Ok(self.sequencer_client.get_account_balance(acc).await?)
+        Ok(self
+            .optimal_sequencer_client()
+            .get_account_balance(acc)
+            .await?)
     }
 
     /// Get accounts nonces.
     pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<Nonce>> {
-        Ok(self.sequencer_client.get_accounts_nonces(accs).await?)
+        Ok(self
+            .optimal_sequencer_client()
+            .get_accounts_nonces(accs)
+            .await?)
     }
 
     pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
@@ -455,7 +487,10 @@ impl WalletCore {
 
     /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
-        Ok(self.sequencer_client.get_account(account_id).await?)
+        Ok(self
+            .optimal_sequencer_client()
+            .get_account(account_id)
+            .await?)
     }
 
     #[must_use]
@@ -492,7 +527,7 @@ impl WalletCore {
 
     /// Poll transactions.
     pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
-        self.poller.poll_tx(hash).await
+        self.optimal_poller().poll_tx(hash).await
     }
 
     pub async fn check_private_account_initialized(
@@ -500,7 +535,7 @@ impl WalletCore {
         account_id: AccountId,
     ) -> Result<Option<MembershipProof>> {
         if let Some(acc_comm) = self.get_private_account_commitment(account_id) {
-            self.sequencer_client
+            self.optimal_sequencer_client()
                 .get_proof_for_commitment(acc_comm)
                 .await
                 .map_err(Into::into)
@@ -511,7 +546,7 @@ impl WalletCore {
 
     pub async fn get_commitment_root(&self) -> Result<Option<CommitmentSetDigest>> {
         let proof = self
-            .sequencer_client
+            .optimal_sequencer_client()
             .get_proof_for_commitment(DUMMY_COMMITMENT)
             .await?;
         Ok(proof.map(|p| compute_digest_for_path(&DUMMY_COMMITMENT, &p)))
@@ -643,7 +678,7 @@ impl WalletCore {
             .collect();
 
         Ok((
-            self.sequencer_client
+            self.optimal_sequencer_client()
                 .send_transaction(LeeTransaction::PrivacyPreserving(tx))
                 .await?,
             shared_secrets,
@@ -707,13 +742,13 @@ impl WalletCore {
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
         Ok(self
-            .sequencer_client
+            .optimal_sequencer_client()
             .send_transaction(LeeTransaction::Public(tx))
             .await?)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
-        let latest_block_id = self.sequencer_client.get_last_block_id().await?;
+        let latest_block_id = self.optimal_sequencer_client().get_last_block_id().await?;
         println!("Latest block is {latest_block_id}");
         self.sync_to_block(latest_block_id).await?;
         Ok(latest_block_id)
@@ -735,7 +770,7 @@ impl WalletCore {
 
         println!("Syncing to block {block_id}. Blocks to sync: {num_of_blocks}");
 
-        let poller = self.poller.clone();
+        let poller = self.optimal_poller().clone();
         let mut blocks =
             std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 
