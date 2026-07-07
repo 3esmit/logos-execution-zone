@@ -12,7 +12,7 @@ use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use storage::sequencer::{
     RocksDBIO,
-    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
+    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord},
 };
 pub use storage::{DbResult, sequencer::DbDump};
 
@@ -28,6 +28,45 @@ impl SequencerStore {
     /// Open existing database at the given location. Fails if no database is found.
     pub fn open_db(location: &Path, signing_key: lee::PrivateKey) -> DbResult<Self> {
         let dbio = Arc::new(RocksDBIO::open(location)?);
+        Self::from_dbio_and_signing_key(dbio, signing_key)
+    }
+
+    /// Create a fresh rocksdb at `location` from `dump`.
+    pub fn restore_db_from_dump(
+        location: &Path,
+        dump: &DbDump,
+        signing_key: lee::PrivateKey,
+    ) -> DbResult<Self> {
+        let dbio = Arc::new(RocksDBIO::restore_from_dump(location, dump)?);
+        Self::from_dbio_and_signing_key(dbio, signing_key)
+    }
+
+    /// Starting database at the start of new chain.
+    /// Creates files if necessary.
+    ///
+    /// ATTENTION: Will overwrite genesis block.
+    pub fn create_db_with_genesis(
+        location: &Path,
+        genesis_block: &Block,
+        genesis_state: &V03State,
+        signing_key: lee::PrivateKey,
+    ) -> DbResult<Self> {
+        let dbio = Arc::new(RocksDBIO::create(location, genesis_block, genesis_state)?);
+        let genesis_id = dbio.get_meta_first_block_in_db()?;
+        let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
+
+        Ok(Self {
+            dbio,
+            tx_hash_to_block_map,
+            genesis_id,
+            signing_key,
+        })
+    }
+
+    fn from_dbio_and_signing_key(
+        dbio: Arc<RocksDBIO>,
+        signing_key: lee::PrivateKey,
+    ) -> DbResult<Self> {
         let genesis_id = dbio.get_meta_first_block_in_db()?;
         let last_id = dbio.latest_block_meta()?.id;
 
@@ -44,28 +83,6 @@ impl SequencerStore {
             "Block cache prepared. Total blocks in cache: {}",
             tx_hash_to_block_map.len()
         );
-
-        Ok(Self {
-            dbio,
-            tx_hash_to_block_map,
-            genesis_id,
-            signing_key,
-        })
-    }
-
-    /// Starting database at the start of new chain.
-    /// Creates files if necessary.
-    ///
-    /// ATTENTION: Will overwrite genesis block.
-    pub fn create_db_with_genesis(
-        location: &Path,
-        genesis_block: &Block,
-        genesis_state: &V03State,
-        signing_key: lee::PrivateKey,
-    ) -> DbResult<Self> {
-        let dbio = Arc::new(RocksDBIO::create(location, genesis_block, genesis_state)?);
-        let genesis_id = dbio.get_meta_first_block_in_db()?;
-        let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
 
         Ok(Self {
             dbio,
@@ -165,13 +182,6 @@ impl SequencerStore {
         self.dbio.dump_all()
     }
 
-    /// Create a fresh rocksdb at `location` from `dump`, closing it before returning so a sequencer
-    /// can open it normally afterwards.
-    pub fn restore_db_from_dump(location: &Path, dump: &DbDump) -> DbResult<()> {
-        RocksDBIO::restore_from_dump(location, dump)?;
-        Ok(())
-    }
-
     pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
         let Some(bytes) = self.dbio.get_zone_sdk_checkpoint_bytes()? else {
             return Ok(None);
@@ -186,6 +196,16 @@ impl SequencerStore {
             serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")?;
         self.dbio.put_zone_sdk_checkpoint_bytes(&bytes)?;
         Ok(())
+    }
+
+    /// The last channel block read back and verified from Bedrock (L1 slot +
+    /// `id`/`hash`), or `None` before any block has been read from the channel.
+    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
+        self.dbio.get_zone_cursor()
+    }
+
+    pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
+        self.dbio.put_zone_cursor(anchor)
     }
 
     pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {

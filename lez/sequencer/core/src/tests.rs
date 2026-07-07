@@ -37,6 +37,8 @@ use crate::{
     mock::SequencerCoreWithMockClients,
 };
 
+mod reconstruction;
+
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,

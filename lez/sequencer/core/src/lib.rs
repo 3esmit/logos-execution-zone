@@ -2,18 +2,23 @@ use std::{path::Path, sync::Arc, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
+use chain_consistency::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, Tip};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+use futures::StreamExt as _;
 use itertools::Itertools as _;
-use lee::{AccountId, PublicTransaction, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, V03State, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use logos_blockchain_zone_sdk::sequencer::{DepositInfo, WithdrawArg};
+use logos_blockchain_zone_sdk::{
+    Slot, ZoneMessage,
+    sequencer::{DepositInfo, WithdrawArg},
+};
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
@@ -21,7 +26,7 @@ use num_bigint::BigUint;
 pub use storage::error::DbError;
 use storage::sequencer::{
     RocksDBIO,
-    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
+    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord},
 };
 
 use crate::{
@@ -72,7 +77,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
-    fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State, Block) {
+    fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
         let db_path = config.home.join("rocksdb");
 
@@ -86,11 +91,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             let state = store
                 .get_lee_state()
                 .expect("Failed to read state from store");
-            let genesis_block = store
-                .get_block_at_id(store.genesis_id())
-                .expect("Failed to read genesis block from store")
-                .expect("Genesis block not found in store");
-            (store, state, genesis_block)
+            (store, state)
         } else {
             warn!(
                 "Database not found at {}, starting from genesis",
@@ -115,7 +116,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             )
             .expect("Failed to create database with genesis block");
 
-            (store, genesis_state, genesis_block)
+            (store, genesis_state)
         }
     }
 
@@ -126,11 +127,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
 
-        let (store, state, _genesis_block) = Self::open_or_create_store(&config);
-
-        let latest_block_meta = store
-            .latest_block_meta()
-            .expect("Failed to read latest block meta from store");
+        let (mut store, mut state) = Self::open_or_create_store(&config);
 
         let initial_checkpoint = store
             .get_zone_checkpoint()
@@ -153,8 +150,28 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         .await
         .expect("Failed to initialize Block Publisher");
 
-        // Fresh start (no checkpoint): republish all pending blocks
-        if is_fresh_start {
+        // Cross-zone messaging: start a watcher per configured peer. The inbox
+        // config account is seeded into genesis state in `build_genesis_state`.
+        if let Some(cross_zone) = &config.cross_zone {
+            cross_zone_watcher::spawn_watchers(
+                &config.bedrock_config,
+                cross_zone,
+                config.block_create_timeout,
+                &mempool_handle,
+            );
+        }
+        // Before producing, verify our local state still belongs to the chain
+        // the channel serves and replay any channel blocks we are missing
+        // (e.g. from other sequencers).
+        let chanel_was_empty =
+            Self::verify_and_reconstruct(&block_publisher, &mut store, &mut state, is_fresh_start)
+                .await
+                .expect("Failed to verify/reconstruct sequencer state from Bedrock");
+
+        // Publish our blocks only when bootstrapping an empty channel. If the
+        // channel already has blocks (another sequencer bootstrapped it), we
+        // adopted them during reconstruction instead.
+        if is_fresh_start && chanel_was_empty {
             let mut pending_blocks = store
                 .get_all_blocks()
                 .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
@@ -182,16 +199,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        // Cross-zone messaging: start a watcher per configured peer. The inbox
-        // config account is seeded into genesis state in `build_genesis_state`.
-        if let Some(cross_zone) = &config.cross_zone {
-            cross_zone_watcher::spawn_watchers(
-                &config.bedrock_config,
-                cross_zone,
-                config.block_create_timeout,
-                &mempool_handle,
-            );
-        }
+        let latest_block_meta = store
+            .latest_block_meta()
+            .expect("Failed to read latest block meta from store");
 
         let sequencer_core = Self {
             state,
@@ -203,6 +213,204 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
 
         (sequencer_core, mempool_handle)
+    }
+
+    /// Verifies the local store still belongs to the chain the connected channel
+    /// serves and replays any finalized channel blocks missing locally into
+    /// `state`/`store`, recording each block's L1 inscription slot as the new
+    /// anchor. Fails (never parks) on any divergence.
+    ///
+    /// Returns whatever channel was empty or not.
+    async fn verify_and_reconstruct(
+        publisher: &BP,
+        store: &mut SequencerStore,
+        state: &mut V03State,
+        is_fresh_start: bool,
+    ) -> Result<bool> {
+        let anchor_record = store
+            .get_zone_anchor()
+            .context("Failed to read zone anchor")?;
+
+        let after_slot = anchor_record
+            .and_then(|record| record.slot.checked_sub(1))
+            .map(Slot::from);
+        let channel_tip_slot = publisher
+            .channel_tip_slot()
+            .await
+            .context("Failed to read channel tip slot")?;
+
+        // If this sequencer has already committed blocks to the channel, that
+        // channel must still exist. A missing channel then means a wiped/rewound
+        // Bedrock or a node pointing at a different chain, so refuse to resume
+        // onto a foreign channel.
+        //
+        // "Committed" requires *both* a non-genesis tip and a checkpoint that was
+        // persisted before this startup: the tip alone is set the moment we produce
+        // (before the channel confirms it), while a checkpoint alone is written by
+        // zone-sdk's cold-start backfill even on a brand-new empty channel before we
+        // publish genesis. We must read the checkpoint presence from before `BP::new`
+        // ran (`!is_fresh_start`), because its cold-start backfill re-persists a
+        // checkpoint by the time we reach here — reading the store now would always
+        // see one. Together they mean we produced blocks and zone-sdk processed
+        // channel activity in a prior run.
+        let local_tip = store
+            .latest_block_meta()
+            .context("Failed to read latest block meta")?
+            .id;
+        let had_checkpoint_before_start = !is_fresh_start;
+        let has_committed_to_channel = local_tip > GENESIS_BLOCK_ID && had_checkpoint_before_start;
+        if has_committed_to_channel && channel_tip_slot.is_none() {
+            return Err(anyhow!(
+                "Sequencer holds committed blocks (tip {local_tip}) but the Bedrock channel \
+                 no longer exists on the connected chain — the channel was wiped or the node \
+                 points at a different chain. Refusing to resume onto a foreign channel."
+            ));
+        }
+
+        let divergence_error = |mismatch: &ChainMismatch| {
+            anyhow!(
+                "Sequencer store diverges from the Bedrock channel ({mismatch}). \
+                 Delete the sequencer storage directory or point at the correct channel."
+            )
+        };
+
+        // With a recorded anchor, probe the channel for positive evidence of a
+        // different chain: the frontier upfront (a missing/behind channel serves
+        // no messages to scan), then the anchor block as messages stream in.
+        let mut consistency_check = anchor_record.map(|record| {
+            let anchor = Anchor::new(
+                Slot::from(record.slot),
+                Some((record.block_id, record.hash)),
+            );
+            let mut check = AnchorConsistencyCheck::new(anchor);
+            check.check_frontier(channel_tip_slot);
+            check
+        });
+        if let Some(ChainConsistency::Inconsistent(mismatch)) = consistency_check
+            .as_ref()
+            .and_then(AnchorConsistencyCheck::verdict)
+        {
+            return Err(divergence_error(mismatch));
+        }
+
+        // Verify each message against the anchor and replay the
+        // blocks (applying the ones we miss, checking the ones we hold).
+        let messages = publisher
+            .read_channel_after(after_slot)
+            .await
+            .context("Failed to read channel history for reconstruction")?;
+        let mut messages = std::pin::pin!(messages);
+        let mut channel_is_empty = true;
+        while let Some((message, slot)) = messages.next().await {
+            if let Some(check) = &mut consistency_check
+                && let Some(ChainConsistency::Inconsistent(mismatch)) =
+                    check.observe(&message, slot)
+            {
+                return Err(divergence_error(mismatch));
+            }
+
+            let ZoneMessage::Block(zone_block) = message else {
+                continue;
+            };
+            let block: Block = borsh::from_slice(&zone_block.data).map_err(|err| {
+                anyhow!(
+                    "Failed to deserialize channel block at slot {}: {err}",
+                    slot.into_inner()
+                )
+            })?;
+            channel_is_empty = false;
+            Self::apply_reconstructed_block(store, state, &block, slot)?;
+        }
+
+        Ok(channel_is_empty)
+    }
+
+    /// Applies a single channel block during reconstruction: idempotent for
+    /// blocks we already hold (verifying their hash), a validated continuation
+    /// for new ones. Advances the persisted anchor to the block's slot.
+    fn apply_reconstructed_block(
+        store: &mut SequencerStore,
+        state: &mut V03State,
+        block: &Block,
+        slot: Slot,
+    ) -> Result<()> {
+        let tip = store
+            .latest_block_meta()
+            .context("Failed to read latest block meta")?;
+        let block_id = block.header.block_id;
+        let block_hash = block.header.hash;
+
+        let record = ZoneAnchorRecord {
+            slot: slot.into_inner(),
+            block_id,
+            hash: block_hash,
+        };
+
+        // A block at/below the tip must match what we already stored, otherwise
+        // the channel is a different chain.
+        if block_id <= tip.id {
+            match store
+                .get_block_at_id(block_id)
+                .context("Failed to read stored block")?
+            {
+                Some(stored) if stored.header.hash == block_hash => {
+                    store
+                        .set_zone_anchor(&record)
+                        .context("Failed to persist zone anchor")?;
+                    return Ok(());
+                }
+                Some(stored) => {
+                    return Err(anyhow!(
+                        "Channel block {block_id} hash {block_hash} does not match stored hash {}",
+                        stored.header.hash
+                    ));
+                }
+                None => {
+                    return Err(anyhow!(
+                        "Channel block {block_id} is at/below local tip {} but is missing locally",
+                        tip.id
+                    ));
+                }
+            }
+        }
+
+        // New continuation: validate it chains onto the tip, then apply.
+        let cc_tip = Tip {
+            block_id: tip.id,
+            hash: tip.hash,
+        };
+        chain_consistency::validate_against_tip(Some(&cc_tip), block).map_err(|err| {
+            anyhow!(
+                "Channel block {block_id} does not extend local tip {}: {err}",
+                tip.id
+            )
+        })?;
+
+        let mut scratch = state.clone();
+        chain_consistency::apply_block(block, &mut scratch)
+            .map_err(|err| anyhow!("Failed to apply channel block {block_id}: {err}"))?;
+
+        // Derive bridge bookkeeping from the block's transactions, matching the
+        // production path so the reconciliation counters stay consistent.
+        let mut deposit_event_ids = Vec::new();
+        let mut withdrawals = Vec::new();
+        for tx in &block.body.transactions {
+            if let Some(deposit_id) = extract_bridge_deposit_id(tx) {
+                deposit_event_ids.push(deposit_id);
+            }
+            if let Some(withdraw) = extract_bridge_withdraw_data(tx) {
+                withdrawals.push(withdraw_event_reconciliation_key(&withdraw.outputs)?);
+            }
+        }
+
+        store
+            .update(block, &deposit_event_ids, withdrawals, &scratch)
+            .context("Failed to persist reconstructed block")?;
+        *state = scratch;
+        store
+            .set_zone_anchor(&record)
+            .context("Failed to persist zone anchor")?;
+        Ok(())
     }
 
     fn on_checkpoint(dbio: Arc<RocksDBIO>) -> block_publisher::CheckpointSink {
@@ -561,8 +769,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect())
     }
 
-    pub fn block_publisher(&self) -> BP {
-        self.block_publisher.clone()
+    pub const fn block_publisher(&self) -> &BP {
+        &self.block_publisher
     }
 
     fn next_block_id(&self) -> u64 {

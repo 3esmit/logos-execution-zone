@@ -22,7 +22,7 @@ use crate::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
         LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
         PendingDepositEventsCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        ZoneAnchorRecord, ZoneCursorCell, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -34,6 +34,10 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing the last channel block read back and verified from
+/// Bedrock (its L1 slot + `id`/`hash`) — the anchor for the startup
+/// consistency check and the resume point for reconstruction.
+pub const DB_META_ZONE_CURSOR_KEY: &str = "zone_cursor";
 /// Key base for storing queued deposit events that were not yet
 /// fulfilled on L2.
 pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
@@ -357,6 +361,14 @@ impl RocksDBIO {
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
     pub fn delete_zone_sdk_checkpoint_bytes(&self) -> DbResult<()> {
         self.del::<ZoneSdkCheckpointCellOwned>(())
+    }
+
+    pub fn get_zone_cursor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
+        Ok(self.get_opt::<ZoneCursorCell>(())?.map(|cell| cell.0))
+    }
+
+    pub fn put_zone_cursor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
+        self.put(&ZoneCursorCell(*anchor), ())
     }
 
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {

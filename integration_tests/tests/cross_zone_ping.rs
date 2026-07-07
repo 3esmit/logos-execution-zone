@@ -18,7 +18,7 @@ use common::transaction::LeeTransaction;
 use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
-    setup::{setup_bedrock_node, setup_sequencer},
+    setup::{SequencerSetup, setup_bedrock_node},
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
@@ -54,13 +54,19 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         }],
     };
 
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
+    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_a)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (seq_b, _seq_b_home) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone))
-            .await
-            .context("Failed to set up zone B sequencer")?;
+    let (seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_b)
+        .with_genesis(vec![])
+        .with_cross_zone(cross_zone)
+        .setup()
+        .await
+        .context("Failed to set up zone B sequencer")?;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);

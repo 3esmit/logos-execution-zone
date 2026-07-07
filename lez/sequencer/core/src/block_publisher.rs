@@ -2,14 +2,16 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
+use futures::Stream;
 use log::{info, warn};
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
 use logos_blockchain_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
-    CommonHttpClient,
-    adapter::NodeHttpClient,
+    CommonHttpClient, Slot, ZoneMessage,
+    adapter::{Node as _, NodeHttpClient},
+    indexer::ZoneIndexer,
     sequencer::{
         DepositInfo, Event, FinalizedOp, InscriptionInfo,
         SequencerConfig as ZoneSdkSequencerConfig, WithdrawArg, WithdrawInfo, ZoneSequencer,
@@ -42,7 +44,7 @@ pub type OnWithdrawEventSink =
     Box<dyn Fn(WithdrawInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
-pub trait BlockPublisherTrait: Clone {
+pub trait BlockPublisherTrait: Sized {
     #[expect(
         clippy::too_many_arguments,
         reason = "Looks better than bundling all those callbacks into a struct"
@@ -63,15 +65,30 @@ pub trait BlockPublisherTrait: Clone {
     async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
 
     fn channel_id(&self) -> ChannelId;
+
+    /// Current channel frontier slot on the connected chain, or `None` if the
+    /// channel does not exist there. Drives the startup frontier check.
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
+
+    /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
+    /// for the startup consistency check and reconstruction. Pass `None` to read
+    /// from the channel's genesis.
+    async fn read_channel_after(
+        &self,
+        after_slot: Option<Slot>,
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_>;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
-#[derive(Clone)]
 pub struct ZoneSdkPublisher {
     channel_id: ChannelId,
+    /// Direct node handle retained for channel reads (startup consistency check
+    /// and reconstruction); the sequencer itself lives in the drive task.
+    node: NodeHttpClient,
     publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
+    indexer: ZoneIndexer<NodeHttpClient>,
 }
 
 struct DriveTaskGuard(JoinHandle<()>);
@@ -104,7 +121,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         let mut sequencer = ZoneSequencer::init_with_config(
             config.channel_id,
             bedrock_signing_key,
-            node,
+            node.clone(),
             zone_sdk_config,
             initial_checkpoint,
         );
@@ -196,6 +213,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         Ok(Self {
             channel_id: config.channel_id,
+            indexer: ZoneIndexer::new(config.channel_id, node.clone()),
+            node,
             publish_tx,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
@@ -217,6 +236,27 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
     fn channel_id(&self) -> ChannelId {
         self.channel_id
+    }
+
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self
+            .node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")?
+            .map(|state| state.tip_slot))
+    }
+
+    async fn read_channel_after(
+        &self,
+        after_slot: Option<Slot>,
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_> {
+        let stream = self
+            .indexer
+            .next_messages(after_slot)
+            .await
+            .context("Failed to start channel read stream")?;
+        Ok(stream)
     }
 }
 

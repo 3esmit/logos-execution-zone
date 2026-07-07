@@ -11,6 +11,7 @@ workspace = true
 lee.workspace = true
 lee_core.workspace = true
 common.workspace = true
+chain_consistency.workspace = true
 storage.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true

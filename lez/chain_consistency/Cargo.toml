@@ -1,0 +1,26 @@
+[package]
+name = "chain_consistency"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+
+logos-blockchain-zone-sdk.workspace = true
+logos-blockchain-core.workspace = true
+anyhow.workspace = true
+borsh.workspace = true
+futures.workspace = true
+log.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

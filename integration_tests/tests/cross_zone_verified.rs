@@ -17,7 +17,7 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{setup_bedrock_node, setup_indexer, setup_sequencer},
+    setup::{SequencerSetup, setup_bedrock_node, setup_indexer},
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
@@ -53,21 +53,22 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
+    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_a)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
     let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
         .await
         .context("Failed to set up zone A indexer")?;
-    let (_seq_b, _seq_b_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        vec![],
-        channel_b,
-        Some(cross_zone.clone()),
-    )
-    .await
-    .context("Failed to set up zone B sequencer")?;
+    let (_seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_b)
+        .with_genesis(vec![])
+        .with_cross_zone(cross_zone.clone())
+        .setup()
+        .await
+        .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
         .await
         .context("Failed to set up zone B indexer")?;
