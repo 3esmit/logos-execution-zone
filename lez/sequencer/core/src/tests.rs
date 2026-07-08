@@ -10,15 +10,15 @@ use common::{
 };
 use key_protocol::key_management::KeyChain;
 use lee::{
-    Account, AccountId, Data, EphemeralPublicKey, PrivacyPreservingTransaction, PrivateKey,
-    PublicKey, PublicTransaction, SharedSecretKey, V03State,
+    Account, AccountId, Data, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+    PublicTransaction, V03State,
     error::LeeError,
     execute_and_prove,
     privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
     program::Program,
 };
 use lee_core::{
-    Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
+    Commitment, InputAccountIdentity, Nullifier,
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
@@ -790,8 +790,11 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 #[test]
 fn private_bridge_withdraw_invocation_is_dropped() {
     let sender_keys = KeyChain::new_os_random();
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.nullifier_public_key, 0);
+    let sender_account_id = AccountId::for_regular_private_account(
+        &sender_keys.nullifier_public_key,
+        &sender_keys.viewing_public_key,
+        0,
+    );
     let sender_private_account = Account {
         program_owner: programs::authenticated_transfer().id(),
         balance: 100,
@@ -812,15 +815,17 @@ fn private_bridge_withdraw_invocation_is_dropped() {
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
-        (&sender_keys.nullifier_public_key, 0),
+        (
+            &sender_keys.nullifier_public_key,
+            &sender_keys.viewing_public_key,
+            0,
+        ),
     );
     let bridge_pre = AccountWithMetadata::new(
         state.get_account_by_id(bridge_account_id),
         false,
         bridge_account_id,
     );
-
-    let shared_secret = SharedSecretKey::encapsulate(&sender_keys.viewing_public_key).0;
 
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Withdraw {
         amount: 1,
@@ -842,12 +847,8 @@ fn private_bridge_withdraw_invocation_is_dropped() {
         instruction,
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: EphemeralPublicKey(vec![12_u8; 1088]),
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.nullifier_public_key,
-                    &sender_keys.viewing_public_key,
-                ),
-                ssk: shared_secret,
+                vpk: sender_keys.viewing_public_key.clone(),
+                random_seed: [0; 32],
                 nsk: sender_keys.private_key_holder.nullifier_secret_key,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)

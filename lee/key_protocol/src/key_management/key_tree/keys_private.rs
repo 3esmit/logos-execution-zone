@@ -94,10 +94,11 @@ impl KeyTreeNode for ChildKeysPrivate {
 
     fn account_ids(&self) -> impl Iterator<Item = lee::AccountId> {
         let npk = self.value.0.nullifier_public_key;
+        let vpk = self.value.0.viewing_public_key.clone();
         self.value
             .1
             .keys()
-            .map(move |kind| lee::AccountId::for_private_account(&npk, kind))
+            .map(move |kind| lee::AccountId::for_private_account(&npk, &vpk, kind))
     }
 }
 

@@ -174,7 +174,8 @@ impl UserKeyChain {
             .1
             .first_key_value()
             .expect("Newly created key chain node must have at least one account");
-        let account_id = AccountId::for_private_account(&npk, kind);
+        let account_id =
+            AccountId::for_private_account(&npk, &node.value.0.viewing_public_key, kind);
         (account_id, chain_index)
     }
 
@@ -240,6 +241,7 @@ impl UserKeyChain {
             .find_map(|found| {
                 let expected_id = AccountId::for_private_account(
                     &found.key_chain.nullifier_public_key,
+                    &found.key_chain.viewing_public_key,
                     found.kind,
                 );
                 (expected_id == account_id).then_some(found)
@@ -264,8 +266,11 @@ impl UserKeyChain {
             .iter()
             .flat_map(|(key, data)| {
                 data.accounts.keys().map(|kind| {
-                    let account_id =
-                        AccountId::for_private_account(&key.key_chain.nullifier_public_key, kind);
+                    let account_id = AccountId::for_private_account(
+                        &key.key_chain.nullifier_public_key,
+                        &key.key_chain.viewing_public_key,
+                        kind,
+                    );
                     (account_id, &key.key_chain, key.chain_index.as_ref())
                 })
             })
@@ -340,8 +345,11 @@ impl UserKeyChain {
         // Then try to update imported account
         for (key, data) in &mut self.imported_private_accounts {
             for (kind, imported_account) in &mut data.accounts {
-                let expected_id =
-                    AccountId::for_private_account(&key.key_chain.nullifier_public_key, kind);
+                let expected_id = AccountId::for_private_account(
+                    &key.key_chain.nullifier_public_key,
+                    &key.key_chain.viewing_public_key,
+                    kind,
+                );
                 if expected_id == account_id {
                     debug!("Updating imported private account {account_id}");
                     *imported_account = account;
@@ -378,8 +386,11 @@ impl UserKeyChain {
 
         // Node not yet in account_id_map — find it by checking all nodes
         for (ci, node) in &mut self.private_key_tree.key_map {
-            let expected_id =
-                lee::AccountId::for_private_account(&node.value.0.nullifier_public_key, &kind);
+            let expected_id = lee::AccountId::for_private_account(
+                &node.value.0.nullifier_public_key,
+                &node.value.0.viewing_public_key,
+                &kind,
+            );
             if expected_id == account_id {
                 match node.value.1.entry(kind) {
                     Entry::Occupied(mut occupied) => {
@@ -429,8 +440,11 @@ impl UserKeyChain {
             .iter()
             .flat_map(|(key, data)| {
                 data.accounts.keys().map(|kind| {
-                    let account_id =
-                        AccountId::for_private_account(&key.key_chain.nullifier_public_key, kind);
+                    let account_id = AccountId::for_private_account(
+                        &key.key_chain.nullifier_public_key,
+                        &key.key_chain.viewing_public_key,
+                        kind,
+                    );
                     (account_id, key.chain_index.as_ref())
                 })
             })
@@ -720,7 +734,11 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
+        let account_id = AccountId::from((
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            0,
+        ));
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account);
@@ -735,7 +753,11 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
+        let account_id = AccountId::from((
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            0,
+        ));
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account.clone());
@@ -780,7 +802,11 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((&key_chain.nullifier_public_key, 0));
+        let account_id = AccountId::from((
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            0,
+        ));
 
         let new_account = lee_core::account::Account {
             balance: 100,
@@ -801,7 +827,11 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id1 = AccountId::from((&key_chain.nullifier_public_key, 0));
+        let account_id1 = AccountId::from((
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            0,
+        ));
         let account = lee_core::account::Account::default();
         user_data.add_imported_private_account(key_chain, None, 0, account);
 
