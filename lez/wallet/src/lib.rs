@@ -506,6 +506,12 @@ impl WalletCore {
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
+        let note_count = tx.message.validate_note_lengths()?;
+        anyhow::ensure!(
+            note_count == acc_decode_mask.len(),
+            "Decode mask has {} entries but the transaction has {note_count} notes",
+            acc_decode_mask.len(),
+        );
         for (output_index, acc_decode_data) in acc_decode_mask.iter().enumerate() {
             match acc_decode_data {
                 AccDecodeData::Decode(secret, acc_account_id) => {
@@ -731,6 +737,7 @@ impl WalletCore {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
                     continue;
                 };
+                pp_tx.message.validate_note_lengths()?;
                 // Eagerly decrypt note updates using expected nullifiers.
                 let handled = self
                     .storage
