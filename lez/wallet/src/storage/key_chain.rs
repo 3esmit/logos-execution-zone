@@ -378,7 +378,7 @@ impl UserKeyChain {
             let Some(account_id) = index.account_for(old_nullifier) else {
                 continue;
             };
-            // Try decrypting the commitment connectted to the nullifier and get the next
+            // Try decrypting the commitment connected to the nullifier and get the next
             // nullifier to await.
             if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
                 // Update the index to await for the new state of the account, i.e.

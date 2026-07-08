@@ -848,7 +848,7 @@ impl WalletCore {
             for (ciph_id, encrypted_data) in
                 message.encrypted_private_post_states.iter().enumerate()
             {
-                // If already decrypted or the tag does nto match, skip.
+                // If already decrypted or the tag does not match, skip.
                 if handled.contains(&ciph_id) || encrypted_data.view_tag != view_tag {
                     continue;
                 }
