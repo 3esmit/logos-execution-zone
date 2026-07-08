@@ -37,6 +37,14 @@ impl From<FfiPdaSeed> for PdaSeed {
     }
 }
 
+impl From<PdaSeed> for FfiPdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self {
+            data: *value.as_bytes(),
+        }
+    }
+}
+
 pub type FfiNullifierPublicKey = FfiBytes32;
 
 impl From<FfiNullifierPublicKey> for NullifierPublicKey {
