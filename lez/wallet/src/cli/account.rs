@@ -581,8 +581,11 @@ impl WalletSubcommand for ImportSubcommand {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let account_id =
-                    lee::AccountId::from((&key_chain.nullifier_public_key, identifier));
+                let account_id = lee::AccountId::from((
+                    &key_chain.nullifier_public_key,
+                    &key_chain.viewing_public_key,
+                    identifier,
+                ));
 
                 wallet_core
                     .storage_mut()

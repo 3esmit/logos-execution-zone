@@ -8,15 +8,14 @@ use integration_tests::{
     private_mention, public_mention, send, sync_private, verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, SharedSecretKey, execute_and_prove,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    AccountId, execute_and_prove, privacy_preserving_transaction::circuit::ProgramWithDependencies,
+    program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity,
-    ML_KEM_768_CIPHERTEXT_LEN, Nullifier, NullifierPublicKey,
+    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     compute_digest_for_path,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    encryption::ViewingPublicKey,
 };
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
@@ -499,14 +498,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     sync_private(&mut ctx).await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = AccountId::for_regular_private_account(&npk, identifier_1);
+    let account_id_1 = AccountId::for_regular_private_account(&npk, &vpk, identifier_1);
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.balance, 100);
 
-    let account_id_2 = AccountId::for_regular_private_account(&npk, identifier_2);
+    let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
@@ -562,11 +561,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let ssk = SharedSecretKey([55_u8; 32]);
-    let epk = EphemeralPublicKey(vec![55_u8; ML_KEM_768_CIPHERTEXT_LEN]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)
+        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -600,10 +597,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivatePdaInit {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
+                vpk,
+                random_seed: [0; 32],
                 npk,
-                ssk,
                 identifier: 1337,
                 commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
@@ -632,8 +628,7 @@ async fn prove_init_with_commitment_root(
     let nsk: lee_core::NullifierSecretKey = [7; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let ssk = SharedSecretKey([55_u8; 32]);
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
     let (output, _) = execute_and_prove(
@@ -644,10 +639,9 @@ async fn prove_init_with_commitment_root(
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivateUnauthorized {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
+                vpk,
+                random_seed: [0; 32],
                 npk,
-                ssk,
                 identifier: 0,
                 commitment_root,
             },
@@ -671,7 +665,8 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let nsk: lee_core::NullifierSecretKey = [7; 32];
     let npk = NullifierPublicKey::from(&nsk);
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+    let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 

@@ -1,5 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use ml_kem::{Decapsulate as _, Encapsulate as _, KeyExport as _, Seed};
+#[cfg(feature = "host")]
+use ml_kem::Encapsulate as _;
+use ml_kem::{Decapsulate as _, KeyExport as _, Seed};
 use serde::{Deserialize, Serialize};
 
 use crate::{EphemeralPublicKey, SharedSecretKey};
@@ -26,6 +28,7 @@ impl MlKem768EncapsulationKey {
     pub const LEN: usize = 1184;
 
     /// Construct from raw bytes, returning an error if the length is not [`Self::LEN`].
+    #[cfg(feature = "host")]
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, crate::error::LeeCoreError> {
         if bytes.len() != Self::LEN {
             return Err(crate::error::LeeCoreError::DeserializationError(format!(
@@ -59,6 +62,7 @@ impl SharedSecretKey {
     /// Returns `(shared_secret, ciphertext)`.  The ciphertext must be included in the transaction
     /// as the `EphemeralPublicKey`; the receiver recovers the same shared secret via
     /// [`Self::decapsulate`].
+    #[cfg(feature = "host")]
     #[must_use]
     pub fn encapsulate(ek: &MlKem768EncapsulationKey) -> (Self, EphemeralPublicKey) {
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
@@ -76,30 +80,18 @@ impl SharedSecretKey {
         (Self(ss_bytes), EphemeralPublicKey(ct.to_vec()))
     }
 
-    /// Deterministically encapsulate a shared secret toward `ek` for use in tests.
+    /// Deterministically encapsulate a shared secret toward `ek` using a
+    /// pre-derived `esk` as the ML-KEM encapsulation randomness.
     ///
-    /// The shared secret has no secret entropy — it is fully determined by `ek`,
-    /// `message_hash`, and `output_index`, all of which are public. This makes it
-    /// unsuitable for real encryption but useful for producing stable, reproducible
-    /// shared secrets in unit tests. Use a distinct `output_index` per output to
-    /// avoid EPK collisions across multiple outputs in the same test.
-    ///
-    /// For production use [`Self::encapsulate`], which draws randomness from the OS.
-    #[cfg(any(test, feature = "test_utils"))]
+    /// The `esk` must be derived via `derive_esk(account_id, random_seed, nonce)`
+    /// which binds it to the account and incorporates OS entropy.
     #[must_use]
     pub fn encapsulate_deterministic(
         ek: &MlKem768EncapsulationKey,
-        message_hash: &[u8; 32],
-        output_index: u32,
+        esk: &crate::encryption::EphemeralSecretKey,
     ) -> (Self, EphemeralPublicKey) {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
-
-        let mut input = Vec::with_capacity(36);
-        input.extend_from_slice(message_hash);
-        input.extend_from_slice(&output_index.to_le_bytes());
-        let hash = Impl::hash_bytes(&input);
-        let m: ml_kem::B32 =
-            ml_kem::array::Array::try_from(hash.as_bytes()).expect("SHA-256 output is 32 bytes");
+        let m: ml_kem::B32 = ml_kem::array::Array::try_from(esk.0.as_slice())
+            .expect("EphemeralSecretKey is 32 bytes");
 
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()

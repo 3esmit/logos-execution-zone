@@ -1914,7 +1914,6 @@ dependencies = [
  "criterion",
  "key_protocol",
  "lee_core",
- "rand 0.8.6",
 ]
 
 [[package]]
@@ -3850,7 +3849,6 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-stream",
- "authenticated_transfer_core",
  "borsh",
  "common",
  "futures",
@@ -4441,11 +4439,11 @@ dependencies = [
 [[package]]
 name = "keccak"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
+source = "git+https://github.com/logos-blockchain/sponges?rev=3a56e99771beedf04946eab21a4a62adc2951377#3a56e99771beedf04946eab21a4a62adc2951377"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
+ "risc0-zkvm",
 ]
 
 [[package]]
@@ -4553,7 +4551,6 @@ dependencies = [
  "anyhow",
  "borsh",
  "build_utils",
- "env_logger",
  "hex",
  "hex-literal 1.1.0",
  "k256",
@@ -4568,7 +4565,6 @@ dependencies = [
  "test-case",
  "test_methods",
  "thiserror 2.0.18",
- "token_core",
 ]
 
 [[package]]
@@ -10890,7 +10886,6 @@ dependencies = [
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde_json",
- "tempfile",
  "tokio",
  "vault_core",
  "wallet",

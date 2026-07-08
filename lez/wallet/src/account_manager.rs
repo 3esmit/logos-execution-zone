@@ -1,15 +1,15 @@
 use core::fmt;
 
 use anyhow::Result;
-use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     CommitmentSetDigest, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
-    encryption::{EncryptedAccountData, EphemeralPublicKey, ViewingPublicKey},
+    encryption::ViewingPublicKey,
 };
+use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{ExecutionFailureKind, WalletCore};
 
@@ -201,15 +201,38 @@ impl AccountManager {
         for account in accounts {
             let state = match account {
                 AccountIdentity::Public(account_id) => {
-                    prepare_public_state(wallet, account_id, true).await?
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let sk = wallet.get_account_public_signing_key(account_id).cloned();
+                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+
+                    State::Public { account, sk }
                 }
                 AccountIdentity::PublicNoSign(account_id) => {
-                    prepare_public_state(wallet, account_id, false).await?
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let sk = None;
+                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+
+                    State::Public { account, sk }
                 }
                 AccountIdentity::PublicKeycard {
                     account_id,
                     key_path,
                 } => {
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let account = AccountWithMetadata::new(acc.clone(), true, account_id);
+
                     if pin.is_none() {
                         pin = Some(
                             crate::helperfunctions::read_pin()
@@ -225,40 +248,75 @@ impl AccountManager {
                                 .to_owned(),
                         );
                     }
-                    prepare_public_keycard_state(wallet, account_id, key_path).await?
+
+                    State::PublicKeycard { account, key_path }
                 }
-                AccountIdentity::PrivateOwned(account_id) => State::Private(
-                    private_key_tree_acc_preparation(wallet, account_id, false).await?,
-                ),
+                AccountIdentity::PrivateOwned(account_id) => {
+                    let pre = private_key_tree_acc_preparation(wallet, account_id, false).await?;
+
+                    State::Private(pre)
+                }
                 AccountIdentity::PrivateForeign {
                     npk,
                     vpk,
                     identifier,
-                } => State::Private(private_foreign_acc_preparation(npk, vpk, identifier)),
-                AccountIdentity::PrivatePdaOwned(account_id) => State::Private(
-                    private_key_tree_acc_preparation(wallet, account_id, true).await?,
-                ),
+                } => {
+                    let acc = lee_core::account::Account::default();
+                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, &vpk, identifier));
+                    let mut random_seed: [u8; 32] = [0; 32];
+                    OsRng.fill_bytes(&mut random_seed);
+                    let pre = AccountPreparedData {
+                        nsk: None,
+                        npk,
+                        identifier,
+                        vpk,
+                        pre_state: auth_acc,
+                        proof: None,
+                        random_seed,
+                        is_pda: false,
+                    };
+
+                    State::Private(pre)
+                }
+                AccountIdentity::PrivatePdaOwned(account_id) => {
+                    let pre = private_key_tree_acc_preparation(wallet, account_id, true).await?;
+                    State::Private(pre)
+                }
                 AccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
                     vpk,
                     identifier,
-                } => State::Private(private_pda_foreign_acc_preparation(
-                    account_id, npk, vpk, identifier,
-                )),
+                } => {
+                    let acc = lee_core::account::Account::default();
+                    let auth_acc = AccountWithMetadata::new(acc, false, account_id);
+                    let mut random_seed: [u8; 32] = [0; 32];
+                    OsRng.fill_bytes(&mut random_seed);
+                    let pre = AccountPreparedData {
+                        nsk: None,
+                        npk,
+                        identifier,
+                        vpk,
+                        pre_state: auth_acc,
+                        proof: None,
+                        random_seed,
+                        is_pda: true,
+                    };
+                    State::Private(pre)
+                }
                 AccountIdentity::PrivateShared {
                     nsk,
                     npk,
                     vpk,
                     identifier,
                 } => {
-                    let account_id = lee::AccountId::from((&npk, identifier));
-                    State::Private(
-                        private_shared_acc_preparation(
-                            wallet, account_id, nsk, npk, vpk, identifier, false,
-                        )
-                        .await?,
+                    let account_id = lee::AccountId::from((&npk, &vpk, identifier));
+                    let pre = private_shared_acc_preparation(
+                        wallet, account_id, nsk, npk, vpk, identifier, false,
                     )
+                    .await?;
+
+                    State::Private(pre)
                 }
                 AccountIdentity::PrivatePdaShared {
                     account_id,
@@ -266,12 +324,14 @@ impl AccountManager {
                     npk,
                     vpk,
                     identifier,
-                } => State::Private(
-                    private_shared_acc_preparation(
+                } => {
+                    let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, true,
                     )
-                    .await?,
-                ),
+                    .await?;
+
+                    State::Private(pre)
+                }
             };
 
             states.push(state);
@@ -327,8 +387,25 @@ impl AccountManager {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Private(pre) => Some(PrivateAccountKeys { ssk: pre.ssk }),
+                State::Private(pre) => Some(pre),
                 State::Public { .. } | State::PublicKeycard { .. } => None,
+            })
+            .map(|pre| {
+                let nonce = if pre.proof.is_some() {
+                    pre.pre_state.account.nonce.private_account_nonce_increment(
+                        pre.nsk.as_ref().expect("update variant must have nsk"),
+                    )
+                } else {
+                    lee_core::account::Nonce::private_account_nonce_init(&pre.pre_state.account_id)
+                };
+                let esk = lee_core::EphemeralSecretKey::new(
+                    &pre.pre_state.account_id,
+                    &pre.random_seed,
+                    &nonce,
+                );
+                PrivateAccountKeys {
+                    ssk: SharedSecretKey::encapsulate_deterministic(&pre.vpk, &esk).0,
+                }
             })
             .collect()
     }
@@ -344,19 +421,17 @@ impl AccountManager {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
-                        epk: pre.epk.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
-                        ssk: pre.ssk,
+                        vpk: pre.vpk.clone(),
+                        random_seed: pre.random_seed,
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
                         seed: None,
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
-                        epk: pre.epk.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
+                        vpk: pre.vpk.clone(),
+                        random_seed: pre.random_seed,
                         npk: pre.npk,
-                        ssk: pre.ssk,
                         identifier: pre.identifier,
                         commitment_root: self.dummy_commitment_root,
                         seed: None,
@@ -365,27 +440,24 @@ impl AccountManager {
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
-                            epk: pre.epk.clone(),
-                            view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
-                            ssk: pre.ssk,
+                            vpk: pre.vpk.clone(),
+                            random_seed: pre.random_seed,
                             nsk,
                             membership_proof,
                             identifier: pre.identifier,
                         }
                     }
                     (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
-                        epk: pre.epk.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
-                        ssk: pre.ssk,
+                        vpk: pre.vpk.clone(),
+                        random_seed: pre.random_seed,
                         nsk,
                         identifier: pre.identifier,
                         commitment_root: self.dummy_commitment_root,
                     },
                     (None, _) => InputAccountIdentity::PrivateUnauthorized {
-                        epk: pre.epk.clone(),
-                        view_tag: EncryptedAccountData::compute_view_tag(&pre.npk, &pre.vpk),
+                        vpk: pre.vpk.clone(),
+                        random_seed: pre.random_seed,
                         npk: pre.npk,
-                        ssk: pre.ssk,
                         identifier: pre.identifier,
                         commitment_root: self.dummy_commitment_root,
                     },
@@ -462,47 +534,10 @@ struct AccountPreparedData {
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
-    /// Cached shared-secret key derived once at `AccountManager::new`. Reused for both the
-    /// circuit input variant (`account_identities()`) and the message ephemeral-key tuples
-    /// (`private_account_keys()`), so all consumers see the same key. The corresponding
-    /// `EphemeralKeyHolder` uses `OsRng` and would produce a different value on a second call.
-    ssk: SharedSecretKey,
-    /// Cached ephemeral public key, paired with `ssk`.
-    epk: EphemeralPublicKey,
+    random_seed: [u8; 32],
     /// True when this account is a private PDA (owned or foreign). Used by `account_identities()`
     /// to select `PrivatePdaInit`/`PrivatePdaUpdate` rather than the standalone private variants.
     is_pda: bool,
-}
-
-async fn prepare_public_state(
-    wallet: &WalletCore,
-    account_id: AccountId,
-    lookup_signing_key: bool,
-) -> Result<State, ExecutionFailureKind> {
-    let acc = wallet
-        .get_account_public(account_id)
-        .await
-        .map_err(ExecutionFailureKind::SequencerError)?;
-    let sk = if lookup_signing_key {
-        wallet.get_account_public_signing_key(account_id).cloned()
-    } else {
-        None
-    };
-    let account = AccountWithMetadata::new(acc, sk.is_some(), account_id);
-    Ok(State::Public { account, sk })
-}
-
-async fn prepare_public_keycard_state(
-    wallet: &WalletCore,
-    account_id: AccountId,
-    key_path: String,
-) -> Result<State, ExecutionFailureKind> {
-    let acc = wallet
-        .get_account_public(account_id)
-        .await
-        .map_err(ExecutionFailureKind::SequencerError)?;
-    let account = AccountWithMetadata::new(acc, true, account_id);
-    Ok(State::PublicKeycard { account, key_path })
 }
 
 async fn private_key_tree_acc_preparation(
@@ -530,9 +565,8 @@ async fn private_key_tree_acc_preparation(
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
-    let eph_holder = EphemeralKeyHolder::new(&from_vpk);
-    let ssk = eph_holder.calculate_shared_secret_sender();
-    let epk = eph_holder.ephemeral_public_key().clone();
+    let mut random_seed: [u8; 32] = [0; 32];
+    OsRng.fill_bytes(&mut random_seed);
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -541,8 +575,7 @@ async fn private_key_tree_acc_preparation(
         vpk: from_vpk,
         pre_state: sender_pre,
         proof,
-        ssk,
-        epk,
+        random_seed,
         is_pda,
     })
 }
@@ -570,9 +603,8 @@ async fn private_shared_acc_preparation(
         .await
         .unwrap_or(None);
 
-    let eph_holder = EphemeralKeyHolder::new(&vpk);
-    let ssk = eph_holder.calculate_shared_secret_sender();
-    let epk = eph_holder.ephemeral_public_key().clone();
+    let mut random_seed: [u8; 32] = [0; 32];
+    OsRng.fill_bytes(&mut random_seed);
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -581,59 +613,9 @@ async fn private_shared_acc_preparation(
         vpk,
         pre_state,
         proof,
-        ssk,
-        epk,
+        random_seed,
         is_pda,
     })
-}
-
-fn private_foreign_acc_preparation(
-    npk: NullifierPublicKey,
-    vpk: ViewingPublicKey,
-    identifier: Identifier,
-) -> AccountPreparedData {
-    let acc = lee_core::account::Account::default();
-    let pre_state = AccountWithMetadata::new(acc, false, (&npk, identifier));
-    let eph_holder = EphemeralKeyHolder::new(&vpk);
-    let ssk = eph_holder.calculate_shared_secret_sender();
-    let epk = eph_holder.ephemeral_public_key().clone();
-
-    AccountPreparedData {
-        nsk: None,
-        npk,
-        identifier,
-        vpk,
-        pre_state,
-        proof: None,
-        ssk,
-        epk,
-        is_pda: false,
-    }
-}
-
-fn private_pda_foreign_acc_preparation(
-    account_id: AccountId,
-    npk: NullifierPublicKey,
-    vpk: ViewingPublicKey,
-    identifier: Identifier,
-) -> AccountPreparedData {
-    let acc = lee_core::account::Account::default();
-    let pre_state = AccountWithMetadata::new(acc, false, account_id);
-    let eph_holder = EphemeralKeyHolder::new(&vpk);
-    let ssk = eph_holder.calculate_shared_secret_sender();
-    let epk = eph_holder.ephemeral_public_key().clone();
-
-    AccountPreparedData {
-        nsk: None,
-        npk,
-        identifier,
-        vpk,
-        pre_state,
-        proof: None,
-        ssk,
-        epk,
-        is_pda: true,
-    }
 }
 
 #[cfg(test)]
