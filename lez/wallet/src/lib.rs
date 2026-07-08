@@ -508,7 +508,7 @@ impl WalletCore {
     ) -> Result<()> {
         let note_count = tx.message.validate_note_lengths()?;
         anyhow::ensure!(
-            note_count == acc_decode_mask.len(),
+            note_count >= acc_decode_mask.len(),
             "Decode mask has {} entries but the transaction has {note_count} notes",
             acc_decode_mask.len(),
         );
