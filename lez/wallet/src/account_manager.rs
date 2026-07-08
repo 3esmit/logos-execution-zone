@@ -192,7 +192,7 @@ pub struct AccountManager {
 
 impl AccountManager {
     pub async fn new(
-        wallet: &WalletCore,
+        wallet: &mut WalletCore,
         accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states = Vec::with_capacity(accounts.len());
@@ -475,7 +475,7 @@ struct AccountPreparedData {
 }
 
 async fn prepare_public_state(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     account_id: AccountId,
     lookup_signing_key: bool,
 ) -> Result<State, ExecutionFailureKind> {
@@ -493,7 +493,7 @@ async fn prepare_public_state(
 }
 
 async fn prepare_public_keycard_state(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     account_id: AccountId,
     key_path: String,
 ) -> Result<State, ExecutionFailureKind> {
@@ -506,7 +506,7 @@ async fn prepare_public_keycard_state(
 }
 
 async fn private_key_tree_acc_preparation(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     account_id: AccountId,
     is_pda: bool,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
@@ -520,15 +520,15 @@ async fn private_key_tree_acc_preparation(
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
+    // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
+    // support from that in the wallet.
+    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
+
     // TODO: Remove this unwrap, error types must be compatible
     let proof = wallet
         .check_private_account_initialized(account_id)
         .await
         .unwrap();
-
-    // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
-    // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
     let eph_holder = EphemeralKeyHolder::new(&from_vpk);
     let ssk = eph_holder.calculate_shared_secret_sender();
@@ -548,7 +548,7 @@ async fn private_key_tree_acc_preparation(
 }
 
 async fn private_shared_acc_preparation(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     account_id: AccountId,
     nsk: NullifierSecretKey,
     npk: NullifierPublicKey,
