@@ -7,16 +7,19 @@
     reason = "Most of the shadows come from args parsing which is ok"
 )]
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+};
 
 pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
-use common::{HashType, transaction::LeeTransaction};
+use common::{HashType, block::Block, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramDeploymentTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
@@ -102,7 +105,7 @@ pub struct WalletCore {
     metrics: HashMap<Url, Metrics>,
     metric_updates: Vec<MetricsUpdate>,
 
-    pub multi_sequencer_client: MultiSequencerClient,
+    multi_sequencer_client: MultiSequencerClient,
 }
 
 impl WalletCore {
@@ -201,7 +204,11 @@ impl WalletCore {
     }
 
     pub fn optimal_poller(&self) -> TxPoller {
-        TxPoller::new(self.config(), self.multi_sequencer_client.leader_clone())
+        TxPoller::new(self.config(), self.leader_owned())
+    }
+
+    pub fn leader_owned(&self) -> SequencerClient {
+        self.multi_sequencer_client.leader.clone()
     }
 
     /// Get storage.
@@ -501,6 +508,36 @@ impl WalletCore {
         }
     }
 
+    pub async fn get_last_block_id(&mut self) -> Result<u64> {
+        let call_f = async |client: &SequencerClient| client.get_last_block_id().await;
+
+        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
+
+        self.metric_updates.push(metrics_update);
+
+        Ok(call_res?)
+    }
+
+    pub async fn get_block(&mut self, block_id: u64) -> Result<Option<Block>> {
+        let call_f = async |client: &SequencerClient| client.get_block(block_id).await;
+
+        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
+
+        self.metric_updates.push(metrics_update);
+
+        Ok(call_res?)
+    }
+
+    pub async fn get_transaction(&mut self, hash: HashType) -> Result<Option<LeeTransaction>> {
+        let call_f = async |client: &SequencerClient| client.get_transaction(hash).await;
+
+        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
+
+        self.metric_updates.push(metrics_update);
+
+        Ok(call_res?)
+    }
+
     /// Get public account.
     pub async fn get_account_public(&mut self, account_id: AccountId) -> Result<Account> {
         let call_f = async |client: &SequencerClient| client.get_account(account_id).await;
@@ -542,6 +579,16 @@ impl WalletCore {
                     .map(|entry| &entry.account)
             })?;
         Some(Commitment::new(&account_id, account))
+    }
+
+    pub async fn get_program_ids(&mut self) -> Result<BTreeMap<String, ProgramId>> {
+        let call_f = async |client: &SequencerClient| client.get_program_ids().await;
+
+        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
+
+        self.metric_updates.push(metrics_update);
+
+        Ok(call_res?)
     }
 
     /// Poll transactions.
@@ -783,14 +830,28 @@ impl WalletCore {
         Ok(call_res?)
     }
 
-    pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
-        let call_f = async |client: &SequencerClient| client.get_last_block_id().await;
+    pub async fn send_program_deployment_transaction(
+        &mut self,
+        bytecode: Vec<u8>,
+    ) -> Result<HashType> {
+        let message = lee::program_deployment_transaction::Message::new(bytecode);
+        let transaction = ProgramDeploymentTransaction::new(message);
+
+        let call_f = async |client: &SequencerClient| {
+            client
+                .send_transaction(LeeTransaction::ProgramDeployment(transaction))
+                .await
+        };
 
         let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
 
         self.metric_updates.push(metrics_update);
 
-        let latest_block_id = call_res?;
+        Ok(call_res?)
+    }
+
+    pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
+        let latest_block_id = self.get_last_block_id().await?;
         println!("Latest block is {latest_block_id}");
         self.sync_to_block(latest_block_id).await?;
         Ok(latest_block_id)

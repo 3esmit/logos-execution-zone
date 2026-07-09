@@ -3,10 +3,9 @@ use std::{io::Write as _, path::PathBuf, str::FromStr};
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
-use common::{HashType, transaction::LeeTransaction};
+use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
-use lee::ProgramDeploymentTransaction;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -219,7 +218,6 @@ pub async fn execute_subcommand(
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
-                .optimal_sequencer_client()
                 .get_program_ids()
                 .await
                 .expect("Error fetching program ids");
@@ -284,11 +282,8 @@ pub async fn execute_subcommand(
                 "Failed to read program binary at {}",
                 binary_filepath.display()
             ))?;
-            let message = lee::program_deployment_transaction::Message::new(bytecode);
-            let transaction = ProgramDeploymentTransaction::new(message);
             let _response = wallet_core
-                .optimal_sequencer_client()
-                .send_transaction(LeeTransaction::ProgramDeployment(transaction))
+                .send_program_deployment_transaction(bytecode)
                 .await
                 .context("Transaction submission error")?;
 
@@ -384,15 +379,13 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
-    let optimal_sequencer_client = wallet_core.optimal_sequencer_client_owned();
+    let leader_client = wallet_core.leader_owned();
 
     wallet_core
         .storage
         .key_chain_mut()
         .cleanup_trees_remove_uninit_layered(depth, |account_id| {
-            optimal_sequencer_client
-                .get_account(account_id)
-                .map_err(Into::into)
+            leader_client.get_account(account_id).map_err(Into::into)
         })
         .await?;
 

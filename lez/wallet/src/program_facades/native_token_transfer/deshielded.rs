@@ -6,7 +6,7 @@ use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_deshielded_transfer(
-        &self,
+        &mut self,
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,

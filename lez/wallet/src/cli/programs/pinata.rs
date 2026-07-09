@@ -167,7 +167,7 @@ impl WalletSubcommand for PinataProgramSubcommand {
 }
 
 async fn ensure_public_recipient_initialized(
-    wallet_core: &WalletCore,
+    wallet_core: &mut WalletCore,
     winner_account_id: AccountId,
 ) -> Result<()> {
     let account = wallet_core
@@ -187,7 +187,7 @@ async fn ensure_public_recipient_initialized(
 }
 
 fn ensure_private_owned_recipient_initialized(
-    wallet_core: &WalletCore,
+    wallet_core: &mut WalletCore,
     winner_account_id: AccountId,
 ) -> Result<()> {
     let Some(account) = wallet_core.get_account_private(winner_account_id) else {
@@ -210,7 +210,7 @@ fn ensure_private_owned_recipient_initialized(
     Ok(())
 }
 
-async fn find_solution(wallet: &WalletCore, pinata_account_id: AccountId) -> Result<u128> {
+async fn find_solution(wallet: &mut WalletCore, pinata_account_id: AccountId) -> Result<u128> {
     let account = wallet.get_account_public(pinata_account_id).await?;
     let data: [u8; 33] = account
         .data

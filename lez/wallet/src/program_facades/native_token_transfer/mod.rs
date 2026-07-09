@@ -12,7 +12,7 @@ pub mod shielded;
     clippy::multiple_inherent_impl,
     reason = "impl blocks split across multiple files for organization"
 )]
-pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
+pub struct NativeTokenTransfer<'wallet>(pub &'wallet mut WalletCore);
 
 fn auth_transfer_preparation(
     balance_to_move: u128,

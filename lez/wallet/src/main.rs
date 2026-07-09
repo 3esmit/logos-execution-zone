@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
 
     if let Some(command) = command {
         let mut wallet = if storage_path.exists() {
-            WalletCore::new_update_chain(config_path, storage_path, metrics_path, None)?
+            WalletCore::new_update_chain(config_path, storage_path, metrics_path, None).await?
         } else {
             // TODO: Maybe move to `WalletCore::from_env()` or similar?
 
@@ -46,7 +46,8 @@ async fn main() -> Result<()> {
                 metrics_path,
                 None,
                 &password,
-            )?;
+            )
+            .await?;
 
             println!();
             println!("IMPORTANT: Write down your recovery phrase and store it securely.");
@@ -63,7 +64,7 @@ async fn main() -> Result<()> {
         Ok(())
     } else if continuous_run {
         let mut wallet =
-            WalletCore::new_update_chain(config_path, storage_path, metrics_path, None)?;
+            WalletCore::new_update_chain(config_path, storage_path, metrics_path, None).await?;
         execute_continuous_run(&mut wallet).await
     } else {
         let help = Args::command().render_long_help();

@@ -817,7 +817,7 @@ impl TokenProgramSubcommandPublic {
         sender_account_id: CliAccountMention,
         recipient_account_id: CliAccountMention,
         balance_to_move: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let sender = sender_account_id.resolve(wallet_core.storage())?;
         let recipient = recipient_account_id.resolve(wallet_core.storage())?;
@@ -844,7 +844,7 @@ impl TokenProgramSubcommandPublic {
         definition_account_id: AccountId,
         holder_account_id: CliAccountMention,
         amount: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let holder = holder_account_id.resolve(wallet_core.storage())?;
         let AccountIdWithPrivacy::Public(holder_id) = holder else {
@@ -868,7 +868,7 @@ impl TokenProgramSubcommandPublic {
         definition_account_id: CliAccountMention,
         holder_account_id: CliAccountMention,
         amount: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let definition = definition_account_id.resolve(wallet_core.storage())?;
         let holder = holder_account_id.resolve(wallet_core.storage())?;
@@ -1535,7 +1535,7 @@ impl CreateNewTokenProgramSubcommand {
         supply_account_id: CliAccountMention,
         name: String,
         total_supply: u128,
-        wallet_core: &WalletCore,
+        wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let definition = definition_account_id.resolve(wallet_core.storage())?;
         let supply = supply_account_id.resolve(wallet_core.storage())?;

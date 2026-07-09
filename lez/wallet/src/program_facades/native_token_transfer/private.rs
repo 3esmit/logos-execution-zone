@@ -9,7 +9,7 @@ use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
     pub async fn register_account_private(
-        &self,
+        &mut self,
         from: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = authenticated_transfer_core::Instruction::Initialize;
@@ -34,7 +34,7 @@ impl NativeTokenTransfer<'_> {
     }
 
     pub async fn send_private_transfer_to_outer_account(
-        &self,
+        &mut self,
         from: AccountId,
         to_npk: NullifierPublicKey,
         to_vpk: ViewingPublicKey,
@@ -69,7 +69,7 @@ impl NativeTokenTransfer<'_> {
     }
 
     pub async fn send_private_transfer_to_owned_account(
-        &self,
+        &mut self,
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,

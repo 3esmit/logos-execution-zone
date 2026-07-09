@@ -4,11 +4,11 @@ use lee_core::{MembershipProof, SharedSecretKey};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-pub struct Pinata<'wallet>(pub &'wallet WalletCore);
+pub struct Pinata<'wallet>(pub &'wallet mut WalletCore);
 
 impl Pinata<'_> {
     pub async fn claim(
-        &self,
+        &mut self,
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
@@ -35,7 +35,7 @@ impl Pinata<'_> {
     /// The `winner_proof` parameter is accepted for API completeness; the wallet currently fetches
     /// the membership proof automatically from the chain.
     pub async fn claim_private_owned_account_already_initialized(
-        &self,
+        &mut self,
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
@@ -46,7 +46,7 @@ impl Pinata<'_> {
     }
 
     pub async fn claim_private_owned_account(
-        &self,
+        &mut self,
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
