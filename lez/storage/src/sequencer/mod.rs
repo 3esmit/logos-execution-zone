@@ -62,17 +62,27 @@ pub struct DbDump {
 }
 
 impl DbDump {
-    /// Serialize the dump to a borsh blob.
+    /// Serialize the dump to a zstd-compressed borsh blob.
     pub fn to_bytes(&self) -> DbResult<Vec<u8>> {
-        borsh::to_vec(self).map_err(|err| {
+        /// zstd compression level for [`DbDump::to_bytes`]. Level 19 keeps the committed fixture
+        /// small without a meaningful decompression cost.
+        const DUMP_ZSTD_LEVEL: i32 = 19;
+
+        let borsh = borsh::to_vec(self).map_err(|err| {
             DbError::borsh_cast_message(err, Some("Failed to serialize DbDump".to_owned()))
+        })?;
+        zstd::encode_all(borsh.as_slice(), DUMP_ZSTD_LEVEL).map_err(|err| {
+            DbError::compression_error(err, Some("Failed to compress DbDump".to_owned()))
         })
     }
 
     /// Deserialize a dump produced by [`Self::to_bytes`].
     pub fn from_bytes(bytes: &[u8]) -> DbResult<Self> {
-        borsh::from_slice(bytes).map_err(|err| {
-            DbError::borsh_cast_message(err, Some("Failed to deserialize DbDump".to_owned()))
+        let borsh = zstd::decode_all(bytes).map_err(|err| {
+            DbError::db_interaction_error(format!("Failed to decompress DbDump: {err}"))
+        })?;
+        borsh::from_slice(&borsh).map_err(|err| {
+            DbError::compression_error(err, Some("Failed to deserialize DbDump".to_owned()))
         })
     }
 }
