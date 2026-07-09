@@ -9460,6 +9460,7 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "log",
  "programs",
  "rocksdb",
  "system_accounts",
