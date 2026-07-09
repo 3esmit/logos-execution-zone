@@ -743,7 +743,7 @@ impl WalletCore {
                     .storage
                     .key_chain_mut()
                     .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                self.sync_private_accounts_with_tx(&pp_tx.message, &mut index, &handled);
+                self.sync_private_accounts_with_message(&pp_tx.message, &mut index, &handled);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -760,7 +760,7 @@ impl WalletCore {
         Ok(())
     }
 
-    fn sync_private_accounts_with_tx(
+    fn sync_private_accounts_with_message(
         &mut self,
         message: &Message,
         index: &mut NullifierIndex,
