@@ -443,7 +443,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
 
         wallet_core.store_persistent_data()?;
 
-        Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+        Ok(SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
 }
 

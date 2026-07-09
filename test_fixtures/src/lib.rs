@@ -16,7 +16,10 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuil
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention};
+use wallet::{
+    WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
+    config::WalletConfigOverrides,
+};
 
 use crate::{
     indexer_client::IndexerClient,
@@ -92,7 +95,7 @@ impl TestContext {
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub const fn builder() -> TestContextBuilder {
+    pub fn builder() -> TestContextBuilder {
         TestContextBuilder::new()
     }
 
@@ -250,15 +253,27 @@ pub struct TestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
+    wallet_config_overrides: WalletConfigOverrides,
 }
 
 impl TestContextBuilder {
-    const fn new() -> Self {
+    fn new() -> Self {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
             enable_indexer: true,
+            wallet_config_overrides: WalletConfigOverrides::default(),
         }
+    }
+
+    /// Override wallet config fields (e.g. polling timeouts) for the wallet built by this context.
+    #[must_use]
+    pub fn with_wallet_config_overrides(
+        mut self,
+        wallet_config_overrides: WalletConfigOverrides,
+    ) -> Self {
+        self.wallet_config_overrides = wallet_config_overrides;
+        self
     }
 
     #[must_use]
@@ -292,6 +307,7 @@ impl TestContextBuilder {
             genesis_transactions,
             sequencer_partial_config,
             enable_indexer,
+            wallet_config_overrides,
         } = self;
 
         // Ensure logger is initialized only once
@@ -347,6 +363,7 @@ impl TestContextBuilder {
             sequencer_handle.addr(),
             &initial_public_accounts,
             &initial_private_accounts,
+            wallet_config_overrides,
         )
         .context("Failed to setup wallet")?;
 
@@ -459,7 +476,7 @@ pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
 ) -> PrivacyPreservingTransaction {
-    let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
+    let (tx, _block_id) = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
 
     match tx {
         LeeTransaction::PrivacyPreserving(privacy_preserving_transaction) => {

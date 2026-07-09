@@ -137,6 +137,7 @@ pub fn setup_wallet(
     sequencer_addr: SocketAddr,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
+    config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
     let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
@@ -150,7 +151,6 @@ pub fn setup_wallet(
         .context("Failed to write wallet config in temp dir")?;
 
     let storage_path = temp_wallet_dir.path().join("storage.json");
-    let config_overrides = WalletConfigOverrides::default();
 
     let wallet_password = "test_pass".to_owned();
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
@@ -192,10 +192,13 @@ pub async fn setup_public_accounts_with_initial_supply(
     initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<()> {
     for (private_key, amount) in initial_public_accounts {
-        claim_funds_from_vault(
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
+        wallet::cli::execute_subcommand(
             wallet,
-            AccountId::from(&PublicKey::new_from_private_key(private_key)),
-            *amount,
+            Command::Vault(VaultSubcommand::Claim {
+                account_id: public_mention(account_id),
+                amount: *amount,
+            }),
         )
         .await
         .context("Failed to claim funds from vault into public account")?;
@@ -221,28 +224,6 @@ pub async fn setup_private_accounts_with_initial_supply(
     Ok(())
 }
 
-async fn claim_funds_from_vault(
-    wallet: &mut WalletCore,
-    owner_id: AccountId,
-    amount: u128,
-) -> Result<()> {
-    let result = wallet::cli::execute_subcommand(
-        wallet,
-        Command::Vault(VaultSubcommand::Claim {
-            account_id: public_mention(owner_id),
-            amount,
-        }),
-    )
-    .await
-    .context("Failed to execute public vault claim command")?;
-
-    let SubcommandReturnValue::Empty = result else {
-        bail!("Expected Empty return value for public vault claim");
-    };
-
-    Ok(())
-}
-
 async fn claim_funds_from_vault_to_private(
     wallet: &mut WalletCore,
     owner_id: AccountId,
@@ -262,8 +243,8 @@ async fn claim_funds_from_vault_to_private(
     .await
     .context("Failed to execute private vault claim command")?;
 
-    let SubcommandReturnValue::PrivacyPreservingTransfer { .. } = result else {
-        bail!("Expected PrivacyPreservingTransfer return value for private vault claim");
+    let SubcommandReturnValue::TransactionExecuted { .. } = result else {
+        bail!("Expected TransactionExecuted return value for private vault claim");
     };
 
     Ok(())

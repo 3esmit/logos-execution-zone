@@ -68,7 +68,7 @@ pub trait Rpc {
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned>;
+    ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(

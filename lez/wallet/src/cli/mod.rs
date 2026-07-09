@@ -7,6 +7,7 @@ use common::{HashType, transaction::LeeTransaction};
 use derive_more::Display;
 use futures::TryFutureExt as _;
 use lee::ProgramDeploymentTransaction;
+use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -117,11 +118,11 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub enum SubcommandReturnValue {
-    PrivacyPreservingTransfer { tx_hash: HashType },
+    TransactionExecuted { tx_hash: HashType },
     RegisterAccount { account_id: lee::AccountId },
     Account(lee::Account),
     Empty,
-    SyncedToBlock(u64),
+    SyncedToBlock(BlockId),
 }
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
@@ -286,13 +287,16 @@ pub async fn execute_subcommand(
             ))?;
             let message = lee::program_deployment_transaction::Message::new(bytecode);
             let transaction = ProgramDeploymentTransaction::new(message);
-            let _response = wallet_core
+            let tx_hash = wallet_core
                 .sequencer_client
                 .send_transaction(LeeTransaction::ProgramDeployment(transaction))
                 .await
                 .context("Transaction submission error")?;
 
-            SubcommandReturnValue::Empty
+            wallet_core
+                .poll_and_finalize_public_transaction(tx_hash)
+                .await
+                .context("Transaction finalization error")?
         }
     };
 
