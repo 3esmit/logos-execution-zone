@@ -146,7 +146,10 @@ impl IndexerCore {
 
     /// Parks on an inscription that could not be parsed as an L2 block:
     /// records the stall and flips the status. The validated tip stays frozen.
-    fn park_undeserializable(&self, slot: Slot, error: std::io::Error) {
+    ///
+    /// Returns `false` if the stall could not be recorded durably; the caller
+    /// must then hold the cursor and retry instead of advancing past the slot.
+    fn park_undeserializable(&self, slot: Slot, error: std::io::Error) -> bool {
         let error = anyhow::Error::new(error);
 
         // use `:#` to get the entire error chain
@@ -156,11 +159,14 @@ impl IndexerCore {
             self.store
                 .record_stall(None, slot, BlockIngestError::Deserialize(reason.clone()))
         {
-            warn!("Failed to record stall reason: {err:#}");
+            error!("Failed to record stall reason: {err:#}");
+            self.set_status(IndexerSyncStatus::error(format!("store error: {err:#}")));
+            return false;
         }
         self.set_status(IndexerSyncStatus::stalled(format!(
             "failed to deserialize L2 block: {reason}"
         )));
+        true
     }
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
@@ -212,7 +218,11 @@ impl IndexerCore {
                     let block: Block = match borsh::from_slice(&zone_block.data) {
                         Ok(b) => b,
                         Err(error) => {
-                            self.park_undeserializable(slot, error);
+                            // The stall must be durable before the cursor moves.
+                            if !self.park_undeserializable(slot, error) {
+                                had_cycle_error = true;
+                                break;
+                            }
                             // L1 proceeds regardless
                             self.advance_cursor(&mut cursor, slot);
                             continue;
