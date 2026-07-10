@@ -8,6 +8,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
@@ -124,7 +125,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
 
-        let (store, state, genesis_block) = Self::open_or_create_store(&config);
+        let (store, state, _genesis_block) = Self::open_or_create_store(&config);
 
         let latest_block_meta = store
             .latest_block_meta()
@@ -151,15 +152,33 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         .await
         .expect("Failed to initialize Block Publisher");
 
-        // On a truly fresh start (no checkpoint persisted yet), publish the
-        // genesis block so the indexer can find the channel start. After the
-        // first publish, zone-sdk's checkpoint persistence covers further
-        // restarts.
+        // Fresh start (no checkpoint): republish all pending blocks
         if is_fresh_start {
-            block_publisher
-                .publish_block(&genesis_block, vec![])
-                .await
-                .expect("Failed to publish genesis block");
+            let mut pending_blocks = store
+                .get_all_blocks()
+                .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("Failed to read blocks from store while republishing on fresh start");
+            pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
+
+            assert!(
+                pending_blocks
+                    .first()
+                    .is_none_or(|block| block.header.block_id == GENESIS_BLOCK_ID),
+                "First pending block on fresh start should be the genesis block"
+            );
+
+            for block in &pending_blocks {
+                block_publisher
+                    .publish_block(block, vec![])
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "Failed to publish block {} on fresh start: {err:#}",
+                            block.header.block_id
+                        )
+                    });
+            }
         }
 
         let sequencer_core = Self {

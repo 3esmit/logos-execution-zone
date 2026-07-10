@@ -39,6 +39,7 @@ url.workspace = true
 num-bigint.workspace = true
 risc0-zkvm.workspace = true
 futures.workspace = true
+itertools.workspace = true
 
 [features]
 default = []

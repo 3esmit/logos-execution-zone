@@ -35,6 +35,11 @@ test:
     @echo "🧪 Running tests"
     RISC0_DEV_MODE=1 cargo nextest run --no-fail-fast
 
+# Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
+regenerate-test-fixture:
+    @echo "🧪 Regenerating test fixtures"
+    RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
+
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
     @echo "📊 Running criterion benches"

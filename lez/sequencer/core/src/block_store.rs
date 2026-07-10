@@ -10,11 +10,11 @@ use lee::V03State;
 use lee_core::BlockId;
 use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
-pub use storage::DbResult;
 use storage::sequencer::{
     RocksDBIO,
     sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
 };
+pub use storage::{DbResult, sequencer::DbDump};
 
 pub struct SequencerStore {
     dbio: Arc<RocksDBIO>,
@@ -148,6 +148,28 @@ impl SequencerStore {
 
     pub fn get_lee_state(&self) -> DbResult<V03State> {
         self.dbio.get_lee_state()
+    }
+
+    /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
+    pub fn delete_zone_checkpoint(&self) -> DbResult<()> {
+        self.dbio.delete_zone_sdk_checkpoint_bytes()
+    }
+
+    /// Reset every stored block to `Pending` so the next fresh start republishes the whole chain.
+    pub fn reset_all_blocks_to_pending(&self) -> DbResult<()> {
+        self.dbio.reset_all_blocks_to_pending()
+    }
+
+    /// Single-blob [`DbDump`] of the whole store; restore with [`Self::restore_db_from_dump`].
+    pub fn dump(&self) -> DbResult<DbDump> {
+        self.dbio.dump_all()
+    }
+
+    /// Create a fresh rocksdb at `location` from `dump`, closing it before returning so a sequencer
+    /// can open it normally afterwards.
+    pub fn restore_db_from_dump(location: &Path, dump: &DbDump) -> DbResult<()> {
+        RocksDBIO::restore_from_dump(location, dump)?;
+        Ok(())
     }
 
     pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
