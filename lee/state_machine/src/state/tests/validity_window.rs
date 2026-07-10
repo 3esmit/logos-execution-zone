@@ -124,12 +124,13 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
+    let pre = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        (&account_keys.npk(), &account_keys.vpk(), 0),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
-
         let instruction = (
             block_validity_window,
             TimestampValidityWindow::new_unbounded(),
@@ -138,13 +139,9 @@ fn validity_window_works_in_privacy_preserving_transactions(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &account_keys.npk(),
-                    &account_keys.vpk(),
-                ),
+                vpk: account_keys.vpk(),
+                random_seed: [0; 32],
                 npk: account_keys.npk(),
-                ssk: shared_secret,
                 identifier: 0,
                 commitment_root: DUMMY_COMMITMENT_HASH,
             }],
@@ -192,12 +189,13 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let timestamp_validity_window: TimestampValidityWindow = validity_window.try_into().unwrap();
     let validity_window_program = crate::test_methods::validity_window();
     let account_keys = test_private_account_keys_1();
-    let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
+    let pre = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        (&account_keys.npk(), &account_keys.vpk(), 0),
+    );
     let mut state = V03State::new().with_test_programs();
     let tx = {
-        let (shared_secret, epk) =
-            SharedSecretKey::encapsulate_deterministic(&account_keys.vpk(), &[0_u8; 32], 0);
-
         let instruction = (
             BlockValidityWindow::new_unbounded(),
             timestamp_validity_window,
@@ -206,13 +204,9 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateUnauthorized {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &account_keys.npk(),
-                    &account_keys.vpk(),
-                ),
+                vpk: account_keys.vpk(),
+                random_seed: [0; 32],
                 npk: account_keys.npk(),
-                ssk: shared_secret,
                 identifier: 0,
                 commitment_root: DUMMY_COMMITMENT_HASH,
             }],

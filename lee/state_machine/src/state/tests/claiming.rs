@@ -303,19 +303,21 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         balance: 100,
         ..Account::default()
     };
-    let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
     let mut state =
         V03State::new().with_private_accounts([(sender_commitment.clone(), sender_init_nullifier)]);
-    let sender_pre =
-        AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
+    let sender_pre = AccountWithMetadata::new(
+        sender_private_account,
+        true,
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+    );
     let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
     let recipient_account_id =
         AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
     let recipient_pre = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
-    let (shared_secret, epk) =
-        SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
 
     let balance = 37;
 
@@ -324,12 +326,8 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         Program::serialize_instruction(balance).unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.npk(),
-                    &sender_keys.vpk(),
-                ),
-                ssk: shared_secret,
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)
@@ -383,7 +381,7 @@ fn private_chained_call(number_of_calls: u32) {
             ..Account::default()
         },
         true,
-        (&from_keys.npk(), 0),
+        (&from_keys.npk(), &from_keys.vpk(), 0),
     );
     let to_account = AccountWithMetadata::new(
         Account {
@@ -391,11 +389,12 @@ fn private_chained_call(number_of_calls: u32) {
             ..Account::default()
         },
         true,
-        (&to_keys.npk(), 0),
+        (&to_keys.npk(), &to_keys.vpk(), 0),
     );
 
-    let from_account_id = AccountId::for_regular_private_account(&from_keys.npk(), 0);
-    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), 0);
+    let from_account_id =
+        AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), 0);
+    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), 0);
     let from_commitment = Commitment::new(&from_account_id, &from_account.account);
     let to_commitment = Commitment::new(&to_account_id, &to_account.account);
     let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
@@ -413,12 +412,6 @@ fn private_chained_call(number_of_calls: u32) {
         number_of_calls,
         None,
     );
-
-    let (from_ss, from_epk) =
-        SharedSecretKey::encapsulate_deterministic(&from_keys.vpk(), &[0_u8; 32], 0);
-
-    let (to_ss, to_epk) =
-        SharedSecretKey::encapsulate_deterministic(&to_keys.vpk(), &[0_u8; 32], 1);
 
     let mut dependencies = HashMap::new();
 
@@ -448,9 +441,8 @@ fn private_chained_call(number_of_calls: u32) {
         Program::serialize_instruction(instruction).unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: to_epk,
-                view_tag: EncryptedAccountData::compute_view_tag(&to_keys.npk(), &to_keys.vpk()),
-                ssk: to_ss,
+                vpk: from_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: from_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&from_commitment)
@@ -458,12 +450,8 @@ fn private_chained_call(number_of_calls: u32) {
                 identifier: 0,
             },
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: from_epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &from_keys.npk(),
-                    &from_keys.vpk(),
-                ),
-                ssk: from_ss,
+                vpk: to_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: to_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&to_commitment)

@@ -108,7 +108,7 @@ async fn begin_step(ctx: &TestContext) -> Result<u64> {
 
 /// Finish a timed wallet step. Records submit (the time between `started`
 /// being captured and `ret` being received) and, if `ret` is a
-/// [`SubcommandReturnValue::PrivacyPreservingTransfer`], polls the sequencer
+/// [`SubcommandReturnValue::TransactionExecuted`], polls the sequencer
 /// for inclusion and records the inclusion latency. Returns a [`StepResult`].
 async fn finalize_step(
     label: impl Into<String>,
@@ -132,7 +132,7 @@ async fn finalize_step(
     // recorded" signal.
     let should_wait_for_chain = !matches!(ret, SubcommandReturnValue::RegisterAccount { .. });
     if should_wait_for_chain {
-        if let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = ret {
+        if let SubcommandReturnValue::TransactionExecuted { tx_hash } = ret {
             tx_hash_str = Some(format!("{tx_hash}"));
         }
         let started_inclusion = Instant::now();

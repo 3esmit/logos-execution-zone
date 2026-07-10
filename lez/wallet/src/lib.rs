@@ -25,7 +25,7 @@ use lee::{
     },
 };
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
+    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
     account::Nonce, compute_digest_for_path, program::InstructionData,
 };
 use log::info;
@@ -416,7 +416,7 @@ impl WalletCore {
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, identifier);
+        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
 
         self.register_shared_account(
             account_id,
@@ -458,7 +458,7 @@ impl WalletCore {
         let keys = holder.derive_keys_for_shared_account(&derivation_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::from((&npk, identifier));
+        let account_id = AccountId::from((&npk, &vpk, identifier));
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
 
@@ -528,7 +528,10 @@ impl WalletCore {
         Ok(call_res?)
     }
 
-    pub async fn get_transaction(&mut self, hash: HashType) -> Result<Option<LeeTransaction>> {
+    pub async fn get_transaction(
+        &mut self,
+        hash: HashType,
+    ) -> Result<Option<(LeeTransaction, BlockId)>> {
         let call_f = async |client: &SequencerClient| client.get_transaction(hash).await;
 
         let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
@@ -592,7 +595,10 @@ impl WalletCore {
     }
 
     /// Poll transactions.
-    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
+    pub async fn poll_native_token_transfer(
+        &self,
+        hash: HashType,
+    ) -> Result<(LeeTransaction, BlockId)> {
         self.optimal_poller().poll_tx(hash).await
     }
 
@@ -657,7 +663,6 @@ impl WalletCore {
             }
         }
 
-        println!("Transaction data is {:?}", tx.message);
         Ok(())
     }
 
@@ -666,10 +671,11 @@ impl WalletCore {
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
-        println!("Transaction data is {transfer_tx:?}");
+        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
+        println!("Transaction is included in block {block_id}");
+        println!("Transaction data is {tx:?}");
         self.store_persistent_data()?;
-        Ok(cli::SubcommandReturnValue::Empty)
+        Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
 
     /// Pass an empty slice when the recipient is foreign and no accounts need decoding.
@@ -679,12 +685,17 @@ impl WalletCore {
         acc_decode_data: &[AccDecodeData],
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
-        if let common::transaction::LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-            self.decode_insert_privacy_preserving_transaction_results(&tx, acc_decode_data)?;
+        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
+        println!("Transaction is included in block {block_id}");
+        println!("Transaction data is {tx:?}");
+        if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
+            self.decode_insert_privacy_preserving_transaction_results(
+                &private_tx,
+                acc_decode_data,
+            )?;
         }
         self.store_persistent_data()?;
-        Ok(cli::SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+        Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
 
     pub async fn send_privacy_preserving_tx(
@@ -934,7 +945,11 @@ impl WalletCore {
                         )
                         .map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
-                            let account_id = lee::AccountId::for_private_account(npk, &kind);
+                            let account_id = lee::AccountId::for_private_account(
+                                npk,
+                                &key_chain.viewing_public_key,
+                                &kind,
+                            );
                             (account_id, kind, res_acc)
                         })
                     })

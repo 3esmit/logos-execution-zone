@@ -1,8 +1,16 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub(crate) bytecode: Vec<u8>,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Message")
+            .field("bytecode", &format_args!("<{} bytes>", self.bytecode.len()))
+            .finish()
+    }
 }
 
 impl Message {

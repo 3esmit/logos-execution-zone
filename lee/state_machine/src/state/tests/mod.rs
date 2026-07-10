@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    BlockId, Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity,
-    Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
+    BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
+    NullifierPublicKey, NullifierSecretKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-    encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
+    encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
         ProgramId, TimestampValidityWindow, WrappedBalanceSum,
@@ -118,7 +118,7 @@ impl V03State {
 
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-        let account_id = AccountId::for_regular_private_account(&keys.npk(), 0);
+        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
@@ -267,10 +267,11 @@ fn shielded_balance_transfer_for_tests(
 
     let sender_nonce = sender.account.nonce;
 
-    let recipient = AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-    let (shared_secret, epk) =
-        SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0);
+    let recipient = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+    );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender, recipient],
@@ -278,13 +279,9 @@ fn shielded_balance_transfer_for_tests(
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivateUnauthorized {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &recipient_keys.npk(),
-                    &recipient_keys.vpk(),
-                ),
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
                 npk: recipient_keys.npk(),
-                ssk: shared_secret,
                 identifier: 0,
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
@@ -312,33 +309,27 @@ fn private_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),
         true,
-        (&sender_keys.npk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
     );
-    let recipient_pre =
-        AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-    let (shared_secret_1, epk_1) =
-        SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
-
-    let (shared_secret_2, epk_2) =
-        SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 1);
+    let recipient_pre = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+    );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: epk_1,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.npk(),
-                    &sender_keys.vpk(),
-                ),
-                ssk: shared_secret_1,
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)
@@ -346,13 +337,9 @@ fn private_balance_transfer_for_tests(
                 identifier: 0,
             },
             InputAccountIdentity::PrivateUnauthorized {
-                epk: epk_2,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &recipient_keys.npk(),
-                    &recipient_keys.vpk(),
-                ),
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
                 npk: recipient_keys.npk(),
-                ssk: shared_secret_2,
                 identifier: 0,
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
@@ -376,12 +363,13 @@ fn deshielded_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),
         true,
-        (&sender_keys.npk(), 0),
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
     );
     let recipient_pre = AccountWithMetadata::new(
         state.get_account_by_id(*recipient_account_id),
@@ -389,20 +377,13 @@ fn deshielded_balance_transfer_for_tests(
         *recipient_account_id,
     );
 
-    let (shared_secret, epk) =
-        SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0);
-
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk,
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &sender_keys.npk(),
-                    &sender_keys.vpk(),
-                ),
-                ssk: shared_secret,
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)

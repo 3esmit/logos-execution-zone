@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
+use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -116,11 +117,11 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub enum SubcommandReturnValue {
-    PrivacyPreservingTransfer { tx_hash: HashType },
+    TransactionExecuted { tx_hash: HashType },
     RegisterAccount { account_id: lee::AccountId },
     Account(lee::Account),
     Empty,
-    SyncedToBlock(u64),
+    SyncedToBlock(BlockId),
 }
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
@@ -282,12 +283,15 @@ pub async fn execute_subcommand(
                 "Failed to read program binary at {}",
                 binary_filepath.display()
             ))?;
-            let _response = wallet_core
+            let response = wallet_core
                 .send_program_deployment_transaction(bytecode)
                 .await
                 .context("Transaction submission error")?;
 
-            SubcommandReturnValue::Empty
+            wallet_core
+                .poll_and_finalize_public_transaction(response)
+                .await
+                .context("Transaction finalization error")?
         }
     };
 

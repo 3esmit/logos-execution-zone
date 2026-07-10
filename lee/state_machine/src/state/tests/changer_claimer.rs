@@ -60,8 +60,11 @@ fn public_changer_claimer_data_change_no_claim_fails() {
 fn private_changer_claimer_no_data_change_no_claim_succeeds() {
     let program = crate::test_methods::changer_claimer();
     let sender_keys = test_private_account_keys_1();
-    let private_account =
-        AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
+    let private_account = AccountWithMetadata::new(
+        Account::default(),
+        true,
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+    );
     // Don't change data (None) and don't claim (false)
     let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -69,12 +72,8 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
         vec![private_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
-            epk: EphemeralPublicKey(Vec::new()),
-            view_tag: EncryptedAccountData::compute_view_tag(
-                &sender_keys.npk(),
-                &sender_keys.vpk(),
-            ),
-            ssk: SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0).0,
+            vpk: sender_keys.vpk(),
+            random_seed: [0; 32],
             nsk: sender_keys.nsk,
             membership_proof: (0, vec![]),
             identifier: 0,
@@ -90,8 +89,11 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
 fn private_changer_claimer_data_change_no_claim_fails() {
     let program = crate::test_methods::changer_claimer();
     let sender_keys = test_private_account_keys_1();
-    let private_account =
-        AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
+    let private_account = AccountWithMetadata::new(
+        Account::default(),
+        true,
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+    );
     // Change data but don't claim (false) - should fail
     let new_data = vec![1, 2, 3, 4, 5];
     let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
@@ -100,12 +102,8 @@ fn private_changer_claimer_data_change_no_claim_fails() {
         vec![private_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
-            epk: EphemeralPublicKey(Vec::new()),
-            view_tag: EncryptedAccountData::compute_view_tag(
-                &sender_keys.npk(),
-                &sender_keys.vpk(),
-            ),
-            ssk: SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &[0_u8; 32], 0).0,
+            vpk: sender_keys.vpk(),
+            random_seed: [0; 32],
             nsk: sender_keys.nsk,
             membership_proof: (0, vec![]),
             identifier: 0,

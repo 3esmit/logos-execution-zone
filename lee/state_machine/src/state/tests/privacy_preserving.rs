@@ -68,8 +68,10 @@ fn transition_from_privacy_preserving_transaction_private() {
         &state,
     );
 
-    let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
-    let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let recipient_account_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
     let expected_new_commitment_1 = Commitment::new(
         &sender_account_id,
         &Account {
@@ -203,7 +205,8 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         &state,
     );
 
-    let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let expected_new_commitment = Commitment::new(
         &sender_account_id,
         &Account {
@@ -487,10 +490,14 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         false,
         sender_keys.account_id(),
     );
-    let recipient_account =
-        AccountWithMetadata::new(Account::default(), true, (&recipient_keys.npk(), 0));
+    let recipient_account = AccountWithMetadata::new(
+        Account::default(),
+        true,
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+    );
 
-    let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
+    let recipient_account_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
     let recipient_commitment = Commitment::new(&recipient_account_id, &recipient_account.account);
     let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
     let state = V03State::new()
@@ -504,9 +511,6 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let balance_to_transfer = 10_u128;
     let instruction = (balance_to_transfer, simple_transfers.id());
 
-    let recipient =
-        SharedSecretKey::encapsulate_deterministic(&recipient_keys.vpk(), &[0_u8; 32], 0).0;
-
     let mut dependencies = HashMap::new();
     dependencies.insert(simple_transfers.id(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
@@ -518,12 +522,8 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(
-                    &recipient_keys.npk(),
-                    &recipient_keys.vpk(),
-                ),
-                ssk: recipient,
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
                 nsk: recipient_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&recipient_commitment)
