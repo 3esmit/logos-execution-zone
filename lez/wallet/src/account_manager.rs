@@ -7,6 +7,7 @@ use lee_core::{
     Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
+    compute_digest_for_path,
     encryption::ViewingPublicKey,
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -610,15 +611,43 @@ async fn fetch_private_proofs_and_root(
         .unzip();
 
     let (proofs, root) = wallet
-        .get_proofs_and_root(commitments)
+        .get_proofs_and_root(commitments.clone())
         .await
         .map_err(ExecutionFailureKind::SequencerError)?;
+
+    validate_proofs_against_root(&commitments, &proofs, root)?;
 
     for (pre, proof) in private.iter_mut().zip(proofs) {
         pre.proof = proof;
     }
 
     Ok(root)
+}
+
+fn validate_proofs_against_root(
+    commitments: &[Commitment],
+    proofs: &[Option<MembershipProof>],
+    root: CommitmentSetDigest,
+) -> Result<(), ExecutionFailureKind> {
+    if proofs.len() != commitments.len() {
+        return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+            "Sequencer returned {} proofs for {} commitments.",
+            proofs.len(),
+            commitments.len(),
+        )));
+    }
+
+    for (commitment, proof) in commitments.iter().zip(proofs) {
+        if let Some(proof) = proof
+            && compute_digest_for_path(commitment, proof) != root
+        {
+            return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                "Membership proof for {commitment:?} does not reproduce the appropriate root {root:?}.",
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
