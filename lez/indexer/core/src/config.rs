@@ -20,6 +20,13 @@ pub struct IndexerConfig {
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
+    /// Whether to wipe the indexer store and re-index from scratch when the startup
+    /// chain-identity check finds the channel serving a different block than the one
+    /// stored at the same id.
+    ///
+    /// Defaults to `false`: on mismatch the indexer refuses to start.
+    #[serde(default)]
+    pub allow_chain_reset: bool,
 }
 
 impl IndexerConfig {

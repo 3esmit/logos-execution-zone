@@ -1,4 +1,6 @@
-use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Transaction};
+use indexer_service_protocol::{
+    Account, AccountId, Block, BlockId, HashType, IndexerStatus, Transaction,
+};
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::{core::SubscriptionResult, types::ErrorObjectOwned};
@@ -68,6 +70,9 @@ pub trait Rpc {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<Transaction>, ErrorObjectOwned>;
+
+    #[method(name = "getStatus")]
+    async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned>;
 
     // ToDo: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]

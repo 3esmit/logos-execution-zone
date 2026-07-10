@@ -3863,6 +3863,7 @@ dependencies = [
  "storage",
  "tempfile",
  "testnet_initial_state",
+ "thiserror 2.0.18",
  "tokio",
  "url",
 ]
@@ -3910,6 +3911,7 @@ dependencies = [
  "base64",
  "common",
  "hex",
+ "indexer_core",
  "lee",
  "lee_core",
  "schemars 1.2.1",
@@ -9458,6 +9460,7 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "log",
  "programs",
  "rocksdb",
  "system_accounts",
@@ -9757,6 +9760,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "tokio-util",
  "url",
  "wallet",
 ]
