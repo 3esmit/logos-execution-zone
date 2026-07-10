@@ -10,4 +10,3 @@ workspace = true
 [dependencies]
 lee_core.workspace = true
 serde = { workspace = true, features = ["alloc"] }
-

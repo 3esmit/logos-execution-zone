@@ -30,6 +30,13 @@ pub struct IndexerConfig {
     /// transaction, so the indexer must seed them to match the sequencer's state.
     #[serde(default)]
     pub bridge_lock_holdings: Vec<BridgeLockHolding>,
+    /// Whether to wipe the indexer store and re-index from scratch when the startup
+    /// chain-identity check finds the channel serving a different block than the one
+    /// stored at the same id.
+    ///
+    /// Defaults to `false`: on mismatch the indexer refuses to start.
+    #[serde(default)]
+    pub allow_chain_reset: bool,
 }
 
 /// A genesis-funded bridge-lock holder balance, configured identically on the

@@ -145,7 +145,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned> {
+    ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
     }

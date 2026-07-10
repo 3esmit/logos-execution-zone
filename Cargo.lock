@@ -1943,9 +1943,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2003,7 +2003,6 @@ dependencies = [
  "criterion",
  "key_protocol",
  "lee_core",
- "rand 0.8.6",
 ]
 
 [[package]]
@@ -2166,7 +2165,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3939,9 +3938,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-stream",
- "authenticated_transfer_core",
  "borsh",
- "bridge_lock_core",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -3961,6 +3958,7 @@ dependencies = [
  "storage",
  "tempfile",
  "testnet_initial_state",
+ "thiserror 2.0.18",
  "tokio",
  "url",
 ]
@@ -4008,6 +4006,7 @@ dependencies = [
  "base64",
  "common",
  "hex",
+ "indexer_core",
  "lee",
  "lee_core",
  "schemars 1.2.1",
@@ -4543,11 +4542,11 @@ dependencies = [
 [[package]]
 name = "keccak"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e24a010dd405bd7ed803e5253182815b41bf2e6a80cc3bfc066658e03a198aa"
+source = "git+https://github.com/logos-blockchain/sponges?rev=3a56e99771beedf04946eab21a4a62adc2951377#3a56e99771beedf04946eab21a4a62adc2951377"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
+ "risc0-zkvm",
 ]
 
 [[package]]
@@ -4655,7 +4654,6 @@ dependencies = [
  "anyhow",
  "borsh",
  "build_utils",
- "env_logger",
  "hex",
  "hex-literal 1.1.0",
  "k256",
@@ -4670,7 +4668,6 @@ dependencies = [
  "test-case",
  "test_methods",
  "thiserror 2.0.18",
- "token_core",
 ]
 
 [[package]]
@@ -9034,6 +9031,7 @@ dependencies = [
  "futures",
  "hex",
  "humantime-serde",
+ "itertools 0.14.0",
  "key_protocol",
  "lee",
  "lee_core",
@@ -9595,11 +9593,13 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "log",
  "programs",
  "rocksdb",
  "system_accounts",
  "tempfile",
  "thiserror 2.0.18",
+ "zstd",
 ]
 
 [[package]]
@@ -9873,6 +9873,7 @@ name = "test_fixtures"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bip39",
  "bytesize",
  "common",
  "env_logger",
@@ -9892,6 +9893,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "tokio-util",
  "url",
  "wallet",
 ]
@@ -11025,7 +11027,6 @@ dependencies = [
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde_json",
- "tempfile",
  "tokio",
  "vault_core",
  "wallet",
@@ -11953,4 +11954,32 @@ dependencies = [
  "crc32fast",
  "log",
  "simd-adler32",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f49c4d5f0abb602a93fb8736af2a4f4dd9512e36f7f570d66e65ff867ed3b9d"
+dependencies = [
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-sys"
+version = "2.0.16+zstd.1.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "91e19ebc2adc8f83e43039e79776e3fda8ca919132d68a1fed6a5faca2683748"
+dependencies = [
+ "cc",
+ "pkg-config",
 ]

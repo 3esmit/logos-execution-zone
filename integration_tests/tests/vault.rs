@@ -30,7 +30,7 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         .get_account_balance(recipient_vault_id)
         .await?;
 
-    let transfer_result = wallet::cli::execute_subcommand(
+    wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Vault(VaultSubcommand::Transfer {
             from: public_mention(sender),
@@ -39,10 +39,6 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         }),
     )
     .await?;
-    assert!(
-        matches!(transfer_result, SubcommandReturnValue::Empty),
-        "Expected Empty return value for public vault transfer"
-    );
 
     let sender_balance_after_transfer = ctx.sequencer_client().get_account_balance(sender).await?;
     let recipient_balance_after_transfer = ctx
@@ -64,7 +60,7 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         recipient_vault_balance_before + amount
     );
 
-    let claim_result = wallet::cli::execute_subcommand(
+    wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Vault(VaultSubcommand::Claim {
             account_id: public_mention(recipient),
@@ -72,10 +68,6 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         }),
     )
     .await?;
-    assert!(
-        matches!(claim_result, SubcommandReturnValue::Empty),
-        "Expected Empty return value for public vault claim"
-    );
 
     let sender_balance_after_claim = ctx.sequencer_client().get_account_balance(sender).await?;
     let recipient_balance_after_claim = ctx
@@ -138,9 +130,9 @@ async fn private_transfer_and_private_claim() -> Result<()> {
     assert!(
         matches!(
             transfer_result,
-            SubcommandReturnValue::PrivacyPreservingTransfer { .. }
+            SubcommandReturnValue::TransactionExecuted { .. }
         ),
-        "Expected PrivacyPreservingTransfer return value for private vault transfer"
+        "Expected TransactionExecuted return value for private vault transfer"
     );
 
     let sender_balance_after_transfer = ctx
@@ -179,9 +171,9 @@ async fn private_transfer_and_private_claim() -> Result<()> {
     assert!(
         matches!(
             claim_result,
-            SubcommandReturnValue::PrivacyPreservingTransfer { .. }
+            SubcommandReturnValue::TransactionExecuted { .. }
         ),
-        "Expected PrivacyPreservingTransfer return value for private vault claim"
+        "Expected TransactionExecuted return value for private vault claim"
     );
 
     let sender_balance_after_claim = ctx

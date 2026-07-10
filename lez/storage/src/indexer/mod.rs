@@ -5,6 +5,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
+use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
@@ -20,10 +21,12 @@ pub mod write_non_atomic;
 /// Key base for storing metainformation about id of last observed L1 lib header in db.
 pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
     "last_observed_l1_lib_header_in_db";
-/// Key base for storing metainformation about the last breakpoint.
-pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 /// Key base for storing the zone-sdk indexer cursor (opaque bytes).
 pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
+/// Key base for storing the persisted `Option<StallReason>` diagnostic record (opaque JSON bytes).
+pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
+/// Key base for storing the L1 inscription slot of the tip block.
+pub const DB_META_TIP_SLOT_KEY: &str = "tip_slot";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";
@@ -84,9 +87,10 @@ impl RocksDBIO {
 
         let dbio = Self { db };
 
-        // First breakpoint setup
-        dbio.put_breakpoint(0, initial_state)?;
-        dbio.put_meta_last_breakpoint_id(0)?;
+        // Seed the genesis snapshot once; reopening must not clobber it.
+        if dbio.get_breakpoint_opt(0)?.is_none() {
+            dbio.put_breakpoint(0, initial_state)?;
+        }
 
         Ok(dbio)
     }
@@ -152,8 +156,29 @@ impl RocksDBIO {
             ));
         }
 
-        let br_id = closest_breakpoint_id(block_id);
-        let mut state = self.get_breakpoint(br_id)?;
+        // walk down to the nearest snapshot that exists
+        let target = closest_breakpoint_id(block_id);
+        let mut br_id = target;
+        let mut state = loop {
+            match self.get_breakpoint_opt(br_id)? {
+                Some(state) => break state,
+                None if br_id == 0 => {
+                    return Err(DbError::db_interaction_error(
+                        "Breakpoint 0 is missing".to_owned(),
+                    ));
+                }
+                None => {
+                    br_id = br_id
+                        .checked_sub(1)
+                        .expect("breakpoint_id > 0 checked above");
+                }
+            }
+        };
+        if br_id < target {
+            warn!(
+                "Breakpoint {target} missing; replaying from breakpoint {br_id} for block {block_id}"
+            );
+        }
 
         let start = u64::from(BREAKPOINT_INTERVAL)
             .checked_mul(br_id)
@@ -211,20 +236,7 @@ fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<
                 })?;
         } else {
             transaction
-                .transaction_stateless_check()
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "transaction pre check failed with err {err:?}"
-                    ))
-                })?
-                // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
-                // sequencer-generated deposit tx'es;
-                // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
-                .execute_without_system_accounts_check_on_state(
-                    state,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
+                .execute_on_state(state, block.header.block_id, block.header.timestamp)
                 .map_err(|err| {
                     DbError::db_interaction_error(format!(
                         "transaction execution failed with err {err:?}"
