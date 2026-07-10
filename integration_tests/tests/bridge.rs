@@ -440,7 +440,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
 
     // Now claim funds from vault back to recipient
     let nonces = ctx
-        .wallet()
+        .wallet_mut()
         .get_accounts_nonces(vec![recipient_id])
         .await
         .context("Failed to get nonce for vault claim")?;

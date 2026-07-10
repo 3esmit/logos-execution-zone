@@ -365,6 +365,7 @@ impl TestContextBuilder {
             &initial_private_accounts,
             wallet_config_overrides,
         )
+        .await
         .context("Failed to setup wallet")?;
 
         setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
@@ -420,15 +421,19 @@ impl BlockingTestContext {
         self.ctx.as_ref().expect("TestContext is set")
     }
 
+    pub fn ctx_mut(&mut self) -> &mut TestContext {
+        self.ctx.as_mut().expect("TestContext is set")
+    }
+
     pub const fn runtime(&self) -> &tokio::runtime::Runtime {
         &self.runtime
     }
 
-    pub fn block_on<'ctx, F>(&'ctx self, f: impl FnOnce(&'ctx TestContext) -> F) -> F::Output
+    pub fn block_on<'ctx, F>(&'ctx mut self, f: impl FnOnce(&'ctx TestContext) -> F) -> F::Output
     where
         F: std::future::Future + 'ctx,
     {
-        let future = f(self.ctx());
+        let future = f(self.ctx_mut());
         self.runtime.block_on(future)
     }
 

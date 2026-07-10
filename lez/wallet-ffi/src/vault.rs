@@ -48,7 +48,7 @@ pub unsafe extern "C" fn wallet_ffi_get_vault_balance(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn wallet_ffi_vault_claim(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -124,7 +124,7 @@ pub unsafe extern "C" fn wallet_ffi_vault_claim(
     let owner_id = AccountId::new(unsafe { (*owner).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
 
-    match block_on(Vault(&wallet).send_claim(owner_id, amount)) {
+    match block_on(Vault(&mut wallet).send_claim(owner_id, amount)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -185,7 +185,7 @@ pub unsafe extern "C" fn wallet_ffi_vault_claim_private(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn wallet_ffi_vault_claim_private(
     let owner_id = AccountId::new(unsafe { (*owner).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
 
-    match block_on(Vault(&wallet).send_claim_private_owner(owner_id, amount)) {
+    match block_on(Vault(&mut wallet).send_claim_private_owner(owner_id, amount)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

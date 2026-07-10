@@ -323,7 +323,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -389,7 +389,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));

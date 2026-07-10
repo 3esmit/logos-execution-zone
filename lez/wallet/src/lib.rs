@@ -211,6 +211,10 @@ impl WalletCore {
         self.multi_sequencer_client.leader.clone()
     }
 
+    pub fn leader_url(&self) -> Url {
+        self.multi_sequencer_client.leader_url.clone()
+    }
+
     /// Get storage.
     #[must_use]
     pub const fn storage(&self) -> &Storage {

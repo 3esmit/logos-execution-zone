@@ -55,7 +55,7 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn wallet_ffi_bridge_withdraw(
     let from_id = AccountId::new(unsafe { (*from).data });
     let bedrock_account_pk = unsafe { (*bedrock_account_pk).data };
 
-    let bridge = Bridge(&wallet);
+    let mut bridge = Bridge(&mut wallet);
 
     match block_on(bridge.send_withdraw(from_id, amount, bedrock_account_pk)) {
         Ok(tx_hash) => {

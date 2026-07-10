@@ -37,7 +37,7 @@ use wallet::{AccountIdentity, WalletCore};
     reason = "test helper — grouping args would obscure intent"
 )]
 async fn fund_private_pda(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     sender: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
@@ -91,7 +91,7 @@ async fn fund_private_pda(
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     wallet
-        .sequencer_client
+        .leader_owned()
         .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
@@ -107,7 +107,7 @@ async fn fund_private_pda(
     reason = "test helper — grouping args would obscure intent"
 )]
 async fn spend_private_pda(
-    wallet: &WalletCore,
+    wallet: &mut WalletCore,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
     recipient_vpk: ViewingPublicKey,
@@ -180,7 +180,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Sending to alice_pda_0 (identifier=0)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_0,
         alice_npk,
         alice_vpk.clone(),
@@ -194,7 +194,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Sending to alice_pda_1 (identifier=1)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_1,
         alice_npk,
         alice_vpk.clone(),
@@ -262,7 +262,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Alice spending from alice_pda_0");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_0_id,
         recipient_npk_0,
         recipient_vpk_0,
@@ -275,7 +275,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Alice spending from alice_pda_1");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_1_id,
         recipient_npk_1,
         recipient_vpk_1,

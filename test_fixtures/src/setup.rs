@@ -133,7 +133,7 @@ pub async fn setup_sequencer(
     Ok((sequencer_handle, temp_sequencer_dir))
 }
 
-pub fn setup_wallet(
+pub async fn setup_wallet(
     sequencer_addr: SocketAddr,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
@@ -151,14 +151,17 @@ pub fn setup_wallet(
         .context("Failed to write wallet config in temp dir")?;
 
     let storage_path = temp_wallet_dir.path().join("storage.json");
+    let metrics_path = temp_wallet_dir.path().join("metrics.json");
 
     let wallet_password = "test_pass".to_owned();
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
         config_path,
         storage_path,
+        metrics_path,
         Some(config_overrides),
         &wallet_password,
     )
+    .await
     .context("Failed to init wallet")?;
 
     for (private_key, _balance) in initial_public_accounts {

@@ -1,9 +1,5 @@
 use std::{ffi::CString, ptr, slice};
 
-use common::transaction::LeeTransaction;
-use lee::ProgramDeploymentTransaction;
-use sequencer_service_rpc::RpcClient as _;
-
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
@@ -50,7 +46,7 @@ pub unsafe extern "C" fn wallet_ffi_program_deployment(
         return WalletFfiError::NullPointer;
     }
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -60,14 +56,7 @@ pub unsafe extern "C" fn wallet_ffi_program_deployment(
 
     let elf = unsafe { slice::from_raw_parts(elf_data, elf_size) }.to_vec();
 
-    let message = lee::program_deployment_transaction::Message::new(elf);
-    let transaction = ProgramDeploymentTransaction::new(message);
-
-    match block_on(
-        wallet
-            .sequencer_client
-            .send_transaction(LeeTransaction::ProgramDeployment(transaction)),
-    ) {
+    match block_on(wallet.send_program_deployment_transaction(elf)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
