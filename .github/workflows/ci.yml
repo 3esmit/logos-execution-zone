@@ -135,7 +135,37 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
-        run: cargo nextest run --workspace --exclude integration_tests --all-features
+        run: cargo nextest run --workspace --exclude integration_tests --exclude test_fixtures --all-features
+
+  test-fixtures-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - uses: ./.github/actions/install-system-deps
+
+      - uses: ./.github/actions/install-risc0
+
+      - name: Install active toolchain
+        run: rustup install
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
+
+      - name: Install nextest
+        run: cargo install --locked cargo-nextest
+
+      - name: Run test_fixtures tests
+        env:
+          RISC0_DEV_MODE: "1"
+          RUST_LOG: "info"
+        run: cargo nextest run -p test_fixtures
 
   integration-tests-prebuild:
     runs-on: ubuntu-latest
@@ -193,7 +223,7 @@ jobs:
           echo "Discovered integration targets: $targets_json"
 
   integration-tests:
-    needs: integration-tests-prebuild
+    needs: [test-fixtures-tests, integration-tests-prebuild]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:

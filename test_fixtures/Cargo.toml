@@ -21,6 +21,7 @@ wallet.workspace = true
 programs.workspace = true
 
 anyhow.workspace = true
+bip39.workspace = true
 bytesize.workspace = true
 env_logger.workspace = true
 futures.workspace = true
@@ -31,4 +32,5 @@ serde_json.workspace = true
 tempfile.workspace = true
 testcontainers = { version = "0.27.3", features = ["docker-compose"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-util.workspace = true
 url.workspace = true

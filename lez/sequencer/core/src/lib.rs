@@ -8,6 +8,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
@@ -31,6 +32,7 @@ use crate::{
 pub mod block_publisher;
 pub mod block_store;
 pub mod config;
+pub mod cross_zone_watcher;
 
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -124,7 +126,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
 
-        let (store, state, genesis_block) = Self::open_or_create_store(&config);
+        let (store, state, _genesis_block) = Self::open_or_create_store(&config);
 
         let latest_block_meta = store
             .latest_block_meta()
@@ -151,15 +153,44 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         .await
         .expect("Failed to initialize Block Publisher");
 
-        // On a truly fresh start (no checkpoint persisted yet), publish the
-        // genesis block so the indexer can find the channel start. After the
-        // first publish, zone-sdk's checkpoint persistence covers further
-        // restarts.
+        // Fresh start (no checkpoint): republish all pending blocks
         if is_fresh_start {
-            block_publisher
-                .publish_block(&genesis_block, vec![])
-                .await
-                .expect("Failed to publish genesis block");
+            let mut pending_blocks = store
+                .get_all_blocks()
+                .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
+                .collect::<Result<Vec<_>, _>>()
+                .expect("Failed to read blocks from store while republishing on fresh start");
+            pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
+
+            assert!(
+                pending_blocks
+                    .first()
+                    .is_none_or(|block| block.header.block_id == GENESIS_BLOCK_ID),
+                "First pending block on fresh start should be the genesis block"
+            );
+
+            for block in &pending_blocks {
+                block_publisher
+                    .publish_block(block, vec![])
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "Failed to publish block {} on fresh start: {err:#}",
+                            block.header.block_id
+                        )
+                    });
+            }
+        }
+
+        // Cross-zone messaging: start a watcher per configured peer. The inbox
+        // config account is seeded into genesis state in `build_genesis_state`.
+        if let Some(cross_zone) = &config.cross_zone {
+            cross_zone_watcher::spawn_watchers(
+                &config.bedrock_config,
+                cross_zone,
+                config.block_create_timeout,
+                &mempool_handle,
+            );
         }
 
         let sequencer_core = Self {
@@ -609,14 +640,18 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     let genesis_txs = config
         .genesis
         .iter()
-        .map(|genesis_tx| match genesis_tx {
+        .filter_map(|genesis_tx| match genesis_tx {
             GenesisAction::SupplyAccount {
                 account_id,
                 balance,
-            } => build_supply_account_genesis_transaction(account_id, *balance),
+            } => Some(build_supply_account_genesis_transaction(
+                account_id, *balance,
+            )),
             GenesisAction::SupplyBridgeAccount { balance } => {
-                build_supply_bridge_account_genesis_transaction(*balance)
+                Some(build_supply_bridge_account_genesis_transaction(*balance))
             }
+            // Force-inserted below: bridge_lock has no mint transaction.
+            GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
@@ -627,7 +662,34 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         .map(LeeTransaction::Public)
         .collect();
 
+    // Seed bridge-lock holder balances directly: they are not produced by any tx.
+    for action in &config.genesis {
+        if let GenesisAction::SupplyBridgeLockHolding { holder, amount } = action {
+            let (holder_id, account) = cross_zone::build_holding_account(*holder, *amount);
+            state.insert_genesis_account(holder_id, account);
+        }
+    }
+
+    // Seed this zone's cross-zone inbox config so the inbox guest can authorize
+    // inbound peer messages (zone-specific config, not produced by any tx).
+    if let Some(cross_zone) = &config.cross_zone {
+        let self_zone = *config.bedrock_config.channel_id.as_ref();
+        let (config_id, config_account) =
+            cross_zone::build_inbox_config_account(self_zone, cross_zone);
+        state.insert_genesis_account(config_id, config_account);
+    }
+
     (state, genesis_txs)
+}
+
+/// Whether a program may only be invoked by sequencer-origin transactions.
+///
+/// The cross-zone inbox is injected solely by the watcher; a user-submitted call
+/// must be rejected at ingress, since `TransactionOrigin` is not carried in the
+/// block.
+#[must_use]
+pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
+    cross_zone::is_sequencer_only_program(program_id)
 }
 
 fn build_supply_account_genesis_transaction(

@@ -55,6 +55,31 @@ pub struct Block {
     pub bedrock_status: BedrockStatus,
 }
 
+impl Block {
+    /// Recomputes the hash from this block's contents, for integrity verification
+    /// against the value stored in `header.hash`.
+    #[must_use]
+    pub fn recompute_hash(&self) -> BlockHash {
+        HashableBlockData {
+            block_id: self.header.block_id,
+            prev_block_hash: self.header.prev_block_hash,
+            timestamp: self.header.timestamp,
+            transactions: self.body.transactions.clone(),
+        }
+        .compute_hash()
+    }
+
+    /// Recomputes the signed hash from the block contents and checks the header
+    /// signature against `expected_pubkey`. Used to pin a peer zone's
+    /// block-signing key, so a block inscribed by anyone other than that zone's
+    /// sequencer is rejected even if it reached the channel.
+    #[must_use]
+    pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
+        let hash = HashableBlockData::from(self.clone()).compute_hash();
+        self.header.signature.is_valid_for(&hash.0, expected_pubkey)
+    }
+}
+
 impl Serialize for Block {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         crate::borsh_base64::serialize(self, serializer)
@@ -76,11 +101,13 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
+    /// Domain-separated hash of the block contents: `SHA256(PREFIX || borsh(self))`.
+    /// The single source of truth for both producing and verifying a block hash.
     #[must_use]
-    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
+    pub fn compute_hash(&self) -> BlockHash {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
 
-        let data_bytes = borsh::to_vec(&self).unwrap();
+        let data_bytes = borsh::to_vec(self).unwrap();
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
@@ -89,8 +116,12 @@ impl HashableBlockData {
         );
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(&data_bytes);
+        OwnHasher::hash(&bytes)
+    }
 
-        let hash = OwnHasher::hash(&bytes);
+    #[must_use]
+    pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
+        let hash = self.compute_hash();
         let signature = lee::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {
@@ -131,5 +162,34 @@ mod tests {
         let bytes = borsh::to_vec(&hashable).unwrap();
         let block_from_bytes = borsh::from_slice::<HashableBlockData>(&bytes).unwrap();
         assert_eq!(hashable, block_from_bytes);
+    }
+
+    #[test]
+    fn recompute_hash_matches_header_for_well_formed_block() {
+        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
+        let block = HashableBlockData {
+            block_id: 5,
+            prev_block_hash: HashType([9_u8; 32]),
+            timestamp: 42,
+            transactions: vec![test_utils::produce_dummy_empty_transaction()],
+        }
+        .into_pending_block(&key);
+        assert_eq!(block.recompute_hash(), block.header.hash);
+    }
+
+    #[test]
+    fn recompute_hash_detects_tampering() {
+        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
+        let block = HashableBlockData {
+            block_id: 5,
+            prev_block_hash: HashType([9_u8; 32]),
+            timestamp: 42,
+            transactions: vec![test_utils::produce_dummy_empty_transaction()],
+        }
+        .into_pending_block(&key);
+
+        let mut tampered = block;
+        tampered.header.timestamp = 99; // header changed; stale hash no longer matches
+        assert_ne!(tampered.recompute_hash(), tampered.header.hash);
     }
 }
