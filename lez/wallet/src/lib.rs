@@ -181,8 +181,12 @@ impl WalletCore {
 
         let mut metrics = extract_metrics_from_path(&metrics_path)?;
 
-        let multi_sequencer_client =
-            MultiSequencerClient::new(&config.sequencers_conn_data, &mut metrics).await?;
+        let multi_sequencer_client = MultiSequencerClient::new(
+            &config.sequencers_conn_data,
+            &mut metrics,
+            config.callibration_limit,
+        )
+        .await?;
 
         Ok(Self {
             config_path,
@@ -483,8 +487,8 @@ impl WalletCore {
         })
     }
 
-    pub fn get_metrics(&self) -> Vec<Metrics> {
-        todo!();
+    pub fn get_metrics(&self, sequencer_url: &Url) -> Option<&Metrics> {
+        self.metrics.get(sequencer_url)
     }
 
     /// Get account balance.
@@ -502,8 +506,9 @@ impl WalletCore {
     }
 
     /// Get accounts nonces.
-    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<Nonce>> {
-        let call_f = async |client: &SequencerClient| client.get_accounts_nonces(accs).await;
+    pub async fn get_accounts_nonces(&self, accs: &[AccountId]) -> Result<Vec<Nonce>> {
+        let call_f =
+            async |client: &SequencerClient| client.get_accounts_nonces(accs.to_vec()).await;
 
         let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
 
@@ -804,7 +809,7 @@ impl WalletCore {
 
         let call_f = async |client: &SequencerClient| {
             client
-                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
+                .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
                 .await
         };
 
@@ -875,7 +880,9 @@ impl WalletCore {
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
         let call_f = async |client: &SequencerClient| {
-            client.send_transaction(LeeTransaction::Public(tx)).await
+            client
+                .send_transaction(LeeTransaction::Public(tx.clone()))
+                .await
         };
 
         let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
@@ -894,7 +901,7 @@ impl WalletCore {
 
         let call_f = async |client: &SequencerClient| {
             client
-                .send_transaction(LeeTransaction::ProgramDeployment(transaction))
+                .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
                 .await
         };
 

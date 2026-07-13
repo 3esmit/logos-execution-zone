@@ -8,8 +8,6 @@ use url::Url;
 
 use crate::config::SequencerConnectionData;
 
-pub const CALLIBRATION_LIMIT: usize = 100;
-
 pub fn extract_metrics_from_path(path: &Path) -> Result<HashMap<Url, Metrics>, anyhow::Error> {
     match std::fs::File::open(path) {
         Ok(file) => {
@@ -40,9 +38,49 @@ pub struct MetricsUpdate {
     pub is_failed: bool,
 }
 
+impl Metrics {
+    fn apply_updates(&mut self, updates: &[MetricsUpdate]) {
+        let CumulativeUpdates {
+            failure_count,
+            latest_block_id,
+            cumulative_latency,
+            cumulative_latency_squares,
+            additional_sample_size,
+        } = cumulative_updates(updates);
+
+        self.errors += failure_count;
+        if let Some(latest_block_id) = latest_block_id {
+            self.latest_block_id = latest_block_id;
+        }
+
+        let orig_size_f = self.sample_size as f32;
+        let mod_size_f = additional_sample_size as f32;
+
+        let latency_avg_old = self.latency_avg;
+        let latency_avg_new =
+            cumulative_avg(latency_avg_old, cumulative_latency, orig_size_f, mod_size_f);
+
+        let latency_var_new = cumulative_var(
+            latency_avg_old,
+            latency_avg_new,
+            self.latency_var,
+            cumulative_latency,
+            cumulative_latency_squares,
+            orig_size_f,
+            mod_size_f,
+        );
+
+        self.latency_avg = latency_avg_new;
+        self.latency_var = latency_var_new;
+        self.sample_size += additional_sample_size;
+    }
+}
+
 #[derive(Clone)]
 pub struct MultiSequencerClient {
-    pub client_list: HashMap<Url, SequencerClient>,
+    // For now we store only leader, it is possible, that
+    // in future for important sends(for example for transactions)
+    // we would want to distribute call between known sequencers
     pub leader: SequencerClient,
     pub leader_url: Url,
 }
@@ -51,6 +89,7 @@ impl MultiSequencerClient {
     pub async fn new(
         conn_data: &[SequencerConnectionData],
         metrics: &mut HashMap<Url, Metrics>,
+        callibration_limit: usize,
     ) -> Result<Self> {
         let mut client_list = HashMap::new();
 
@@ -81,8 +120,13 @@ impl MultiSequencerClient {
             if !metrics.contains_key(sequencer_addr) {
                 metrics.insert(
                     sequencer_addr.clone(),
-                    callibration(sequencer_client.clone()).await,
+                    callibrate_client(&sequencer_client, callibration_limit).await,
                 );
+            // Otherwise actualize client data
+            } else {
+                let metric_updates = actualize_client(&sequencer_client).await;
+                let metric_mut = metrics.get_mut(sequencer_addr).unwrap();
+                metric_mut.apply_updates(&[metric_updates]);
             }
 
             client_list.insert(sequencer_addr.clone(), sequencer_client);
@@ -91,11 +135,8 @@ impl MultiSequencerClient {
         let (leader_url, leader) =
             choose_leader(&client_list, metrics).ok_or(anyhow::anyhow!("Failed to find leader"))?;
 
-        Ok(Self {
-            client_list,
-            leader,
-            leader_url,
-        })
+        // Dropping client list, for reasons why, see comment in structure definition.
+        Ok(Self { leader, leader_url })
     }
 
     pub fn leader_ref(&self) -> &SequencerClient {
@@ -106,41 +147,22 @@ impl MultiSequencerClient {
         self.leader.clone()
     }
 
-    pub async fn metered_call<R, E, I: AsyncFnOnce(&SequencerClient) -> Result<R, E>>(
+    // Keeping this call abstract, in case if we need to do more than one request
+    pub async fn metered_call<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
         &self,
         call: I,
     ) -> (Result<R, E>, MetricsUpdate) {
-        let call_last_block = self.leader_ref().get_last_block_id();
-
-        let now = tokio::time::Instant::now();
-
-        let (call_future_res, call_last_block_res) =
-            tokio::join!(call(self.leader_ref()), call_last_block);
-
-        let latency = tokio::time::Instant::now().duration_since(now).as_millis() as f32;
-        let is_failed = call_future_res.is_err() || call_last_block_res.is_err();
-        let mut new_last_block = None;
-
-        if let Ok(last_block) = call_last_block_res {
-            new_last_block = Some(last_block);
-        }
-
-        let metrics_update = MetricsUpdate {
-            latency,
-            new_latest_block_id: new_last_block,
-            is_failed,
-        };
-
-        (call_future_res, metrics_update)
+        tokio::join!(call(self.leader_ref()), actualize_client(self.leader_ref()))
     }
 }
 
-pub async fn callibration(client: SequencerClient) -> Metrics {
+pub async fn callibrate_client(client: &SequencerClient, callibration_limit: usize) -> Metrics {
     let mut latencies = vec![];
     let mut latest_block_id = 0;
     let mut errors = 0;
 
-    for _ in 0..CALLIBRATION_LIMIT {
+    // ToDo: Add some DDoS adaptation
+    for _ in 0..callibration_limit {
         let now = tokio::time::Instant::now();
 
         let block_id = client.get_last_block_id().await;
@@ -172,6 +194,20 @@ pub async fn callibration(client: SequencerClient) -> Metrics {
     }
 }
 
+pub async fn actualize_client(client: &SequencerClient) -> MetricsUpdate {
+    let now = tokio::time::Instant::now();
+
+    let block_id = client.get_last_block_id().await.ok();
+
+    let latency = tokio::time::Instant::now().duration_since(now).as_millis() as f32;
+
+    MetricsUpdate {
+        latency,
+        new_latest_block_id: block_id,
+        is_failed: block_id.is_none(),
+    }
+}
+
 pub fn choose_leader(
     client_list: &HashMap<Url, SequencerClient>,
     metrics: &HashMap<Url, Metrics>,
@@ -189,7 +225,7 @@ pub fn choose_leader(
         return None;
     }
 
-    // Considering the nature of our requests, the latest_block_id is dominant characteristic
+    // Considering the nature of our requests, the latest_block_id is the dominant characteristic
     let max_block_id_addr = client_vec.iter().fold(client_vec[0], |acc, x| {
         let old_latest_block_id = metrics.get(acc).unwrap().latest_block_id;
         let new_latest_block_id = metrics.get(*x).unwrap().latest_block_id;
@@ -202,7 +238,7 @@ pub fn choose_leader(
 
     let max_block_id = metrics.get(max_block_id_addr).unwrap().latest_block_id;
 
-    // Sort out all latest clients
+    // Sort out all clients running late
     client_vec = client_vec
         .iter()
         .filter_map(|x| {
@@ -216,7 +252,12 @@ pub fn choose_leader(
         })
         .collect();
 
-    // Get the lowest quartile in error distribution
+    // Get the clients with lesser or equal to average error count
+    let avg_err_count = client_vec
+        .iter()
+        .fold(0, |acc, x| acc + metrics.get(*x).unwrap().errors)
+        / (client_vec.len() as u64);
+
     client_vec.sort_by(|a, b| {
         metrics
             .get(*a)
@@ -225,7 +266,11 @@ pub fn choose_leader(
             .cmp(&metrics.get(*b).unwrap().errors)
     });
 
-    client_vec = client_vec[..(client_vec.len() / 4)].to_vec();
+    client_vec = client_vec[..(client_vec
+        .iter()
+        .position(|item| metrics.get(*item).unwrap().errors > avg_err_count)
+        .unwrap_or(client_vec.len()))]
+        .to_vec();
 
     // Choose clients with least latency and variance
     let min_lat_var_addr = client_vec.iter().fold(client_vec[0], |acc, x| {
@@ -238,7 +283,15 @@ pub fn choose_leader(
         let old_std = old_var.sqrt();
 
         // Client is better if its averabe is better and variance does not make it worse
-        if (new_lat < old_lat) && ((new_lat + new_std) < (old_lat + old_std)) {
+        // So basically we want this:
+        // [-old_std............new_lat.......old_lat...............+new_std.........+old_std]
+        //
+        // However one can argue that this:
+        //
+        // [-old_std...................old_lat........new_lat.........+new_std.......+old_std]
+        //
+        // is still better, but it is up to discussion
+        if (new_lat <= old_lat) && ((new_lat + new_std) < (old_lat + old_std)) {
             *x
         } else {
             acc
@@ -270,7 +323,9 @@ pub async fn save_metrics_at_path(
 struct CumulativeUpdates {
     pub failure_count: u64,
     pub latest_block_id: Option<u64>,
+    /// Necessary for cumulative average calculation
     pub cumulative_latency: f32,
+    /// Necessary for cumulative variance calculation
     pub cumulative_latency_squares: f32,
     pub additional_sample_size: usize,
 }
@@ -310,6 +365,18 @@ fn cumulative_updates(metric_updates: &[MetricsUpdate]) -> CumulativeUpdates {
     }
 }
 
+/// Helperfunction to calculate cumulative average
+///
+/// Cumulative average calculation is the following problem:
+///
+/// We want to calculate avarage of a sample of size `N + N_1`
+/// where average for `N` is known
+///
+/// To do so we need:
+/// - old average value
+/// - sum_{i=1}^{N_1}{n_i}
+/// - N
+/// - N_1
 fn cumulative_avg(
     latency_avg_old: f32,
     cumulative_latency: f32,
@@ -319,6 +386,21 @@ fn cumulative_avg(
     (latency_avg_old * orig_size_f + cumulative_latency) / (orig_size_f + mod_size_f)
 }
 
+/// Helperfunction to calculate cumulative variance
+///
+/// Cumulative variance calculation is the following problem:
+///
+/// We want to calculate variance of a sample of size `N + N_1`
+/// where average for `N` is known
+///
+/// To do so we need:
+/// - old average value
+/// - new average value
+/// - old variance
+/// - sum_{i=1}^{N_1}{n_i}
+/// - sum_{i=1}^{N_1}{n_i^2}
+/// - N
+/// - N_1
 fn cumulative_var(
     latency_avg_old: f32,
     latency_avg_new: f32,
@@ -345,39 +427,7 @@ pub fn update_metrics(
         .get_mut(leader_url)
         .ok_or(anyhow::anyhow!("Leader URL is not present in metrics"))?;
 
-    let CumulativeUpdates {
-        failure_count,
-        latest_block_id,
-        cumulative_latency,
-        cumulative_latency_squares,
-        additional_sample_size,
-    } = cumulative_updates(metric_updates);
-
-    leader_metric.errors += failure_count;
-    if let Some(latest_block_id) = latest_block_id {
-        leader_metric.latest_block_id = latest_block_id;
-    }
-
-    let orig_size_f = leader_metric.sample_size as f32;
-    let mod_size_f = additional_sample_size as f32;
-
-    let latency_avg_old = leader_metric.latency_avg;
-    let latency_avg_new =
-        cumulative_avg(latency_avg_old, cumulative_latency, orig_size_f, mod_size_f);
-
-    let latency_var_new = cumulative_var(
-        latency_avg_old,
-        latency_avg_new,
-        leader_metric.latency_var,
-        cumulative_latency,
-        cumulative_latency_squares,
-        orig_size_f,
-        mod_size_f,
-    );
-
-    leader_metric.latency_avg = latency_avg_new;
-    leader_metric.latency_var = latency_var_new;
-    leader_metric.sample_size += additional_sample_size;
+    leader_metric.apply_updates(metric_updates);
 
     Ok(())
 }
@@ -397,12 +447,18 @@ pub async fn save_metrics_at_path_with_updates(
 mod tests {
     use std::collections::HashMap;
 
+    use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
     use url::Url;
 
     use crate::multi_client::{
-        CumulativeUpdates, Metrics, MetricsUpdate, cumulative_avg, cumulative_updates,
-        cumulative_var, update_metrics,
+        CumulativeUpdates, Metrics, MetricsUpdate, choose_leader, cumulative_avg,
+        cumulative_updates, cumulative_var, update_metrics,
     };
+
+    fn client_from_url_unchecked(url: &Url) -> SequencerClient {
+        let builder = SequencerClientBuilder::default();
+        builder.build(url).unwrap()
+    }
 
     #[test]
     fn cumulative_updates_test() {
@@ -578,5 +634,285 @@ mod tests {
         assert_eq!(*sample_size, 12);
         assert!((*latency_avg - avg_manual).abs() < epsilon);
         assert!((*latency_var - var_manual).abs() < epsilon);
+    }
+
+    #[test]
+    fn choose_leader_latest_block() {
+        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
+        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
+        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
+        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
+
+        let leader = client_from_url_unchecked(&addr_leader);
+        let client_1 = client_from_url_unchecked(&addr_1);
+        let client_2 = client_from_url_unchecked(&addr_2);
+        let client_3 = client_from_url_unchecked(&addr_3);
+
+        let mut client_list = HashMap::new();
+
+        client_list.insert(addr_leader.clone(), leader);
+        client_list.insert(addr_1.clone(), client_1);
+        client_list.insert(addr_2.clone(), client_2);
+        client_list.insert(addr_3.clone(), client_3);
+
+        let mut metrics = HashMap::new();
+
+        metrics.insert(
+            addr_3,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 97,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_2,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 98,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_1,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 99,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_leader.clone(),
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        let (leader_url, _) = choose_leader(&client_list, &metrics).unwrap();
+
+        assert_eq!(leader_url, addr_leader);
+    }
+
+    #[test]
+    fn choose_leader_least_errors() {
+        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
+        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
+        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
+        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
+
+        let leader = client_from_url_unchecked(&addr_leader);
+        let client_1 = client_from_url_unchecked(&addr_1);
+        let client_2 = client_from_url_unchecked(&addr_2);
+        let client_3 = client_from_url_unchecked(&addr_3);
+
+        let mut client_list = HashMap::new();
+
+        client_list.insert(addr_leader.clone(), leader);
+        client_list.insert(addr_1.clone(), client_1);
+        client_list.insert(addr_2.clone(), client_2);
+        client_list.insert(addr_3.clone(), client_3);
+
+        let mut metrics = HashMap::new();
+
+        metrics.insert(
+            addr_3,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_2,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        metrics.insert(
+            addr_1,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 3,
+            },
+        );
+
+        metrics.insert(
+            addr_leader.clone(),
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 2,
+            },
+        );
+
+        let (leader_url, _) = choose_leader(&client_list, &metrics).unwrap();
+
+        assert_eq!(leader_url, addr_leader);
+    }
+
+    #[test]
+    fn choose_leader_simple_latency_check() {
+        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
+        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
+        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
+        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
+
+        let leader = client_from_url_unchecked(&addr_leader);
+        let client_1 = client_from_url_unchecked(&addr_1);
+        let client_2 = client_from_url_unchecked(&addr_2);
+        let client_3 = client_from_url_unchecked(&addr_3);
+
+        let mut client_list = HashMap::new();
+
+        client_list.insert(addr_leader.clone(), leader);
+        client_list.insert(addr_1.clone(), client_1);
+        client_list.insert(addr_2.clone(), client_2);
+        client_list.insert(addr_3.clone(), client_3);
+
+        let mut metrics = HashMap::new();
+
+        metrics.insert(
+            addr_3,
+            Metrics {
+                latency_avg: 103_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_2,
+            Metrics {
+                latency_avg: 102_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_1,
+            Metrics {
+                latency_avg: 101_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_leader.clone(),
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        let (leader_url, _) = choose_leader(&client_list, &metrics).unwrap();
+
+        assert_eq!(leader_url, addr_leader);
+    }
+
+    #[test]
+    fn choose_leader_latency_var_check() {
+        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
+        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
+        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
+        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
+
+        let leader = client_from_url_unchecked(&addr_leader);
+        let client_1 = client_from_url_unchecked(&addr_1);
+        let client_2 = client_from_url_unchecked(&addr_2);
+        let client_3 = client_from_url_unchecked(&addr_3);
+
+        let mut client_list = HashMap::new();
+
+        client_list.insert(addr_leader.clone(), leader);
+        client_list.insert(addr_1.clone(), client_1);
+        client_list.insert(addr_2.clone(), client_2);
+        client_list.insert(addr_3.clone(), client_3);
+
+        let mut metrics = HashMap::new();
+
+        metrics.insert(
+            addr_3,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 13_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_2,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 12_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_1,
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 11_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        metrics.insert(
+            addr_leader.clone(),
+            Metrics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        let (leader_url, _) = choose_leader(&client_list, &metrics).unwrap();
+
+        assert_eq!(leader_url, addr_leader);
     }
 }

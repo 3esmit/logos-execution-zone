@@ -166,6 +166,7 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
+        callibration_limit: 1,
     })
 }
 
