@@ -51,8 +51,7 @@ impl PeerBlocks {
     }
 
     /// The highest block id this reader has finalized for `zone`, or `None` if it
-    /// has read nothing yet. Used to tell forgery (we have read past the
-    /// referenced block and it is absent) from lag (we simply have not caught up).
+    /// has read nothing yet.
     async fn highest_seen(&self, zone: ZoneId) -> Option<u64> {
         self.chains
             .read()
@@ -65,13 +64,17 @@ impl PeerBlocks {
 /// The indexer-side Option B verifier.
 ///
 /// For every cross-zone dispatch in a block it re-derives the transaction from
-/// the peer's finalized block and rejects it if the bytes differ (a forgery) or
-/// the message was already delivered (a replay), so delivery no longer relies on
-/// trusting the sequencer.
+/// the peer's finalized block and rejects it if the bytes differ (a forgery), so
+/// delivery no longer relies on trusting the sequencer. A replay of an
+/// already-delivered message is accepted, since the inbox no-ops it on chain.
 #[derive(Clone)]
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
     /// Pinned block-signing key per peer zone, enforced during re-derivation.
+    /// One key per peer is sufficient while a zone has a single sequencer; key
+    /// sets with rotation come in with decentralized sequencing. The pin is
+    /// largely redundant given Bedrock's turn-based write authorization, so it is
+    /// optional: a peer with no configured key is not signature-checked.
     peer_pubkeys: HashMap<ZoneId, PublicKey>,
     peers: PeerBlocks,
     seen: Arc<RwLock<HashSet<MessageKey>>>,
@@ -113,7 +116,8 @@ impl CrossZoneVerifier {
     }
 
     /// Verifies every cross-zone dispatch in a block, returning `Err` on the
-    /// first forged or replayed dispatch. The caller halts ingestion on error.
+    /// first forged dispatch. The caller halts ingestion on error. A replay of an
+    /// already-delivered message is accepted, since the inbox no-ops it on chain.
     pub async fn verify_block(&self, block: &Block) -> Result<()> {
         for tx in &block.body.transactions {
             let Some(msg) = Self::decode_dispatch(tx) else {
@@ -121,11 +125,12 @@ impl CrossZoneVerifier {
             };
 
             let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
+            // A replay of an already-verified dispatch is an idempotent no-op on
+            // chain (the inbox skips a message it has already seen in its shard),
+            // so accept it and skip re-derivation rather than halting the indexer
+            // on a legitimate re-delivery, e.g. after a sequencer restart.
             if self.seen.read().await.contains(&key) {
-                bail!(
-                    "cross-zone replay: message {} re-delivered",
-                    hex::encode(key)
-                );
+                continue;
             }
 
             let expected = self.rederive(&msg).await?;
@@ -225,11 +230,6 @@ impl CrossZoneVerifier {
     /// If the block is cached, return it. If our peer reader has already
     /// finalized past `block_id` and we still do not have it, the reference is to
     /// a block that does not exist on the peer chain, a forgery, so reject now.
-    /// Otherwise the reader simply has not caught up yet: keep waiting, since a
-    /// legitimate dispatch is only injected after its peer block finalized and
-    /// our reader of the same finalized chain will see it too. Rejecting on a
-    /// timeout here would turn a lagging reader into a permanent halt of an
-    /// honest message.
     async fn wait_for_peer_block(&self, zone: ZoneId, block_id: u64) -> Result<Block> {
         let mut waited = Duration::ZERO;
         loop {
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_replayed_dispatch() {
+    async fn accepts_replayed_dispatch_as_noop() {
         let verifier = verifier();
         verifier
             .peers
@@ -490,11 +490,22 @@ mod tests {
             .await
             .expect("first delivery verifies");
 
+        // Replace the peer block with a different emission so re-deriving the
+        // replay would mismatch. The replay must still be accepted, proving it is
+        // the seen-key short-circuit (the inbox no-ops it on chain) and not a
+        // successful re-derivation.
+        verifier
+            .peers
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"different")]),
+            )
+            .await;
+
         let replay = produce_dummy_block(10, None, vec![dispatch(b"hi")]);
-        let err = verifier.verify_block(&replay).await.unwrap_err();
-        assert!(
-            err.to_string().contains("replay"),
-            "unexpected error: {err}"
-        );
+        verifier
+            .verify_block(&replay)
+            .await
+            .expect("a replay is accepted as an on-chain no-op");
     }
 }

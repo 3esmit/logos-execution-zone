@@ -257,8 +257,9 @@ impl IndexerCore {
                     };
 
                     // Option B: re-derive and verify every cross-zone dispatch
-                    // before applying the block. A forged or replayed dispatch
-                    // halts ingestion rather than persisting an invalid state.
+                    // before applying the block. A forged dispatch halts ingestion
+                    // rather than persisting an invalid state; a replay is accepted
+                    // since the inbox no-ops it on chain.
                     if let Some(verifier) = &self.verifier
                         && let Err(err) = verifier.verify_block(&block).await
                     {
