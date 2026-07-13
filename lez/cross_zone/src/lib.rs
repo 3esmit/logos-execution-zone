@@ -2,6 +2,12 @@
 //! machine (`lee`), kept out of the guest-pure cores. Mirrors `system_accounts`:
 //! it resolves builtin program ids and bakes them into transactions and genesis
 //! accounts for the watcher (sequencer) and verifier (indexer).
+//!
+//! This crate is the reference LEZ-to-LEZ adapter: it re-derives each delivery
+//! byte-for-byte from a peer LEZ zone's finalized blocks, valid only because the
+//! peer runs identical LEZ code. A non-LEZ peer needs a separate adapter with its
+//! own block-reading, emission-extraction, delivery-building, and trust model; a
+//! shared trait is best lifted from that first real adapter, not from this one.
 
 use std::collections::BTreeMap;
 
@@ -10,10 +16,12 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
     inbox_seen_shard_account_id,
 };
+use lee::program::Program;
 use lee_core::{
     account::{Account, AccountId},
     program::ProgramId,
 };
+use serde::{Deserialize, Serialize};
 
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
@@ -22,6 +30,47 @@ pub struct Emission {
     pub target_program_id: ProgramId,
     pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
+}
+
+/// A cross-zone builtin a zone deploys at genesis via `DeployProgram`.
+///
+/// Keeps the cross-zone programs out of the production builtin set. A zone lists
+/// the ones it uses (a sender needs the outbox and its emitter, a receiver the
+/// inbox and its targets); [`CrossZoneProgram::ALL`] deploys the whole set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CrossZoneProgram {
+    Outbox,
+    Inbox,
+    PingSender,
+    PingReceiver,
+    BridgeLock,
+    WrappedToken,
+}
+
+impl CrossZoneProgram {
+    /// Every cross-zone builtin, for a zone that participates in all flows.
+    pub const ALL: [Self; 6] = [
+        Self::Outbox,
+        Self::Inbox,
+        Self::PingSender,
+        Self::PingReceiver,
+        Self::BridgeLock,
+        Self::WrappedToken,
+    ];
+
+    /// Resolves to the builtin program to register in genesis state.
+    #[must_use]
+    pub const fn program(self) -> Program {
+        match self {
+            Self::Outbox => programs::cross_zone_outbox(),
+            Self::Inbox => programs::cross_zone_inbox(),
+            Self::PingSender => programs::ping_sender(),
+            Self::PingReceiver => programs::ping_receiver(),
+            Self::BridgeLock => programs::bridge_lock(),
+            Self::WrappedToken => programs::wrapped_token(),
+        }
+    }
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
@@ -186,4 +235,43 @@ pub fn build_holding_account(holder: AccountId, amount: u128) -> (AccountId, Acc
         ..Default::default()
     };
     (holder, account)
+}
+
+/// Resolves a list of [`CrossZoneProgram`] selectors to the builtin programs to
+/// register in genesis state.
+#[must_use]
+pub fn deployed_programs(programs: &[CrossZoneProgram]) -> Vec<Program> {
+    programs.iter().map(|p| p.program()).collect()
+}
+
+/// The wrapped-token config account, pinning the cross-zone inbox as the
+/// authorized minter without importing the inbox id into the guest. Fixed for
+/// every zone, part of the cross-zone genesis setup.
+fn wrapped_token_config_account() -> (AccountId, Account) {
+    let wrapped_token_id = programs::wrapped_token().id();
+    (
+        wrapped_token_core::config_account_id(wrapped_token_id),
+        Account {
+            program_owner: wrapped_token_id,
+            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
+                .to_vec()
+                .try_into()
+                .expect("minter id fits in account data"),
+            ..Default::default()
+        },
+    )
+}
+
+/// The receiving-side cross-zone genesis accounts a zone seeds.
+///
+/// The wrapped-token config and this zone's inbox config, for a zone that
+/// receives (one with `cross_zone` config). Bridge-lock holdings are seeded
+/// separately via [`build_holding_account`], since they belong to the locking
+/// (source) side and must not depend on receiving config.
+#[must_use]
+pub fn genesis_accounts(self_zone: ZoneId, config: &CrossZoneConfig) -> Vec<(AccountId, Account)> {
+    vec![
+        wrapped_token_config_account(),
+        build_inbox_config_account(self_zone, config),
+    ]
 }

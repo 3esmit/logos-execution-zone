@@ -93,22 +93,18 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
-        // Genesis accounts the indexer must seed to match the sequencer's state,
-        // since none are produced by a transaction: the cross-zone inbox config
-        // and any bridge-lock holdings. Both go through the same builders the
-        // sequencer uses, so the states are byte-identical.
-        let mut genesis_seed = Vec::new();
+        // Cross-zone programs, mirroring the sequencer's DeployProgram set.
+        let genesis_programs = cross_zone::deployed_programs(&config.deploy_programs);
+        // Bridge-lock holdings (source side) always; inbox + wrapped-token config only when
+        // cross_zone is set.
+        let mut genesis_accounts: Vec<_> = config
+            .bridge_lock_holdings
+            .iter()
+            .map(|holding| cross_zone::build_holding_account(holding.holder, holding.amount))
+            .collect();
         if let Some(cross_zone) = config.cross_zone.as_ref() {
             let self_zone: [u8; 32] = *config.channel_id.as_ref();
-            genesis_seed.push(cross_zone::build_inbox_config_account(
-                self_zone, cross_zone,
-            ));
-        }
-        for holding in &config.bridge_lock_holdings {
-            genesis_seed.push(cross_zone::build_holding_account(
-                holding.holder,
-                holding.amount,
-            ));
+            genesis_accounts.extend(cross_zone::genesis_accounts(self_zone, cross_zone));
         }
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
@@ -117,7 +113,7 @@ impl IndexerCore {
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
-            store: IndexerStore::open_db(&home, genesis_seed)?,
+            store: IndexerStore::open_db(&home, genesis_programs, genesis_accounts)?,
             node,
             config,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),

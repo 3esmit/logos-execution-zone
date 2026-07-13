@@ -53,24 +53,40 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
-        .await
-        .context("Failed to set up zone A sequencer")?;
-    let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
-        .await
-        .context("Failed to set up zone A indexer")?;
+    let (seq_a, _seq_a_home) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        config::cross_zone_deploy_actions(),
+        channel_a,
+        None,
+    )
+    .await
+    .context("Failed to set up zone A sequencer")?;
+    let (_idx_a, _idx_a_home) = setup_indexer(
+        bedrock_addr,
+        channel_a,
+        None,
+        config::all_cross_zone_programs(),
+    )
+    .await
+    .context("Failed to set up zone A indexer")?;
     let (_seq_b, _seq_b_home) = setup_sequencer(
         partial,
         bedrock_addr,
-        vec![],
+        config::cross_zone_deploy_actions(),
         channel_b,
         Some(cross_zone.clone()),
     )
     .await
     .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
-        .await
-        .context("Failed to set up zone B indexer")?;
+    let (idx_b, _idx_b_home) = setup_indexer(
+        bedrock_addr,
+        channel_b,
+        Some(cross_zone),
+        config::all_cross_zone_programs(),
+    )
+    .await
+    .context("Failed to set up zone B indexer")?;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);

@@ -34,9 +34,15 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .context("Failed to set up Bedrock node")?;
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
-    let (seq, _seq_home) = setup_sequencer(partial, bedrock_addr, vec![], channel, None)
-        .await
-        .context("Failed to set up sequencer")?;
+    let (seq, _seq_home) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        config::cross_zone_deploy_actions(),
+        channel,
+        None,
+    )
+    .await
+    .context("Failed to set up sequencer")?;
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
     let inbox_id = programs::cross_zone_inbox().id();

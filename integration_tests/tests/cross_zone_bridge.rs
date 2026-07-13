@@ -8,6 +8,13 @@
 //! zone B, where the indexer re-derives and verifies it (Option B) before the
 //! wrapped token is minted to the recipient. Reuses the M3/M4 spine unchanged;
 //! only the source caller (`bridge_lock`) and target (`wrapped_token`) are new.
+//!
+//! Not production-safe. The inbox allowlist gates the target program, not the
+//! source emitter, and `extract_emission` recognizes any known emitter, so in a
+//! zone that allows `wrapped_token` as a target a permissionless `ping_sender`
+//! send can carry a `wrapped_token::Mint` and mint with no lock. Making this safe
+//! needs source verification, where a value-bearing target checks the message
+//! originated from `bridge_lock`; that is out of scope for the demo.
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -58,25 +65,31 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
 
     // Zone A seeds the holder's bridgeable balance. Zone B runs the watcher on its
     // sequencer and the verifier on its indexer.
-    let genesis_a = vec![GenesisAction::SupplyBridgeLockHolding {
+    let mut genesis_a = vec![GenesisAction::SupplyBridgeLockHolding {
         holder: holder_id,
         amount: INITIAL_BALANCE,
     }];
+    genesis_a.extend(config::cross_zone_deploy_actions());
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, genesis_a, channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
     let (_seq_b, _seq_b_home) = setup_sequencer(
         partial,
         bedrock_addr,
-        vec![],
+        config::cross_zone_deploy_actions(),
         channel_b,
         Some(cross_zone.clone()),
     )
     .await
     .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
-        .await
-        .context("Failed to set up zone B indexer")?;
+    let (idx_b, _idx_b_home) = setup_indexer(
+        bedrock_addr,
+        channel_b,
+        Some(cross_zone),
+        config::all_cross_zone_programs(),
+    )
+    .await
+    .context("Failed to set up zone B indexer")?;
 
     // Lock LOCK_AMOUNT on zone A, addressed to the recipient on zone B.
     let lock = build_lock_tx(&holder_key, holder_id, zone_b);

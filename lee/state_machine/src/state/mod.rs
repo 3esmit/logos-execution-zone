@@ -194,14 +194,6 @@ impl V03State {
         self.programs.insert(program.id(), program);
     }
 
-    /// Seeds a single genesis account that is not produced by any transaction
-    /// (e.g. the cross-zone inbox config or a bridge-lock holding). Lets the
-    /// sequencer and indexer seed identical zone-specific state after building
-    /// the shared initial state.
-    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
-        self.public_state.insert(account_id, account);
-    }
-
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
         let StateDiff {
             signer_account_ids,
@@ -285,6 +277,50 @@ impl V03State {
     #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
+    }
+
+    /// Order-independent fingerprint of the genesis-relevant state: the public
+    /// account set, the deployed program set, and the commitment-set digest.
+    ///
+    /// The sequencer and the indexer build genesis separately from their own
+    /// configs (the cross-zone deploy set is seeded directly, not carried by a
+    /// genesis transaction), so a mismatched `DeployProgram` / `deploy_programs`
+    /// list would otherwise diverge silently. Both nodes log this at startup;
+    /// equal values mean the two genesis states agree. Entries are sorted by id
+    /// before hashing, so the value does not depend on `HashMap` iteration order.
+    #[must_use]
+    pub fn genesis_fingerprint(&self) -> [u8; 32] {
+        use sha2::{Digest as _, Sha256};
+
+        let mut accounts: Vec<(&AccountId, &Account)> = self.public_state.iter().collect();
+        accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+
+        let mut program_ids: Vec<ProgramId> = self.programs.keys().copied().collect();
+        program_ids.sort_unstable();
+
+        let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
+        let program_count = u64::try_from(program_ids.len()).expect("program count fits in u64");
+
+        let mut hasher = Sha256::new();
+        hasher.update(account_count.to_le_bytes());
+        for (id, account) in accounts {
+            hasher.update(id.as_ref());
+            let bytes = borsh::to_vec(account).expect("Account is BorshSerialize");
+            let len = u64::try_from(bytes.len()).expect("account encoding fits in u64");
+            hasher.update(len.to_le_bytes());
+            hasher.update(&bytes);
+        }
+        hasher.update(program_count.to_le_bytes());
+        for id in program_ids {
+            for word in id {
+                hasher.update(word.to_le_bytes());
+            }
+        }
+        hasher.update(self.commitment_set_digest());
+
+        let mut out = [0_u8; 32];
+        out.copy_from_slice(&hasher.finalize());
+        out
     }
 
     pub(crate) fn check_commitments_are_new(

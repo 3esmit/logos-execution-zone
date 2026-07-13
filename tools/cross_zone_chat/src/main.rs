@@ -289,14 +289,24 @@ async fn main() -> Result<()> {
     let cross_zone_b = watch_peer(zone_a, receiver_id);
 
     let partial = SequencerPartialConfig::default();
-    let (seq_a, _home_a) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_a, Some(cross_zone_a))
-            .await
-            .context("Failed to set up zone A sequencer")?;
-    let (seq_b, _home_b) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone_b))
-            .await
-            .context("Failed to set up zone B sequencer")?;
+    let (seq_a, _home_a) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        config::cross_zone_deploy_actions(),
+        channel_a,
+        Some(cross_zone_a),
+    )
+    .await
+    .context("Failed to set up zone A sequencer")?;
+    let (seq_b, _home_b) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        config::cross_zone_deploy_actions(),
+        channel_b,
+        Some(cross_zone_b),
+    )
+    .await
+    .context("Failed to set up zone B sequencer")?;
 
     let state = Arc::new(AppState {
         zone_a: ZoneRuntime {

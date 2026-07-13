@@ -321,6 +321,7 @@ mod tests {
             allow_chain_reset: false,
             cross_zone: None,
             bridge_lock_holdings: Vec::new(),
+            deploy_programs: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }
