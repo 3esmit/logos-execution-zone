@@ -60,7 +60,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -72,7 +72,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
     let winner_id = AccountId::new(unsafe { (*winner_account_id).data });
     let solution = u128::from_le_bytes(unsafe { *solution });
 
-    let mut pinata = Pinata(&mut wallet);
+    let pinata = Pinata(&wallet);
 
     match block_on(pinata.claim(pinata_id, winner_id, solution)) {
         Ok(tx_hash) => {
@@ -155,7 +155,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
     };
     let proof: MembershipProof = (winner_proof_index, siblings);
 
-    let mut pinata = Pinata(&mut wallet);
+    let pinata = Pinata(&wallet);
 
     match block_on(
         pinata
@@ -250,7 +250,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -262,7 +262,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
     let winner_id = AccountId::new(unsafe { (*winner_account_id).data });
     let solution = u128::from_le_bytes(unsafe { *solution });
 
-    let mut pinata = Pinata(&mut wallet);
+    let pinata = Pinata(&wallet);
 
     match block_on(pinata.claim_private_owned_account(pinata_id, winner_id, solution)) {
         Ok((tx_hash, _shared_key)) => {

@@ -10,7 +10,7 @@ use crate::{
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
-        &mut self,
+        &self,
         from: AccountIdentity,
         to: AccountIdentity,
         balance_to_move: u128,
@@ -28,7 +28,7 @@ impl NativeTokenTransfer<'_> {
     }
 
     pub async fn register_account(
-        &mut self,
+        &self,
         account: AccountIdentity,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction_data = Program::serialize_instruction(AuthTransferInstruction::Initialize)?;

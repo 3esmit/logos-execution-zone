@@ -8,11 +8,11 @@ use lee_core::SharedSecretKey;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-pub struct Vault<'wallet>(pub &'wallet mut WalletCore);
+pub struct Vault<'wallet>(pub &'wallet WalletCore);
 
 impl Vault<'_> {
     pub async fn send_transfer(
-        &mut self,
+        &self,
         sender_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
@@ -41,7 +41,7 @@ impl Vault<'_> {
     }
 
     pub async fn send_transfer_private_sender(
-        &mut self,
+        &self,
         sender_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
@@ -75,7 +75,7 @@ impl Vault<'_> {
     }
 
     pub async fn send_claim(
-        &mut self,
+        &self,
         owner_id: AccountId,
         amount: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -99,7 +99,7 @@ impl Vault<'_> {
     }
 
     pub async fn send_claim_private_owner(
-        &mut self,
+        &self,
         owner_id: AccountId,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {

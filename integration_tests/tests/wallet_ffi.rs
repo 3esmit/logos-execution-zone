@@ -1794,7 +1794,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
-    let mut ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1808,7 +1808,7 @@ fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
 
     // Fund the owner's vault, simulating an L1 bridge deposit.
     ctx.block_on(|ctx| async move {
-        Vault(ctx.wallet_mut())
+        Vault(ctx.wallet())
             .send_transfer(sender, owner, amount)
             .await
     })
@@ -1894,7 +1894,7 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
     // Fund the owner's vault. Real deposits always land via a public transfer (the bridge
     // program crediting the vault PDA), regardless of whether the owner is private.
     ctx.block_on(|ctx| async move {
-        Vault(ctx.wallet_mut())
+        Vault(ctx.wallet())
             .send_transfer(sender, owner, amount)
             .await
     })

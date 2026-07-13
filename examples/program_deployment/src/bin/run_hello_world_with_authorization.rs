@@ -29,7 +29,7 @@ use wallet::WalletCore;
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().await.unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary

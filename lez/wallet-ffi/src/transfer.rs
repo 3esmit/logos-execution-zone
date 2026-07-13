@@ -72,7 +72,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -84,7 +84,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
 
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_public_transfer(
         AccountIdentity::Public(from_id),
@@ -164,7 +164,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         CliAccountMention::KeyPath,
     );
 
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer_to_outer_account(
         from_mention.into_public_identity(from_id),
@@ -262,7 +262,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -273,7 +273,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount)) {
         Ok((tx_hash, _shared_key)) => {
@@ -348,7 +348,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     };
     let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_private_transfer_to_outer_account(
         from_id,
@@ -445,7 +445,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -461,7 +461,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
         CliAccountMention::KeyPath,
     );
 
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer(
         from_mention.into_public_identity(from_id),
@@ -536,7 +536,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -547,7 +547,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_private_transfer_to_owned_account(from_id, to_id, amount)) {
         Ok((tx_hash, _shared_keys)) => {
@@ -608,7 +608,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -618,7 +618,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.register_account(AccountIdentity::Public(account_id))) {
         Ok(tx_hash) => {
@@ -679,7 +679,7 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -688,7 +688,7 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
     };
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
-    let mut transfer = NativeTokenTransfer(&mut wallet);
+    let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.register_account_private(account_id)) {
         Ok((tx_hash, _secret)) => {

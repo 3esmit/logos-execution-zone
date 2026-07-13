@@ -5,11 +5,11 @@ use token_core::Instruction;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-pub struct Token<'wallet>(pub &'wallet mut WalletCore);
+pub struct Token<'wallet>(pub &'wallet WalletCore);
 
 impl Token<'_> {
     pub async fn send_new_definition(
-        &mut self,
+        &self,
         definition: AccountIdentity,
         supply: AccountIdentity,
         name: String,
@@ -29,7 +29,7 @@ impl Token<'_> {
     }
 
     pub async fn send_new_definition_private_owned_supply(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         supply_account_id: AccountId,
         name: String,
@@ -61,7 +61,7 @@ impl Token<'_> {
     }
 
     pub async fn send_new_definition_private_owned_definiton(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         supply_account_id: AccountId,
         name: String,
@@ -93,7 +93,7 @@ impl Token<'_> {
     }
 
     pub async fn send_new_definition_private_owned_definiton_and_supply(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         supply_account_id: AccountId,
         name: String,
@@ -126,7 +126,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction(
-        &mut self,
+        &self,
         sender: AccountIdentity,
         recipient: AccountIdentity,
         amount: u128,
@@ -147,7 +147,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction_private_owned_account(
-        &mut self,
+        &self,
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
@@ -181,7 +181,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction_private_foreign_account(
-        &mut self,
+        &self,
         sender_account_id: AccountId,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
@@ -219,7 +219,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction_deshielded(
-        &mut self,
+        &self,
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
@@ -252,7 +252,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction_shielded_owned_account(
-        &mut self,
+        &self,
         sender: AccountIdentity,
         recipient_account_id: AccountId,
         amount: u128,
@@ -284,7 +284,7 @@ impl Token<'_> {
     }
 
     pub async fn send_transfer_transaction_shielded_foreign_account(
-        &mut self,
+        &self,
         sender: AccountIdentity,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
@@ -320,7 +320,7 @@ impl Token<'_> {
     }
 
     pub async fn send_burn_transaction(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder: AccountIdentity,
         amount: u128,
@@ -341,7 +341,7 @@ impl Token<'_> {
     }
 
     pub async fn send_burn_transaction_private_owned_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -375,7 +375,7 @@ impl Token<'_> {
     }
 
     pub async fn send_burn_transaction_deshielded_owned_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -408,7 +408,7 @@ impl Token<'_> {
     }
 
     pub async fn send_burn_transaction_shielded(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -441,7 +441,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction(
-        &mut self,
+        &self,
         definition: AccountIdentity,
         holder: AccountIdentity,
         amount: u128,
@@ -462,7 +462,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction_private_owned_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -496,7 +496,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction_private_foreign_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,
@@ -534,7 +534,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction_deshielded(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -567,7 +567,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction_shielded_owned_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
@@ -600,7 +600,7 @@ impl Token<'_> {
     }
 
     pub async fn send_mint_transaction_shielded_foreign_account(
-        &mut self,
+        &self,
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,

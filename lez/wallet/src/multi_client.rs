@@ -1,8 +1,9 @@
-use std::{collections::HashMap, io::Write, path::Path};
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result};
 use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use crate::config::SequencerConnectionData;
@@ -250,15 +251,18 @@ pub fn choose_leader(
     ))
 }
 
-pub fn save_metrics_at_path(
+pub async fn save_metrics_at_path(
     metrics: &HashMap<Url, Metrics>,
     path: &Path,
 ) -> Result<(), anyhow::Error> {
     let metrics_serialized = serde_json::to_vec_pretty(metrics)?;
-    let mut file = std::fs::File::create(path).context("Failed to create file")?;
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .context("Failed to create file")?;
     file.write_all(&metrics_serialized)
+        .await
         .context("Failed to write to file")?;
-    file.sync_all().context("Failed to sync file")?;
+    file.sync_all().await.context("Failed to sync file")?;
 
     Ok(())
 }
@@ -378,7 +382,7 @@ pub fn update_metrics(
     Ok(())
 }
 
-pub fn save_metrics_at_path_with_updates(
+pub async fn save_metrics_at_path_with_updates(
     mut metrics: HashMap<Url, Metrics>,
     leader_url: &Url,
     metric_updates: &[MetricsUpdate],
@@ -386,7 +390,7 @@ pub fn save_metrics_at_path_with_updates(
 ) -> Result<(), anyhow::Error> {
     update_metrics(&mut metrics, leader_url, metric_updates)?;
 
-    save_metrics_at_path(&metrics, path)
+    save_metrics_at_path(&metrics, path).await
 }
 
 #[cfg(test)]

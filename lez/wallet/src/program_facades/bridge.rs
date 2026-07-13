@@ -3,11 +3,11 @@ use lee::{AccountId, program::Program};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-pub struct Bridge<'wallet>(pub &'wallet mut WalletCore);
+pub struct Bridge<'wallet>(pub &'wallet WalletCore);
 
 impl Bridge<'_> {
     pub async fn send_withdraw(
-        &mut self,
+        &self,
         sender_account_id: AccountId,
         amount: u64,
         bedrock_account_pk: [u8; 32],

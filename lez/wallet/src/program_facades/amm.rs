@@ -4,11 +4,11 @@ use lee::{AccountId, program::Program};
 use token_core::TokenHolding;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
-pub struct Amm<'wallet>(pub &'wallet mut WalletCore);
+pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
     pub async fn send_new_definition(
-        &mut self,
+        &self,
         user_holding_a: AccountIdentity,
         user_holding_b: AccountIdentity,
         user_holding_lp: AccountIdentity,
@@ -72,7 +72,7 @@ impl Amm<'_> {
     }
 
     pub async fn send_swap_exact_input(
-        &mut self,
+        &self,
         user_holding_a: AccountIdentity,
         user_holding_b: AccountIdentity,
         swap_amount_in: u128,
@@ -153,7 +153,7 @@ impl Amm<'_> {
     }
 
     pub async fn send_swap_exact_output(
-        &mut self,
+        &self,
         user_holding_a: AccountIdentity,
         user_holding_b: AccountIdentity,
         exact_amount_out: u128,
@@ -234,7 +234,7 @@ impl Amm<'_> {
     }
 
     pub async fn send_add_liquidity(
-        &mut self,
+        &self,
         user_holding_a: AccountIdentity,
         user_holding_b: AccountIdentity,
         user_holding_lp: AccountIdentity,
@@ -299,7 +299,7 @@ impl Amm<'_> {
     }
 
     pub async fn send_remove_liquidity(
-        &mut self,
+        &self,
         user_holding_a: AccountId,
         user_holding_b: AccountId,
         user_holding_lp: AccountIdentity,

@@ -9,11 +9,11 @@ use lee_core::SharedSecretKey;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
-pub struct Ata<'wallet>(pub &'wallet mut WalletCore);
+pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
 impl Ata<'_> {
     pub async fn send_create(
-        &mut self,
+        &self,
         owner: AccountIdentity,
         definition_id: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
@@ -44,7 +44,7 @@ impl Ata<'_> {
     }
 
     pub async fn send_transfer(
-        &mut self,
+        &self,
         owner: AccountIdentity,
         definition_id: AccountId,
         recipient_id: AccountId,
@@ -80,7 +80,7 @@ impl Ata<'_> {
     }
 
     pub async fn send_burn(
-        &mut self,
+        &self,
         owner: AccountIdentity,
         definition_id: AccountId,
         amount: u128,
@@ -115,7 +115,7 @@ impl Ata<'_> {
     }
 
     pub async fn send_create_private_owner(
-        &mut self,
+        &self,
         owner_id: AccountId,
         definition_id: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
@@ -147,7 +147,7 @@ impl Ata<'_> {
     }
 
     pub async fn send_transfer_private_owner(
-        &mut self,
+        &self,
         owner_id: AccountId,
         definition_id: AccountId,
         recipient_id: AccountId,
@@ -184,7 +184,7 @@ impl Ata<'_> {
     }
 
     pub async fn send_burn_private_owner(
-        &mut self,
+        &self,
         owner_id: AccountId,
         definition_id: AccountId,
         amount: u128,

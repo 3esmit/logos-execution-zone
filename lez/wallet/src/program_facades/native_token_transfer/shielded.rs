@@ -7,7 +7,7 @@ use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_shielded_transfer(
-        &mut self,
+        &self,
         from: AccountIdentity,
         to: AccountId,
         balance_to_move: u128,
@@ -36,7 +36,7 @@ impl NativeTokenTransfer<'_> {
     }
 
     pub async fn send_shielded_transfer_to_outer_account(
-        &mut self,
+        &self,
         from: AccountIdentity,
         to_npk: NullifierPublicKey,
         to_vpk: ViewingPublicKey,

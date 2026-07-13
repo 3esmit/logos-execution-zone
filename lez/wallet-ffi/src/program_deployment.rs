@@ -46,7 +46,7 @@ pub unsafe extern "C" fn wallet_ffi_program_deployment(
         return WalletFfiError::NullPointer;
     }
 
-    let mut wallet = match wrapper.core.lock() {
+    let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));

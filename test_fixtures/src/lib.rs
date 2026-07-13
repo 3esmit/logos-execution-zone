@@ -429,11 +429,11 @@ impl BlockingTestContext {
         &self.runtime
     }
 
-    pub fn block_on<'ctx, F>(&'ctx mut self, f: impl FnOnce(&'ctx TestContext) -> F) -> F::Output
+    pub fn block_on<'ctx, F>(&'ctx self, f: impl FnOnce(&'ctx TestContext) -> F) -> F::Output
     where
         F: std::future::Future + 'ctx,
     {
-        let future = f(self.ctx_mut());
+        let future = f(self.ctx());
         self.runtime.block_on(future)
     }
 

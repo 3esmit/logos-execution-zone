@@ -66,7 +66,7 @@ async fn main() {
     let program = Program::new(bytecode.into()).unwrap();
 
     // Initialize wallet
-    let mut wallet_core = WalletCore::from_env().await.unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     match cli.command {
         Command::WritePublic {

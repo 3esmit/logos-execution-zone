@@ -192,7 +192,7 @@ pub struct AccountManager {
 
 impl AccountManager {
     pub async fn new(
-        wallet: &mut WalletCore,
+        wallet: &WalletCore,
         accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states = Vec::with_capacity(accounts.len());
@@ -541,7 +541,7 @@ struct AccountPreparedData {
 }
 
 async fn private_key_tree_acc_preparation(
-    wallet: &mut WalletCore,
+    wallet: &WalletCore,
     account_id: AccountId,
     is_pda: bool,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
@@ -581,7 +581,7 @@ async fn private_key_tree_acc_preparation(
 }
 
 async fn private_shared_acc_preparation(
-    wallet: &mut WalletCore,
+    wallet: &WalletCore,
     account_id: AccountId,
     nsk: NullifierSecretKey,
     npk: NullifierPublicKey,
