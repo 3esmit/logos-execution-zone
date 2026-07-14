@@ -255,22 +255,31 @@ impl IndexerCore {
                     // Option B: re-derive and verify every cross-zone dispatch
                     // before applying the block. A forged dispatch halts ingestion
                     // rather than persisting an invalid state; a replay is accepted
-                    // since the inbox no-ops it on chain.
-                    if let Some(verifier) = &self.verifier
-                        && let Err(err) = verifier.verify_block(&block).await
-                    {
-                        error!(
-                            "Cross-zone verification failed for block {}: {err:#}. Halting indexer ingestion.",
-                            block.header.block_id
-                        );
-                        self.set_status(IndexerSyncStatus::error(format!(
-                            "cross-zone verification failed: {err:#}"
-                        )));
-                        return;
-                    }
+                    // since the inbox no-ops it on chain. The verified keys are
+                    // marked seen only once the block applies (below), so a block
+                    // that does not apply cannot poison the seen-set.
+                    let verified_keys = match &self.verifier {
+                        Some(verifier) => match verifier.verify_block(&block).await {
+                            Ok(keys) => keys,
+                            Err(err) => {
+                                error!(
+                                    "Cross-zone verification failed for block {}: {err:#}. Halting indexer ingestion.",
+                                    block.header.block_id
+                                );
+                                self.set_status(IndexerSyncStatus::error(format!(
+                                    "cross-zone verification failed: {err:#}"
+                                )));
+                                return;
+                            }
+                        },
+                        None => Vec::new(),
+                    };
 
                     match self.store.accept_block(&block, slot).await {
                         Ok(AcceptOutcome::Applied) => {
+                            if let Some(verifier) = &self.verifier {
+                                verifier.record_seen(verified_keys).await;
+                            }
                             retry_gate.reset();
                             info!("Indexed L2 block {}", block.header.block_id);
                             self.set_status(IndexerSyncStatus::syncing());

@@ -115,20 +115,23 @@ impl CrossZoneVerifier {
         })
     }
 
-    /// Verifies every cross-zone dispatch in a block, returning `Err` on the
-    /// first forged dispatch. The caller halts ingestion on error. A replay of an
-    /// already-delivered message is accepted, since the inbox no-ops it on chain.
-    pub async fn verify_block(&self, block: &Block) -> Result<()> {
+    /// Verifies every cross-zone dispatch in a block, returning `Err` on the first
+    /// forged dispatch (the caller halts ingestion) or the keys to mark seen.
+    ///
+    /// The caller MUST record the returned keys via [`Self::record_seen`] only
+    /// after the block applies, so the seen-set mirrors the inbox's on-chain
+    /// seen-shard. Marking a key from a block that never applies would let a later
+    /// forged dispatch reuse it to skip re-derivation while the inbox delivers the
+    /// forgery. A key already seen is a replay the inbox no-ops, so it is accepted
+    /// without re-derivation rather than halting on a legitimate re-delivery.
+    pub async fn verify_block(&self, block: &Block) -> Result<Vec<MessageKey>> {
+        let mut verified = Vec::new();
         for tx in &block.body.transactions {
             let Some(msg) = Self::decode_dispatch(tx) else {
                 continue;
             };
 
             let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
-            // A replay of an already-verified dispatch is an idempotent no-op on
-            // chain (the inbox skips a message it has already seen in its shard),
-            // so accept it and skip re-derivation rather than halting the indexer
-            // on a legitimate re-delivery, e.g. after a sequencer restart.
             if self.seen.read().await.contains(&key) {
                 continue;
             }
@@ -143,15 +146,25 @@ impl CrossZoneVerifier {
                 );
             }
 
-            self.seen.write().await.insert(key);
             info!(
                 "Verified cross-zone dispatch from zone {} block {} tx {}",
                 hex::encode(msg.src_zone),
                 msg.src_block_id,
                 msg.src_tx_index
             );
+            verified.push(key);
         }
-        Ok(())
+        Ok(verified)
+    }
+
+    /// Marks the given dispatch keys seen, so a later replay of them is accepted
+    /// without re-derivation. Call only after the block that carried them has been
+    /// applied on chain (see [`Self::verify_block`]).
+    pub async fn record_seen(&self, keys: Vec<MessageKey>) {
+        if keys.is_empty() {
+            return;
+        }
+        self.seen.write().await.extend(keys);
     }
 
     /// Decodes a transaction into the cross-zone message it dispatches, or `None`
@@ -485,10 +498,12 @@ mod tests {
             .await;
 
         let first = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
-        verifier
+        let keys = verifier
             .verify_block(&first)
             .await
             .expect("first delivery verifies");
+        // Mark the delivery seen, as the ingest loop does once the block applies.
+        verifier.record_seen(keys).await;
 
         // Replace the peer block with a different emission so re-deriving the
         // replay would mismatch. The replay must still be accepted, proving it is
@@ -507,5 +522,39 @@ mod tests {
             .verify_block(&replay)
             .await
             .expect("a replay is accepted as an on-chain no-op");
+    }
+
+    #[tokio::test]
+    async fn unaccepted_dispatch_does_not_poison_seen() {
+        // A dispatch verified in a block that never applies (e.g. one that parks)
+        // must not be marked seen. Otherwise a later forged dispatch could reuse
+        // its key to skip re-derivation, while the inbox, never having recorded
+        // the key on chain, would deliver the forgery.
+        let verifier = verifier();
+        verifier
+            .peers
+            .insert(
+                PEER_ZONE,
+                produce_dummy_block(PEER_BLOCK_ID, None, vec![emission(b"hi")]),
+            )
+            .await;
+
+        // The dispatch verifies, but the block is not applied, so record_seen is
+        // not called (the ingest loop records only after an Applied outcome).
+        let first = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        verifier
+            .verify_block(&first)
+            .await
+            .expect("dispatch verifies");
+
+        // A forged dispatch reusing the same key (same src zone, block, tx index)
+        // with a different payload must still be re-derived and rejected, since
+        // its key was never recorded as seen.
+        let forged = produce_dummy_block(10, None, vec![dispatch(b"forged")]);
+        let err = verifier.verify_block(&forged).await.unwrap_err();
+        assert!(
+            err.to_string().contains("forged"),
+            "unexpected error: {err}"
+        );
     }
 }
