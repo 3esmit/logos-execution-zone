@@ -11,7 +11,7 @@ use crate::{AccountId, error::LeeError};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
@@ -84,6 +84,20 @@ impl Message {
 
         Sha256::digest(bytes).into()
     }
+
+    /// Ensure that the commitments, nullifiers, and ciphertexts agree.
+    pub fn validate_note_lengths(&self) -> Result<usize, LeeError> {
+        let count = self.new_nullifiers.len();
+        if self.new_commitments.len() != count || self.encrypted_private_post_states.len() != count
+        {
+            return Err(LeeError::InvalidInput(format!(
+                "Note vectors disagree in length with {count} nullifiers, {} commitments, and {} ciphertexts",
+                self.new_commitments.len(),
+                self.encrypted_private_post_states.len(),
+            )));
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +153,20 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
+    }
+
+    #[test]
+    fn validate_note_lengths_accepts_matching_and_rejects_mismatched() {
+        assert_eq!(Message::default().validate_note_lengths().unwrap(), 0);
+
+        let mismatched = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        };
+        assert!(mismatched.validate_note_lengths().is_err());
     }
 
     #[test]
