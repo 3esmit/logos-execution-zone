@@ -25,7 +25,8 @@ use crate::{
     indexer_client::IndexerClient,
     setup::{
         setup_bedrock_node, setup_indexer, setup_private_accounts_with_initial_supply,
-        setup_public_accounts_with_initial_supply, setup_sequencer, setup_wallet,
+        setup_public_accounts_with_initial_supply, setup_sequencer, setup_sequencer_from_prebuilt,
+        setup_wallet, sync_wallet_from_prebuilt,
     },
 };
 
@@ -254,6 +255,7 @@ pub struct TestContextBuilder {
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
     wallet_config_overrides: WalletConfigOverrides,
+    from_scratch: bool,
 }
 
 impl TestContextBuilder {
@@ -263,6 +265,7 @@ impl TestContextBuilder {
             sequencer_partial_config: None,
             enable_indexer: true,
             wallet_config_overrides: WalletConfigOverrides::default(),
+            from_scratch: false,
         }
     }
 
@@ -291,6 +294,14 @@ impl TestContextBuilder {
         self
     }
 
+    /// Build from genesis live instead of loading the prebuilt fixture. Implied by
+    /// [`Self::with_genesis`].
+    #[must_use]
+    pub const fn from_scratch(mut self) -> Self {
+        self.from_scratch = true;
+        self
+    }
+
     /// Exclude Indexer from test context.
     /// Indexer is enabled by default.
     ///
@@ -308,6 +319,7 @@ impl TestContextBuilder {
             sequencer_partial_config,
             enable_indexer,
             wallet_config_overrides,
+            from_scratch,
         } = self;
 
         // Ensure logger is initialized only once
@@ -315,14 +327,19 @@ impl TestContextBuilder {
 
         debug!("Test context setup");
 
+        // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
+        // must build live. Otherwise load the fixture (fails if it is missing).
+        let use_prebuilt = !from_scratch && genesis_transactions.is_none();
+
         let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
             .await
             .context("Failed to setup Bedrock node")?;
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr)
-                .await
-                .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) =
+                setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
+                    .await
+                    .context("Failed to setup Indexer")?;
             let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
                 .context("Failed to convert indexer addr to URL")?;
             let indexer_client = IndexerClient::new(&indexer_url)
@@ -339,25 +356,36 @@ impl TestContextBuilder {
 
         let initial_public_accounts = config::default_public_accounts_for_wallet();
         let initial_private_accounts = config::default_private_accounts_for_wallet();
-        // Wallet genesis must always be present so that
-        // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
-        // When a test supplies custom genesis, merge rather than replace.
-        let wallet_genesis =
-            config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
-        let genesis = match genesis_transactions {
-            Some(mut custom) => {
-                custom.extend(wallet_genesis);
-                custom
-            }
-            None => wallet_genesis,
+
+        let partial_config = sequencer_partial_config.unwrap_or_default();
+
+        let (sequencer_handle, temp_sequencer_dir) = if use_prebuilt {
+            setup_sequencer_from_prebuilt(partial_config, bedrock_addr)
+                .await
+                .context("Failed to setup Sequencer from prebuilt database")?
+        } else {
+            // Wallet genesis must always be present so that
+            // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
+            // When a test supplies custom genesis, merge rather than replace.
+            let wallet_genesis =
+                config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+            let genesis = match genesis_transactions {
+                Some(mut custom) => {
+                    custom.extend(wallet_genesis);
+                    custom
+                }
+                None => wallet_genesis,
+            };
+            setup_sequencer(
+                partial_config,
+                bedrock_addr,
+                genesis,
+                config::bedrock_channel_id(),
+                None,
+            )
+            .await
+            .context("Failed to setup Sequencer")?
         };
-        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-            sequencer_partial_config.unwrap_or_default(),
-            bedrock_addr,
-            genesis,
-        )
-        .await
-        .context("Failed to setup Sequencer")?;
 
         let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
             sequencer_handle.addr(),
@@ -368,13 +396,20 @@ impl TestContextBuilder {
         .await
         .context("Failed to setup wallet")?;
 
-        setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-            .await
-            .context("Failed to initialize public accounts in wallet")?;
+        if use_prebuilt {
+            // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming live.
+            sync_wallet_from_prebuilt(&mut wallet)
+                .await
+                .context("Failed to sync wallet from prebuilt database")?;
+        } else {
+            setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
+                .await
+                .context("Failed to initialize public accounts in wallet")?;
 
-        setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-            .await
-            .context("Failed to initialize private accounts in wallet")?;
+            setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
+                .await
+                .context("Failed to initialize private accounts in wallet")?;
+        }
 
         let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
             .context("Failed to convert sequencer addr to URL")?;
@@ -406,6 +441,7 @@ impl TestContextBuilder {
         })
     }
 }
+
 /// A test context to be used in normal #[test] tests.
 pub struct BlockingTestContext {
     ctx: Option<TestContext>,

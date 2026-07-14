@@ -3,8 +3,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
-        LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastObservedL1LibHeaderCell,
+        StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -31,8 +31,8 @@ impl RocksDBIO {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
-    pub fn get_meta_last_breakpoint_id(&self) -> DbResult<Option<u64>> {
-        self.get_opt::<LastBreakpointIdCell>(())
+    pub fn get_meta_tip_slot_in_db(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<TipSlotCell>(())
             .map(|opt| opt.map(|cell| cell.0))
     }
 
@@ -47,6 +47,11 @@ impl RocksDBIO {
 
     pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V03State> {
         self.get::<BreakpointCellOwned>(br_id).map(|cell| cell.0)
+    }
+
+    pub fn get_breakpoint_opt(&self, br_id: u64) -> DbResult<Option<V03State>> {
+        self.get_opt::<BreakpointCellOwned>(br_id)
+            .map(|opt| opt.map(|cell| cell.0))
     }
 
     // Mappings
@@ -72,5 +77,9 @@ impl RocksDBIO {
         Ok(self
             .get_opt::<ZoneSdkIndexerCursorCellOwned>(())?
             .map(|cell| cell.0))
+    }
+
+    pub fn get_stall_reason_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self.get_opt::<StallReasonCellOwned>(())?.map(|cell| cell.0))
     }
 }

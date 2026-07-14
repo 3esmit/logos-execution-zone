@@ -10,10 +10,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, HashType, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, ProgramDeploymentMessage, ProgramDeploymentTransaction,
-    ProgramId, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
-    WitnessSet,
+    CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, PublicMessage, PublicTransaction, Signature,
+    Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -323,6 +323,24 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .iter()
             .map(|(tx, _)| tx.clone())
             .collect())
+    }
+
+    async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned> {
+        let indexed_block_id = self
+            .state
+            .read()
+            .await
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| block.bedrock_status == BedrockStatus::Finalized)
+            .map(|block| block.header.block_id);
+        Ok(IndexerStatus {
+            state: IndexerSyncState::CaughtUp,
+            last_error: None,
+            indexed_block_id,
+            stall_reason: None,
+        })
     }
 
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {
