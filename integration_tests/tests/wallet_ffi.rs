@@ -43,12 +43,14 @@ unsafe extern "C" {
     fn wallet_ffi_create_new(
         config_path: *const c_char,
         storage_path: *const c_char,
+        metrics_path: *const c_char,
         password: *const c_char,
     ) -> FfiCreateWalletOutput;
 
     fn wallet_ffi_open(
         config_path: *const c_char,
         storage_path: *const c_char,
+        metrics_path: *const c_char,
     ) -> *mut WalletHandle;
 
     fn wallet_ffi_destroy(handle: *mut WalletHandle);
@@ -291,6 +293,7 @@ fn new_wallet_ffi_with_test_context_config(
 ) -> Result<FfiCreateWalletOutput> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
+    let metrics_path = home.join("metrics.json");
     let mut config = ctx.ctx().wallet().config().to_owned();
     if let Some(config_overrides) = ctx.ctx().wallet().config_overrides().clone() {
         config.apply_overrides(config_overrides);
@@ -307,12 +310,14 @@ fn new_wallet_ffi_with_test_context_config(
 
     let config_path = CString::new(config_path.to_str().unwrap())?;
     let storage_path = CString::new(storage_path.to_str().unwrap())?;
+    let metrics_path = CString::new(metrics_path.to_str().unwrap())?;
     let password = CString::new(ctx.ctx().wallet_password())?;
 
     let create_wallet_result = unsafe {
         wallet_ffi_create_new(
             config_path.as_ptr(),
             storage_path.as_ptr(),
+            metrics_path.as_ptr(),
             password.as_ptr(),
         )
     };
@@ -370,14 +375,17 @@ fn new_wallet_ffi_with_default_config(password: &str) -> Result<FfiCreateWalletO
     let tempdir = tempdir()?;
     let config_path = tempdir.path().join("wallet_config.json");
     let storage_path = tempdir.path().join("storage.json");
+    let metrics_path = tempdir.path().join("metrics.json");
     let config_path_c = CString::new(config_path.to_str().unwrap())?;
     let storage_path_c = CString::new(storage_path.to_str().unwrap())?;
+    let metrics_path_c = CString::new(metrics_path.to_str().unwrap())?;
     let password = CString::new(password)?;
 
     let create_wallet_result = unsafe {
         wallet_ffi_create_new(
             config_path_c.as_ptr(),
             storage_path_c.as_ptr(),
+            metrics_path_c.as_ptr(),
             password.as_ptr(),
         )
     };
@@ -388,10 +396,18 @@ fn new_wallet_ffi_with_default_config(password: &str) -> Result<FfiCreateWalletO
 fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
+    let metrics_path = home.join("metrics.json");
     let config_path = CString::new(config_path.to_str().unwrap())?;
     let storage_path = CString::new(storage_path.to_str().unwrap())?;
+    let metrics_path = CString::new(metrics_path.to_str().unwrap())?;
 
-    Ok(unsafe { wallet_ffi_open(config_path.as_ptr(), storage_path.as_ptr()) })
+    Ok(unsafe {
+        wallet_ffi_open(
+            config_path.as_ptr(),
+            storage_path.as_ptr(),
+            metrics_path.as_ptr(),
+        )
+    })
 }
 
 #[test]

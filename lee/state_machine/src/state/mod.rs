@@ -44,7 +44,7 @@ impl CommitmentSet {
 
     /// Inserts a list of commitments to the `CommitmentSet`.
     pub(crate) fn extend(&mut self, commitments: &[Commitment]) {
-        for commitment in commitments.iter().cloned() {
+        for commitment in commitments.iter().copied() {
             let index = self.merkle_tree.insert(commitment.to_byte_array());
             self.commitments.insert(commitment, index);
         }

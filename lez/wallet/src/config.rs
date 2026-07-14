@@ -11,7 +11,7 @@ use url::Url;
 pub struct SequencerConnectionData {
     /// Connection data of all known sequencers.
     pub sequencer_addr: Url,
-    /// Basic authentication credentials
+    /// Basic authentication credentials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
 }

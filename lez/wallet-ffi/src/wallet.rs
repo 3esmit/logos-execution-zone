@@ -240,7 +240,7 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         Err(e) => return e,
     };
 
-    let wallet = match wrapper.core.lock() {
+    let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
             print_error(format!("Failed to lock wallet: {e}"));
@@ -248,7 +248,10 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         }
     };
 
-    match wallet.store_persistent_data() {
+    match wallet
+        .store_persistent_data()
+        .and_then(|()| block_on(wallet.store_metrics()))
+    {
         Ok(()) => WalletFfiError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet: {e}"));

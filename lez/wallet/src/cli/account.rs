@@ -314,7 +314,7 @@ impl AccountSubcommand {
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         wallet_core
@@ -403,10 +403,7 @@ impl AccountSubcommand {
         }
     }
 
-    async fn handle_list(
-        long: bool,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
+    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
         let (public_account_ids, private_account_ids) = {
             let key_chain = &wallet_core.storage.key_chain();
 

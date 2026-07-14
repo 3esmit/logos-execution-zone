@@ -425,7 +425,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
         to_vpk: String,
         to_identifier: Option<u128>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
 
@@ -497,7 +497,7 @@ impl NativeTokenTransferProgramSubcommand {
         from: Option<AccountIdentity>,
         to: Option<AccountIdentity>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let tx_hash = NativeTokenTransfer(wallet_core)
             .send_public_transfer(

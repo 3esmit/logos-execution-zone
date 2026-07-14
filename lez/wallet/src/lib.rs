@@ -38,10 +38,7 @@ use url::Url;
 use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
-    multi_client::{
-        Metrics, MetricsUpdate, MultiSequencerClient, extract_metrics_from_path,
-        save_metrics_at_path_with_updates,
-    },
+    multi_client::{Metrics, MetricsUpdate, MultiSequencerClient, extract_metrics_from_path},
     poller::TxPoller,
     storage::key_chain::SharedAccountEntry,
 };
@@ -93,7 +90,6 @@ pub enum ExecutionFailureKind {
     KeycardError(#[from] pyo3::PyErr),
 }
 
-#[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
 pub struct WalletCore {
     config_path: PathBuf,
     config_overrides: Option<WalletConfigOverrides>,
@@ -104,9 +100,9 @@ pub struct WalletCore {
 
     metrics_path: PathBuf,
     metrics: HashMap<Url, Metrics>,
-    /// Wrapping metric updates in Arc<RwLock> to not break intefaces too much.
+    /// Wrapping metric updates in Arc<RwLock> to not break interfaces too much.
     ///  
-    /// It is assumed, that wallet methods can be accesed via immutable reference
+    /// It is assumed, that wallet methods can be accesed via immutable reference.
     metric_updates: Arc<RwLock<Vec<MetricsUpdate>>>,
 
     multi_sequencer_client: MultiSequencerClient,
@@ -211,14 +207,17 @@ impl WalletCore {
         self.config = config;
     }
 
+    #[must_use]
     pub fn optimal_poller(&self) -> TxPoller {
         TxPoller::new(self.config(), self.leader_owned())
     }
 
+    #[must_use]
     pub fn leader_owned(&self) -> SequencerClient {
         self.multi_sequencer_client.leader.clone()
     }
 
+    #[must_use]
     pub fn leader_url(&self) -> Url {
         self.multi_sequencer_client.leader_url.clone()
     }
@@ -259,20 +258,37 @@ impl WalletCore {
         Ok(())
     }
 
-    pub async fn store_metrics(&self) -> Result<()> {
+    async fn update_metrics(&mut self) -> Result<()> {
+        let leader_metric = self
+            .metrics
+            .get_mut(&self.multi_sequencer_client.leader_url)
+            .ok_or_else(|| anyhow::anyhow!("Leader URL is not present in metrics"))?;
+
         {
             let metric_updates = self.metric_updates.read().await;
-            save_metrics_at_path_with_updates(
-                self.metrics.clone(),
-                &self.multi_sequencer_client.leader_url,
-                &metric_updates,
-                &self.storage_path,
-            )
-            .await
-            .with_context(|| {
-                format!("Failed to store metrics at {}", self.storage_path.display())
-            })?;
+            leader_metric.apply_updates(metric_updates.as_ref());
         }
+
+        // Clear updates
+        {
+            let mut metric_updates = self.metric_updates.write().await;
+            metric_updates.clear();
+        }
+
+        Ok(())
+    }
+
+    pub async fn store_metrics(&mut self) -> Result<()> {
+        self.update_metrics().await?;
+
+        let metrics_serialized = serde_json::to_vec_pretty(&self.metrics)?;
+        let mut file = tokio::fs::File::create(&self.metrics_path)
+            .await
+            .context("Failed to create file")?;
+        file.write_all(&metrics_serialized)
+            .await
+            .context("Failed to write to file")?;
+        file.sync_all().await.context("Failed to sync file")?;
 
         println!("Stored metrics at {}", self.metrics_path.display());
 
@@ -487,6 +503,7 @@ impl WalletCore {
         })
     }
 
+    #[must_use]
     pub fn get_metrics(&self, sequencer_url: &Url) -> Option<&Metrics> {
         self.metrics.get(sequencer_url)
     }
@@ -686,7 +703,7 @@ impl WalletCore {
             match acc_decode_data {
                 AccDecodeData::Decode(secret, acc_account_id) => {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
-                    let acc_comm = tx.message.new_commitments[output_index].clone();
+                    let acc_comm = tx.message.new_commitments[output_index];
 
                     let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,

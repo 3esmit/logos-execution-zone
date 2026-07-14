@@ -186,7 +186,7 @@ impl AtaSubcommand {
     async fn handle_list(
         owner: AccountId,
         token_definition: Vec<AccountId>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let ata_program_id = programs::ata().id();
 

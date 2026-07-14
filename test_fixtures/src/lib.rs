@@ -421,7 +421,7 @@ impl BlockingTestContext {
         self.ctx.as_ref().expect("TestContext is set")
     }
 
-    pub fn ctx_mut(&mut self) -> &mut TestContext {
+    pub const fn ctx_mut(&mut self) -> &mut TestContext {
         self.ctx.as_mut().expect("TestContext is set")
     }
 

@@ -37,7 +37,7 @@ use wallet::{AccountIdentity, WalletCore};
     reason = "test helper — grouping args would obscure intent"
 )]
 async fn fund_private_pda(
-    wallet: &mut WalletCore,
+    wallet: &WalletCore,
     sender: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
@@ -107,7 +107,7 @@ async fn fund_private_pda(
     reason = "test helper — grouping args would obscure intent"
 )]
 async fn spend_private_pda(
-    wallet: &mut WalletCore,
+    wallet: &WalletCore,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
     recipient_vpk: ViewingPublicKey,
@@ -231,7 +231,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_0_id)
         .context("commitment for alice_pda_0 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_0.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_0, ctx.sequencer_client()).await,
         "alice_pda_0 commitment not in state after receive"
     );
 
@@ -240,7 +240,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_1_id)
         .context("commitment for alice_pda_1 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_1.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_1, ctx.sequencer_client()).await,
         "alice_pda_1 commitment not in state after receive"
     );
     assert_ne!(

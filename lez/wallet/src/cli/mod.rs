@@ -295,6 +295,13 @@ pub async fn execute_subcommand(
         }
     };
 
+    // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
+    // metrics
+    wallet_core
+        .store_metrics()
+        .await
+        .context("Failed to store metrics")?;
+
     Ok(subcommand_ret)
 }
 
