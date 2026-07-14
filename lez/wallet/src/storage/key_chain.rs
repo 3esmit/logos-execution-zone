@@ -1,15 +1,18 @@
 use core::panic;
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, HashMap, HashSet, btree_map::Entry};
 
 use anyhow::{Context as _, Result, anyhow};
 use key_protocol::key_management::{
     KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
-    secret_holders::{SeedHolder, ViewingSecretKey},
+    secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
-use lee::{Account, AccountId};
-use lee_core::{Identifier, PrivateAccountKind};
+use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
+use lee_core::{
+    Commitment, EncryptionScheme, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind,
+    SharedSecretKey,
+};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
@@ -57,6 +60,41 @@ pub struct SharedAccountEntry {
     pub pda_seed: Option<lee_core::program::PdaSeed>,
     pub authority_program_id: Option<lee_core::program::ProgramId>,
     pub account: Account,
+}
+
+/// Maps each owned or shared private account to the nullifier its next update will publish,
+/// so sync can spot updates by nullifier rather than view tag.
+#[derive(Default)]
+pub struct NullifierIndex(HashMap<Nullifier, AccountId>);
+
+impl NullifierIndex {
+    fn next_update_nullifier(
+        account_id: AccountId,
+        account: &Account,
+        nsk: &NullifierSecretKey,
+    ) -> Nullifier {
+        Nullifier::for_account_update(&Commitment::new(&account_id, account), nsk)
+    }
+
+    /// Returns the account whose next update would publish `nullifier`.
+    #[must_use]
+    pub fn account_for(&self, nullifier: &Nullifier) -> Option<AccountId> {
+        self.0.get(nullifier).copied()
+    }
+
+    /// Indexes `account_id` by the nullifier its next update will publish.
+    pub fn track(&mut self, account_id: AccountId, account: &Account, nsk: &NullifierSecretKey) {
+        self.0.insert(
+            Self::next_update_nullifier(account_id, account, nsk),
+            account_id,
+        );
+    }
+
+    /// Replaces a spent nullifier with the account's `next` one.
+    pub fn update(&mut self, spent: &Nullifier, next: Nullifier, account_id: AccountId) {
+        self.0.remove(spent);
+        self.0.insert(next, account_id);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -210,6 +248,19 @@ impl UserKeyChain {
     /// those.
     #[must_use]
     pub fn private_account(&self, account_id: AccountId) -> Option<FoundPrivateAccount<'_>> {
+        self.private_accounts().find_map(|found| {
+            let expected_id = AccountId::for_private_account(
+                &found.key_chain.nullifier_public_key,
+                &found.key_chain.viewing_public_key,
+                found.kind,
+            );
+            (expected_id == account_id).then_some(found)
+        })
+    }
+
+    /// Iterates every owned private account (imported and generated), one
+    /// [`FoundPrivateAccount`] per identity. Excludes shared accounts.
+    pub fn private_accounts(&self) -> impl Iterator<Item = FoundPrivateAccount<'_>> {
         self.imported_private_accounts
             .iter()
             .flat_map(|(key, data)| {
@@ -238,14 +289,6 @@ impl UserKeyChain {
                             })
                     }),
             )
-            .find_map(|found| {
-                let expected_id = AccountId::for_private_account(
-                    &found.key_chain.nullifier_public_key,
-                    &found.key_chain.viewing_public_key,
-                    found.kind,
-                );
-                (expected_id == account_id).then_some(found)
-            })
     }
 
     #[must_use]
@@ -284,6 +327,124 @@ impl UserKeyChain {
                         })
                     }),
             )
+    }
+
+    /// Re-derives the [`PrivateKeyHolder`] for a shared account `entry`, dispatching on PDA vs
+    /// regular. `None` if the group key holder is absent or a PDA entry lacks its program id.
+    #[must_use]
+    pub fn derive_shared_account_keys(
+        &self,
+        entry: &SharedAccountEntry,
+    ) -> Option<PrivateKeyHolder> {
+        let holder = self.group_key_holder(&entry.group_label)?;
+        Some(match (&entry.pda_seed, &entry.authority_program_id) {
+            (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
+            (Some(_), None) => return None,
+            _ => holder.derive_regular_shared_account_keys_from_identifier(entry.identifier),
+        })
+    }
+
+    /// Maps each owned and shared account's current-state update nullifier to its `account_id`,
+    /// so co-owner updates are found during sync by nullifier rather than view tag.
+    #[must_use]
+    pub fn build_latest_nullifier_index(&self) -> NullifierIndex {
+        let mut index = NullifierIndex::default();
+
+        // For each (regular) found account the user owns, compute its nullifier and put
+        // into the map. This is the next nullifier it will look for.
+        for found in self.private_accounts() {
+            let account_id = AccountId::for_private_account(
+                &found.key_chain.nullifier_public_key,
+                &found.key_chain.viewing_public_key,
+                found.kind,
+            );
+            let nsk = found.key_chain.private_key_holder.nullifier_secret_key;
+            index.track(account_id, found.account, &nsk);
+        }
+
+        // Same for the shared accounts.
+        for (&account_id, entry) in self.shared_private_accounts_iter() {
+            let Some(keys) = self.derive_shared_account_keys(entry) else {
+                continue;
+            };
+            let nsk = keys.nullifier_secret_key;
+            index.track(account_id, &entry.account, &nsk);
+        }
+
+        index
+    }
+
+    /// Applies every watched nullifier the `message` publishes: decrypts the position-aligned
+    /// note, stores the new state, and rolls the index to the account's next nullifier. Returns
+    /// the output slots handled, so the view-tag pass can skip them.
+    pub fn sync_updates_via_nullifiers(
+        &mut self,
+        message: &Message,
+        index: &mut NullifierIndex,
+    ) -> HashSet<usize> {
+        let mut handled = HashSet::new();
+        for (i, (old_nullifier, _)) in message.new_nullifiers.iter().enumerate() {
+            // Get the nullifier information if awaiting the nullifier.
+            let Some(account_id) = index.account_for(old_nullifier) else {
+                continue;
+            };
+            // Try decrypting the commitment connected to the nullifier and get the next
+            // nullifier to await.
+            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
+                // Update the index to await for the new state of the account, i.e.
+                // the new nullifier.
+                index.update(old_nullifier, new_nullifier, account_id);
+                // Record that this nullifier's position can be skipped for scanning.
+                handled.insert(i);
+            }
+        }
+        handled
+    }
+
+    /// Decrypts the note at slot `i` for `account_id`, stores the new state, and returns the
+    /// account's next update nullifier. `None` if keys or decryption fail.
+    fn apply_nullifier_update(
+        &mut self,
+        account_id: AccountId,
+        message: &Message,
+        i: usize,
+    ) -> Option<Nullifier> {
+        let encrypted = &message.encrypted_private_post_states[i];
+        let commitment = &message.new_commitments[i];
+        let ciph_id = u32::try_from(i).ok()?;
+
+        let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
+        {
+            let keys = self.derive_shared_account_keys(entry)?;
+            let secret = SharedSecretKey::decapsulate(
+                &encrypted.epk,
+                &keys.viewing_secret_key.d,
+                &keys.viewing_secret_key.z,
+            )?;
+            (keys.nullifier_secret_key, secret, true)
+        } else {
+            let found = self.private_account(account_id)?;
+            let secret = found
+                .key_chain
+                .calculate_shared_secret_receiver(&encrypted.epk)?;
+            (
+                found.key_chain.private_key_holder.nullifier_secret_key,
+                secret,
+                false,
+            )
+        };
+
+        let (kind, new_account) =
+            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, commitment, ciph_id)?;
+        let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
+
+        if is_shared {
+            self.update_shared_private_account_state(&account_id, new_account);
+        } else {
+            self.insert_private_account(account_id, kind, new_account)
+                .ok()?;
+        }
+        Some(new_nullifier)
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
@@ -696,7 +857,165 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::encryption::EncryptedAccountData;
+
     use super::*;
+
+    #[test]
+    fn nullifier_sync_updates_sole_owned_account() {
+        let mut kc = UserKeyChain::default();
+
+        let key_chain = KeyChain::new_os_random();
+        let nsk = key_chain.private_key_holder.nullifier_secret_key;
+        let identifier = 0;
+        let account_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &PrivateAccountKind::Regular(identifier),
+        );
+
+        let old_account = Account::default();
+        kc.add_imported_private_account(key_chain.clone(), None, identifier, old_account.clone());
+
+        let old_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+        let mut index = kc.build_latest_nullifier_index();
+        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
+
+        let new_account = Account {
+            balance: 150,
+            ..Account::default()
+        };
+        let new_commitment = Commitment::new(&account_id, &new_account);
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&key_chain.viewing_public_key);
+        let ciphertext = EncryptionScheme::encrypt(
+            &new_account,
+            &PrivateAccountKind::Regular(identifier),
+            &sender_ss,
+            &new_commitment,
+            0,
+        );
+        let note = EncryptedAccountData::new(
+            ciphertext,
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            epk,
+        );
+
+        let message = Message {
+            encrypted_private_post_states: vec![note],
+            new_commitments: vec![new_commitment],
+            new_nullifiers: vec![(old_nullifier, [0; 32])],
+            ..Default::default()
+        };
+
+        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
+
+        assert_eq!(handled, HashSet::from([0]));
+        assert_eq!(
+            kc.private_account(account_id).unwrap().account,
+            &new_account
+        );
+        let new_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+        assert_eq!(index.account_for(&new_nullifier), Some(account_id));
+        assert!(index.account_for(&old_nullifier).is_none());
+    }
+
+    #[test]
+    fn nullifier_sync_updates_shared_account() {
+        let mut kc = UserKeyChain::default();
+
+        let label = Label::new("group");
+        let holder = GroupKeyHolder::new();
+        let identifier = 0;
+        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let nsk = keys.nullifier_secret_key;
+        let account_id = AccountId::from((&npk, &vpk, identifier));
+
+        kc.insert_group_key_holder(label.clone(), holder);
+        let old_account = Account::default();
+        kc.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                group_label: label,
+                identifier,
+                pda_seed: None,
+                authority_program_id: None,
+                account: old_account.clone(),
+            },
+        );
+
+        let old_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+        let mut index = kc.build_latest_nullifier_index();
+        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
+
+        let new_account = Account {
+            balance: 250,
+            ..Account::default()
+        };
+        let new_commitment = Commitment::new(&account_id, &new_account);
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let ciphertext = EncryptionScheme::encrypt(
+            &new_account,
+            &PrivateAccountKind::Regular(identifier),
+            &sender_ss,
+            &new_commitment,
+            0,
+        );
+        let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
+        let message = Message {
+            encrypted_private_post_states: vec![note],
+            new_commitments: vec![new_commitment],
+            new_nullifiers: vec![(old_nullifier, [0; 32])],
+            ..Default::default()
+        };
+
+        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
+
+        assert_eq!(handled, HashSet::from([0]));
+        assert_eq!(
+            kc.shared_private_account(account_id).unwrap().account,
+            new_account
+        );
+        let new_nullifier =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
+        assert_eq!(index.account_for(&new_nullifier), Some(account_id));
+        assert!(index.account_for(&old_nullifier).is_none());
+    }
+
+    #[test]
+    fn nullifier_sync_ignores_unindexed_nullifier() {
+        let mut kc = UserKeyChain::default();
+
+        let key_chain = KeyChain::new_os_random();
+        let identifier = 0;
+        let account_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &PrivateAccountKind::Regular(identifier),
+        );
+        let account = Account::default();
+        kc.add_imported_private_account(key_chain, None, identifier, account.clone());
+
+        let mut index = kc.build_latest_nullifier_index();
+        let unindexed = Nullifier::for_account_update(
+            &Commitment::new(&AccountId::new([9; 32]), &Account::default()),
+            &[9; 32],
+        );
+        let message = Message {
+            new_nullifiers: vec![(unindexed, [0; 32])],
+            ..Default::default()
+        };
+
+        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
+
+        assert!(handled.is_empty());
+        assert_eq!(kc.private_account(account_id).unwrap().account, &account);
+    }
 
     #[test]
     fn new_account() {
