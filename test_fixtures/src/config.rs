@@ -8,7 +8,7 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
 use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
-use wallet::config::{SequencerConnectionData, WalletConfig};
+use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
@@ -203,7 +203,10 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
-        callibration_limit: 1,
+        multi_sequencer_client_config: MultiSequencerClientConfig {
+            distribution_limit: 1,
+            callibration_limit: 1,
+        },
     })
 }
 

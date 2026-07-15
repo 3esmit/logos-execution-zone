@@ -34,6 +34,23 @@ pub struct GasConfig {
     pub gas_limit_runtime: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiSequencerClientConfig {
+    /// Maximum numbers of sequencers to send requests
+    pub distribution_limit: usize,
+    /// Limit number of sequencer polls during callibration, should not be zero
+    pub callibration_limit: usize,
+}
+
+impl Default for MultiSequencerClientConfig {
+    fn default() -> Self {
+        Self {
+            distribution_limit: 1,
+            callibration_limit: 100,
+        }
+    }
+}
+
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
@@ -48,8 +65,7 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Limit number of sequencer polls during callibration, should not be zero
-    pub callibration_limit: usize,
+    pub multi_sequencer_client_config: MultiSequencerClientConfig,
 }
 
 impl Default for WalletConfig {
@@ -63,7 +79,7 @@ impl Default for WalletConfig {
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            callibration_limit: 100,
+            multi_sequencer_client_config: MultiSequencerClientConfig::default(),
         }
     }
 }
@@ -113,7 +129,7 @@ impl WalletConfig {
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            callibration_limit,
+            multi_sequencer_client_config,
         } = self;
 
         let WalletConfigOverrides {
@@ -122,7 +138,7 @@ impl WalletConfig {
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            callibration_limit: o_callibration_limit,
+            multi_sequencer_client_config: o_multi_sequencer_client_config,
         } = overrides;
 
         if let Some(v) = o_sequencers_conn_data {
@@ -145,9 +161,9 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
-        if let Some(v) = o_callibration_limit {
-            warn!("Overriding wallet config 'callibration_limit' to {v}");
-            *callibration_limit = v;
+        if let Some(v) = o_multi_sequencer_client_config {
+            warn!("Overriding wallet config 'multi_sequencer_client_config' to {v:?}");
+            *multi_sequencer_client_config = v;
         }
     }
 }

@@ -181,7 +181,7 @@ impl WalletCore {
         let multi_sequencer_client = MultiSequencerClient::new(
             &config.sequencers_conn_data,
             &mut metrics,
-            config.callibration_limit,
+            config.multi_sequencer_client_config.clone(),
         )
         .await?;
 

@@ -14,7 +14,7 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuil
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::config::SequencerConnectionData;
+use crate::config::{MultiSequencerClientConfig, SequencerConnectionData};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metrics {
@@ -74,18 +74,16 @@ impl Metrics {
 
 #[derive(Clone)]
 pub struct MultiSequencerClient {
-    // For now we store only leader, it is possible, that
-    // in future for important sends(for example for transactions)
-    // we would want to distribute call between known sequencers
-    pub leader: SequencerClient,
-    pub leader_url: Url,
+    /// Ordered list of leaders, from best to worst
+    pub leader_list: Vec<(SequencerClient, Url)>,
+    pub multi_sequencer_client_config: MultiSequencerClientConfig,
 }
 
 impl MultiSequencerClient {
     pub async fn new(
         conn_data: &[SequencerConnectionData],
         metrics: &mut HashMap<Url, Metrics>,
-        callibration_limit: usize,
+        multi_sequencer_client_config: MultiSequencerClientConfig,
     ) -> Result<Self> {
         let mut client_list = HashMap::new();
 
@@ -126,30 +124,40 @@ impl MultiSequencerClient {
             } else {
                 metrics.insert(
                     sequencer_addr.clone(),
-                    callibrate_client(&sequencer_client, callibration_limit).await,
+                    callibrate_client(
+                        &sequencer_client,
+                        multi_sequencer_client_config.callibration_limit,
+                    )
+                    .await,
                 );
             }
 
             client_list.insert(sequencer_addr.clone(), sequencer_client);
         }
 
-        let (leader_url, leader) = choose_leader(&client_list, metrics)
-            .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
+        let leader_list = choose_leaders(
+            &client_list,
+            metrics,
+            multi_sequencer_client_config.distribution_limit,
+        )
+        .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
 
-        log::info!("Chosen leader is {leader_url:?}");
+        log::info!("Chosen leaders is {leader_list:?}");
 
-        // Dropping client list, for reasons why, see comment in structure definition.
-        Ok(Self { leader, leader_url })
+        Ok(Self {
+            leader_list,
+            multi_sequencer_client_config,
+        })
     }
 
     #[must_use]
-    pub const fn leader_ref(&self) -> &SequencerClient {
-        &self.leader
+    pub fn leader_ref(&self) -> &(SequencerClient, Url) {
+        &self.leader_list.first().expect("Must be at least one leader")
     }
 
     #[must_use]
-    pub fn leader_clone(&self) -> SequencerClient {
-        self.leader.clone()
+    pub fn leader_clone(&self) -> (SequencerClient, Url) {
+        self.leader_list.first().expect("Must be at least one leader").clone()
     }
 
     // Keeping this call abstract, in case if we need to do more than one request
@@ -157,11 +165,11 @@ impl MultiSequencerClient {
         &self,
         call: I,
     ) -> (Result<R, E>, MetricsUpdate) {
-        let resp = tokio::join!(call(self.leader_ref()), actualize_client(self.leader_ref()));
+        let resp = tokio::join!(call(&(*self.leader_ref()).0), actualize_client(&(*self.leader_ref()).0));
 
         log::debug!(
             "Metered call for {:?}, metric updates is {:?}",
-            self.leader_url,
+            self.leader_ref().1,
             resp.1
         );
 
@@ -292,10 +300,11 @@ pub async fn actualize_client(client: &SequencerClient) -> MetricsUpdate {
 }
 
 #[must_use]
-pub fn choose_leader(
+pub fn choose_leaders(
     client_list: &HashMap<Url, SequencerClient>,
     metrics: &HashMap<Url, Metrics>,
-) -> Option<(Url, SequencerClient)> {
+    distribution_limit: usize,
+) -> Option<Vec<(SequencerClient, Url)>> {
     let mut client_vec = vec![];
 
     // Sort out all unmetered clients
@@ -347,42 +356,53 @@ pub fn choose_leader(
     });
 
     #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
-    let client_vec = client_vec[..(client_vec
+    let mut client_vec = client_vec[..(client_vec
         .iter()
         .position(|item| (metrics.get(*item).unwrap().errors as f32) > avg_err_count)
         .unwrap_or(client_vec.len()))]
         .to_vec();
 
     // Choose clients with least latency and variance
-    let min_lat_var_addr = client_vec.iter().fold(client_vec[0], |acc, x| {
-        let old = metrics.get(acc).unwrap();
-        let (old_lat, old_var) = (old.latency_avg, old.latency_var);
-        let new = metrics.get(*x).unwrap();
-        let (new_lat, new_var) = (new.latency_avg, new.latency_var);
+    client_vec.sort_by(|a, b| {
+        let left = metrics.get(*a).unwrap();
+        let (left_lat, left_var) = (left.latency_avg, left.latency_var);
+        let right = metrics.get(*b).unwrap();
+        let (right_lat, right_var) = (right.latency_avg, right.latency_var);
 
-        let new_std = new_var.sqrt();
-        let old_std = old_var.sqrt();
+        let right_std = right_var.sqrt();
+        let left_std = left_var.sqrt();
 
-        // Client is better if its averabe is better and variance does not make it worse
+        // Client is better if its average is better and variance does not make it worse
         // So basically we want this:
-        // [-old_std............new_lat.......old_lat...............+new_std.........+old_std]
+        // [-left_std............right_lat.......left_lat...............+right_std.........
+        // +left_std]
         //
         // However one can argue that this:
         //
-        // [-old_std...................old_lat........new_lat.........+new_std.......+old_std]
+        // [-left_std...................left_lat........right_lat.........+right_std.......
+        // +left_std]
         //
         // is still better, but it is up to discussion
-        if (new_lat <= old_lat) && ((new_lat + new_std) < (old_lat + old_std)) {
-            *x
+        if (right_lat <= right_lat) && ((right_lat + right_std) < (left_lat + left_std)) {
+            std::cmp::Ordering::Less
         } else {
-            acc
+            std::cmp::Ordering::Greater
         }
     });
 
-    Some((
-        min_lat_var_addr.clone(),
-        client_list.get(min_lat_var_addr).unwrap().clone(),
-    ))
+    Some(
+        client_vec
+            .iter()
+            .take(distribution_limit)
+            .map(|addr| {
+                let client = client_list
+                    .get(*addr)
+                    .expect("Missing clients already sorted out");
+
+                (client.clone(), (*addr).clone())
+            })
+            .collect(),
+    )
 }
 
 /// Helperfunction to calculate cumulative average.
@@ -455,7 +475,7 @@ mod tests {
     use url::Url;
 
     use crate::multi_client::{
-        CumulativeUpdates, Metrics, MetricsUpdate, choose_leader, cumulative_avg, cumulative_var,
+        CumulativeUpdates, Metrics, MetricsUpdate, choose_leaders, cumulative_avg, cumulative_var,
     };
 
     fn update_metrics(
