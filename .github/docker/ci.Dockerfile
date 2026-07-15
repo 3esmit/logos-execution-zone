@@ -27,6 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# The runner pre-creates the workspace as another uid, so git in a container job
+# calls it dubious. checkout's own fix is --global, which only holds while HOME
+# still points at the gitconfig it wrote; --system holds regardless.
+RUN git config --system --add safe.directory '*'
+
 # The base image already has this toolchain at the minimal profile, so the
 # `profile = "default"` in rust-toolchain.toml is a no-op here: rustup sees the
 # toolchain as installed and never applies it. Add what the jobs need by hand.
