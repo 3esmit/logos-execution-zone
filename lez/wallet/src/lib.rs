@@ -27,8 +27,8 @@ use lee::{
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
-    account::Nonce, compute_digest_for_path, program::InstructionData,
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -643,39 +643,22 @@ impl WalletCore {
         self.optimal_poller().poll_tx(hash).await
     }
 
-    pub async fn check_private_account_initialized(
+    pub async fn get_proofs_and_root(
         &self,
-        account_id: AccountId,
-    ) -> Result<Option<MembershipProof>> {
-        if let Some(acc_comm) = self.get_private_account_commitment(account_id) {
-            let call_f =
-                async |client: &SequencerClient| client.get_proof_for_commitment(acc_comm).await;
+        commitments: Vec<Commitment>,
+    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest)> {
+        let call_f =
+            async |client: &SequencerClient| client.get_proofs_and_root(commitments.clone()).await;
 
-            let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-            {
-                let mut metric_updates_guard = self.metric_updates.write().await;
-                metric_updates_guard.push(metrics_update);
-            }
-
-            call_res.map_err(Into::into)
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub async fn get_commitment_root(&self) -> Result<Option<CommitmentSetDigest>> {
-        let call_f = async |client: &SequencerClient| {
-            client.get_proof_for_commitment(DUMMY_COMMITMENT).await
-        };
-
-        let (proof, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
+        let (proofs_and_root, metrics_update) =
+            self.multi_sequencer_client.metered_call(call_f).await;
 
         {
             let mut metric_updates_guard = self.metric_updates.write().await;
             metric_updates_guard.push(metrics_update);
         }
-        Ok(proof?.map(|p| compute_digest_for_path(&DUMMY_COMMITMENT, &p)))
+
+        Ok(proofs_and_root?)
     }
 
     pub fn decode_insert_privacy_preserving_transaction_results(
