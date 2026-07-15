@@ -7,18 +7,19 @@ use common::{
     transaction::LeeTransaction,
 };
 use lee::V03State;
+use lee_core::BlockId;
 use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
-pub use storage::DbResult;
 use storage::sequencer::{
     RocksDBIO,
     sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
 };
+pub use storage::{DbResult, sequencer::DbDump};
 
 pub struct SequencerStore {
     dbio: Arc<RocksDBIO>,
     // TODO: Consider adding the hashmap to the database for faster recovery.
-    tx_hash_to_block_map: HashMap<HashType, u64>,
+    tx_hash_to_block_map: HashMap<HashType, BlockId>,
     genesis_id: u64,
     signing_key: lee::PrivateKey,
 }
@@ -96,7 +97,7 @@ impl SequencerStore {
 
     /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
     #[must_use]
-    pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<LeeTransaction> {
+    pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<(LeeTransaction, BlockId)> {
         let block_id = *self.tx_hash_to_block_map.get(&hash)?;
         let block = self
             .get_block_at_id(block_id)
@@ -105,7 +106,7 @@ impl SequencerStore {
             .expect("Block should be present since the hash is in the map");
         for transaction in block.body.transactions {
             if transaction.hash() == hash {
-                return Some(transaction);
+                return Some((transaction, block_id));
             }
         }
         panic!(
@@ -149,6 +150,28 @@ impl SequencerStore {
         self.dbio.get_lee_state()
     }
 
+    /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
+    pub fn delete_zone_checkpoint(&self) -> DbResult<()> {
+        self.dbio.delete_zone_sdk_checkpoint_bytes()
+    }
+
+    /// Reset every stored block to `Pending` so the next fresh start republishes the whole chain.
+    pub fn reset_all_blocks_to_pending(&self) -> DbResult<()> {
+        self.dbio.reset_all_blocks_to_pending()
+    }
+
+    /// Single-blob [`DbDump`] of the whole store; restore with [`Self::restore_db_from_dump`].
+    pub fn dump(&self) -> DbResult<DbDump> {
+        self.dbio.dump_all()
+    }
+
+    /// Create a fresh rocksdb at `location` from `dump`, closing it before returning so a sequencer
+    /// can open it normally afterwards.
+    pub fn restore_db_from_dump(location: &Path, dump: &DbDump) -> DbResult<()> {
+        RocksDBIO::restore_from_dump(location, dump)?;
+        Ok(())
+    }
+
     pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
         let Some(bytes) = self.dbio.get_zone_sdk_checkpoint_bytes()? else {
             return Ok(None);
@@ -181,8 +204,6 @@ pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64>
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
-
     use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
     use tempfile::tempdir;
 
@@ -224,8 +245,8 @@ mod tests {
             .update(&block, &[], vec![], &dummy_state)
             .unwrap();
         // Try again
-        let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
-        assert_eq!(Some(tx), retrieved_tx);
+        let output = node_store.get_transaction_by_hash(tx.hash());
+        assert_eq!(Some((tx, 1)), output);
     }
 
     #[test]
@@ -383,7 +404,7 @@ mod tests {
         // Re-open the store and verify that the transaction is still retrievable (which means it
         // was cached correctly)
         let node_store = SequencerStore::open_db(path, signing_key).unwrap();
-        let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
-        assert_eq!(Some(tx), retrieved_tx);
+        let output = node_store.get_transaction_by_hash(tx.hash());
+        assert_eq!(Some((tx, 1)), output);
     }
 }

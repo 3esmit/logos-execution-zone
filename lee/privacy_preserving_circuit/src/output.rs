@@ -1,9 +1,10 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme,
-    EphemeralPublicKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
+    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
+    encryption::ViewingPublicKey,
 };
 
 use crate::execution_state::ExecutionState;
@@ -40,14 +41,14 @@ pub fn compute_circuit_output(
                 output.public_post_states.push(post_state);
             }
             InputAccountIdentity::PrivateAuthorizedInit {
-                epk,
-                view_tag,
-                ssk,
+                vpk,
+                random_seed,
                 nsk,
                 identifier,
+                commitment_root,
             } => {
                 let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
@@ -62,7 +63,7 @@ pub fn compute_circuit_output(
 
                 let new_nullifier = (
                     Nullifier::for_account_initialization(&account_id),
-                    DUMMY_COMMITMENT_HASH,
+                    *commitment_root,
                 );
                 let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
@@ -72,23 +73,22 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    epk,
-                    *view_tag,
+                    &npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateAuthorizedUpdate {
-                epk,
-                view_tag,
-                ssk,
+                vpk,
+                random_seed,
                 nsk,
                 membership_proof,
                 identifier,
             } => {
                 let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
@@ -110,21 +110,21 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    epk,
-                    *view_tag,
+                    &npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivateUnauthorized {
-                epk,
-                view_tag,
+                vpk,
+                random_seed,
                 npk,
-                ssk,
                 identifier,
+                commitment_root,
             } => {
-                let account_id = AccountId::for_regular_private_account(npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(npk, vpk, *identifier);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert_eq!(
@@ -139,7 +139,7 @@ pub fn compute_circuit_output(
 
                 let new_nullifier = (
                     Nullifier::for_account_initialization(&account_id),
-                    DUMMY_COMMITMENT_HASH,
+                    *commitment_root,
                 );
                 let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
@@ -149,25 +149,25 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    epk,
-                    *view_tag,
+                    npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaInit {
-                epk,
-                view_tag,
-                npk: _,
-                ssk,
+                vpk,
+                random_seed,
+                npk,
                 identifier,
+                commitment_root,
                 seed: _,
             } => {
                 // The npk-to-account_id binding is established upstream in
                 // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
                 // match. Here we only enforce the init pre-conditions. The supplied npk on
-                // the variant has been recorded into `private_pda_npk_by_position` and used
+                // the variant has been recorded into `private_pda_by_position` and used
                 // for the binding check; we use `pre_state.account_id` directly for nullifier
                 // and commitment derivation.
                 assert!(
@@ -182,7 +182,7 @@ pub fn compute_circuit_output(
 
                 let new_nullifier = (
                     Nullifier::for_account_initialization(&pre_state.account_id),
-                    DUMMY_COMMITMENT_HASH,
+                    *commitment_root,
                 );
                 let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
 
@@ -200,17 +200,16 @@ pub fn compute_circuit_output(
                         seed: *seed,
                         identifier: *identifier,
                     },
-                    ssk,
-                    epk,
-                    *view_tag,
+                    npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaUpdate {
-                epk,
-                view_tag,
-                ssk,
+                vpk,
+                random_seed,
                 nsk,
                 membership_proof,
                 identifier,
@@ -235,6 +234,7 @@ pub fn compute_circuit_output(
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
                 let account_id = pre_state.account_id;
+                let npk = NullifierPublicKey::from(nsk);
                 let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
@@ -248,9 +248,9 @@ pub fn compute_circuit_output(
                         seed: *seed,
                         identifier: *identifier,
                     },
-                    ssk,
-                    epk,
-                    *view_tag,
+                    &npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
@@ -271,9 +271,9 @@ fn emit_private_output(
     post_state: Account,
     account_id: &AccountId,
     kind: &PrivateAccountKind,
-    shared_secret: &SharedSecretKey,
-    epk: &EphemeralPublicKey,
-    view_tag: u8,
+    npk: &NullifierPublicKey,
+    vpk: &ViewingPublicKey,
+    random_seed: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
 ) {
@@ -283,10 +283,23 @@ fn emit_private_output(
     post_with_updated_nonce.nonce = new_nonce;
 
     let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
+
+    let esk = EphemeralSecretKey::new(account_id, random_seed, &new_nonce);
+    let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
+
+    // Currently the view tag is properlty generated for all accounts.
+    // To increase privacy, this will be changed in the later version
+    // to only be generated explicitly for initialized accounts and
+    // fed by the prover directly for updated accounts.
+    //
+    // See issue 573:
+    // https://github.com/logos-blockchain/logos-execution-zone/issues/573
+    let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
+
     let encrypted_account = EncryptionScheme::encrypt(
         &post_with_updated_nonce,
         kind,
-        shared_secret,
+        &shared_secret,
         &commitment_post,
         *output_index,
     );
@@ -296,7 +309,7 @@ fn emit_private_output(
         .encrypted_private_post_states
         .push(EncryptedAccountData {
             ciphertext: encrypted_account,
-            epk: epk.clone(),
+            epk,
             view_tag,
         });
     *output_index = output_index

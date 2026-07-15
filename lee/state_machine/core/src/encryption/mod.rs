@@ -5,20 +5,46 @@ use chacha20::{
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "host")]
 pub use shared_key_derivation::{MlKem768EncapsulationKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account, program::PrivateAccountKind};
-#[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
+/// Length in bytes of an ML-KEM-768 ciphertext (the `EphemeralPublicKey` payload).
+pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
+
 pub type Scalar = [u8; 32];
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+pub struct EphemeralSecretKey(pub [u8; 32]);
+
+impl EphemeralSecretKey {
+    /// Derives an ephemeral secret key from OS randomness and account-specific values.
+    ///
+    /// For updates, `nonce` carries `nsk`-derived entropy, making `esk` strong even
+    /// with a compromised RNG. For inits, `nonce` is deterministic, so `random_seed`
+    /// is the sole entropy source.
+    #[must_use]
+    pub fn new(
+        account_id: &crate::account::AccountId,
+        random_seed: &[u8; 32],
+        nonce: &crate::account::Nonce,
+    ) -> Self {
+        const PREFIX: &[u8; 14] = b"/LEE/v0.3/esk/";
+        let mut input = [0_u8; 14 + 32 + 32 + 16];
+        input[0..14].copy_from_slice(PREFIX);
+        input[14..46].copy_from_slice(account_id.value());
+        input[46..78].copy_from_slice(random_seed);
+        input[78..94].copy_from_slice(&nonce.0.to_le_bytes());
+        Self(Impl::hash_bytes(&input).as_bytes().try_into().unwrap())
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
-/// former ECDH ephemeral public key. Always 1088 bytes for ML-KEM-768.
+/// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
 
@@ -52,6 +78,18 @@ pub struct EncryptedAccountData {
     pub view_tag: ViewTag,
 }
 
+impl EncryptedAccountData {
+    #[must_use]
+    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
+        const PREFIX: &[u8; 18] = b"/LEE/v0.3/ViewTag/";
+        let mut bytes = [0_u8; 18 + 32 + ViewingPublicKey::LEN];
+        bytes[0..18].copy_from_slice(PREFIX);
+        bytes[18..50].copy_from_slice(&npk.to_byte_array());
+        bytes[50..].copy_from_slice(vpk.to_bytes());
+        Impl::hash_bytes(&bytes).as_bytes()[0]
+    }
+}
+
 #[cfg(feature = "host")]
 impl EncryptedAccountData {
     #[must_use]
@@ -67,16 +105,6 @@ impl EncryptedAccountData {
             epk,
             view_tag,
         }
-    }
-
-    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || npk || vpk).
-    #[must_use]
-    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"/LEE/v0.3/ViewTag/");
-        bytes.extend_from_slice(&npk.to_byte_array());
-        bytes.extend_from_slice(vpk.to_bytes());
-        Impl::hash_bytes(&bytes).as_bytes()[0]
     }
 }
 
@@ -113,12 +141,12 @@ impl EncryptionScheme {
         commitment: &Commitment,
         output_index: u32,
     ) -> [u8; 32] {
-        let mut bytes = Vec::new();
-
-        bytes.extend_from_slice(b"LEE/v0.2/KDF-SHA256/");
-        bytes.extend_from_slice(&shared_secret.0);
-        bytes.extend_from_slice(&commitment.to_byte_array());
-        bytes.extend_from_slice(&output_index.to_le_bytes());
+        const PREFIX: &[u8; 20] = b"LEE/v0.2/KDF-SHA256/";
+        let mut bytes = [0_u8; 20 + 32 + 32 + 4];
+        bytes[0..20].copy_from_slice(PREFIX);
+        bytes[20..52].copy_from_slice(&shared_secret.0);
+        bytes[52..84].copy_from_slice(&commitment.to_byte_array());
+        bytes[84..88].copy_from_slice(&output_index.to_le_bytes());
 
         Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
     }
@@ -234,5 +262,42 @@ mod tests {
             bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
             "wrong shared secret must not produce the correct plaintext"
         );
+    }
+
+    #[test]
+    fn esk_is_deterministic() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let random_seed = [2_u8; 32];
+        let nonce = crate::account::Nonce(42);
+        let esk1 = EphemeralSecretKey::new(&account_id, &random_seed, &nonce);
+        let esk2 = EphemeralSecretKey::new(&account_id, &random_seed, &nonce);
+        assert_eq!(esk1.0, esk2.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_account_id() {
+        let random_seed = [2_u8; 32];
+        let nonce = crate::account::Nonce(42);
+        let esk_a = EphemeralSecretKey::new(&AccountId::new([0_u8; 32]), &random_seed, &nonce);
+        let esk_b = EphemeralSecretKey::new(&AccountId::new([1_u8; 32]), &random_seed, &nonce);
+        assert_ne!(esk_a.0, esk_b.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_random_seed() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let nonce = crate::account::Nonce(42);
+        let esk_a = EphemeralSecretKey::new(&account_id, &[0_u8; 32], &nonce);
+        let esk_b = EphemeralSecretKey::new(&account_id, &[1_u8; 32], &nonce);
+        assert_ne!(esk_a.0, esk_b.0);
+    }
+
+    #[test]
+    fn esk_differs_for_different_nonce() {
+        let account_id = AccountId::new([1_u8; 32]);
+        let random_seed = [2_u8; 32];
+        let esk_a = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(0));
+        let esk_b = EphemeralSecretKey::new(&account_id, &random_seed, &crate::account::Nonce(1));
+        assert_ne!(esk_a.0, esk_b.0);
     }
 }

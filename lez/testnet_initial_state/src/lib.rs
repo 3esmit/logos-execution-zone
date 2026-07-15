@@ -86,6 +86,7 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
     pub npk: lee_core::NullifierPublicKey,
+    pub vpk: lee_core::encryption::ViewingPublicKey,
     pub account: lee_core::account::Account,
 }
 
@@ -108,6 +109,7 @@ impl PrivateAccountPrivateInitialData {
     pub fn account_id(&self) -> lee::AccountId {
         lee::AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
+            &self.key_chain.viewing_public_key,
             self.identifier,
         )
     }
@@ -183,6 +185,7 @@ fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifier_public_key,
+            vpk: data.key_chain.viewing_public_key.clone(),
             account: data.account,
         })
         .collect()
@@ -193,7 +196,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
-            let account_id = lee::AccountId::for_regular_private_account(npk, 0);
+            let account_id =
+                lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
 
             let mut acc = init_comm_data.account.clone();
 
@@ -254,7 +258,28 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 .into_iter()
                 .map(|clock_id| (clock_id, system_accounts::clock_account())),
         )
+        .chain(std::iter::once(wrapped_token_config_account()))
         .collect()
+}
+
+/// The wrapped-token config account.
+///
+/// Seeded so the `wrapped_token` guest can pin its authorized minter (the
+/// cross-zone inbox) without importing the inbox id. Fixed for every zone, so it
+/// lives in the shared initial state.
+fn wrapped_token_config_account() -> (AccountId, Account) {
+    let wrapped_token_id = programs::wrapped_token().id();
+    (
+        wrapped_token_core::config_account_id(wrapped_token_id),
+        Account {
+            program_owner: wrapped_token_id,
+            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
+                .to_vec()
+                .try_into()
+                .expect("minter id fits in account data"),
+            ..Default::default()
+        },
+    )
 }
 
 fn initial_programs() -> Vec<Program> {
@@ -267,6 +292,12 @@ fn initial_programs() -> Vec<Program> {
         programs::vault(),
         programs::faucet(),
         programs::bridge(),
+        programs::cross_zone_outbox(),
+        programs::cross_zone_inbox(),
+        programs::ping_sender(),
+        programs::ping_receiver(),
+        programs::bridge_lock(),
+        programs::wrapped_token(),
     ]
 }
 
@@ -304,8 +335,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "4eGX3M3rgjHsme8n3sSp89af8JRZtYVTesbJjLqaX1VQ";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "3m6HQmCgmAvsxZtxAHPqqEqoBG4335fCG8TzxigyW7rE";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "EVesBKsYRVtkjnTcsbk8tWHkBn2xZmzAXzwgrP3ZaVoZ";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "94MXhZnueurjX6v37CYDKVEKYBiyhYArvtEdceq2XDQP";
 
     #[test]
     fn pub_state_consistency() {
@@ -440,6 +471,10 @@ mod tests {
             init_comms[0],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_A),
+                vpk: init_private_accs_keys[0]
+                    .key_chain
+                    .viewing_public_key
+                    .clone(),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -453,6 +488,10 @@ mod tests {
             init_comms[1],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_B),
+                vpk: init_private_accs_keys[1]
+                    .key_chain
+                    .viewing_public_key
+                    .clone(),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_B_INITIAL_BALANCE,

@@ -12,8 +12,8 @@ use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, MembershipProof, Nonce,
-    ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
+    MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -74,6 +74,20 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
                 )
             })?;
 
+        // Sequencer-only programs (the cross-zone inbox) are injected by the
+        // watcher; a user must not invoke them top-level, or anyone could forge
+        // an inbound cross-zone delivery. Chained user calls are already rejected
+        // by the inbox guest's caller-is-none assertion.
+        if let LeeTransaction::Public(public_tx) = &authenticated_tx
+            && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+        {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                "Program is sequencer-only and cannot be invoked by a user transaction".to_owned(),
+                None::<()>,
+            ));
+        }
+
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
             .await
@@ -131,7 +145,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned> {
+    ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
     }
@@ -148,12 +162,17 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         Ok(nonces)
     }
 
-    async fn get_proof_for_commitment(
+    async fn get_proofs_and_root(
         &self,
-        commitment: Commitment,
-    ) -> Result<Option<MembershipProof>, ErrorObjectOwned> {
+        commitments: Vec<Commitment>,
+    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.state().get_proof_for_commitment(&commitment))
+        let state = sequencer.state();
+        let proofs = commitments
+            .iter()
+            .map(|commitment| state.get_proof_for_commitment(commitment))
+            .collect();
+        Ok((proofs, state.commitment_root()))
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {

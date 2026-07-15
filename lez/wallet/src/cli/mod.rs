@@ -7,6 +7,7 @@ use common::{HashType, transaction::LeeTransaction};
 use derive_more::Display;
 use futures::TryFutureExt as _;
 use lee::ProgramDeploymentTransaction;
+use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
 pub use crate::helperfunctions::{read_mnemonic, read_pin};
@@ -117,11 +118,11 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub enum SubcommandReturnValue {
-    PrivacyPreservingTransfer { tx_hash: HashType },
+    TransactionExecuted { tx_hash: HashType },
     RegisterAccount { account_id: lee::AccountId },
     Account(lee::Account),
     Empty,
-    SyncedToBlock(u64),
+    SyncedToBlock(BlockId),
 }
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
@@ -286,13 +287,16 @@ pub async fn execute_subcommand(
             ))?;
             let message = lee::program_deployment_transaction::Message::new(bytecode);
             let transaction = ProgramDeploymentTransaction::new(message);
-            let _response = wallet_core
+            let tx_hash = wallet_core
                 .sequencer_client
                 .send_transaction(LeeTransaction::ProgramDeployment(transaction))
                 .await
                 .context("Transaction submission error")?;
 
-            SubcommandReturnValue::Empty
+            wallet_core
+                .poll_and_finalize_public_transaction(tx_hash)
+                .await
+                .context("Transaction finalization error")?
         }
     };
 
@@ -339,6 +343,26 @@ pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let vpk = hex::decode(vpk_hex.trim())
         .context("wallet::cli::read_keys_file: vpk in keys file must be valid hex")?;
     Ok((npk, vpk))
+}
+
+pub(crate) fn decode_npk_vpk(
+    npk_hex: &str,
+    vpk_hex: &str,
+) -> Result<(
+    lee_core::NullifierPublicKey,
+    lee_core::encryption::ViewingPublicKey,
+)> {
+    let npk_bytes: [u8; 32] = hex::decode(npk_hex)
+        .context("npk must be valid hex")?
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("npk must be exactly 32 bytes, got {}", v.len()))?;
+
+    let vpk = lee_core::encryption::ViewingPublicKey::from_bytes(
+        hex::decode(vpk_hex).context("vpk must be valid hex")?,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    Ok((lee_core::NullifierPublicKey(npk_bytes), vpk))
 }
 
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {

@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
+use lee_core::BlockId;
 use log::{info, warn};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 
@@ -30,7 +31,7 @@ impl TxPoller {
     }
 
     // TODO: this polling is not based on blocks, but on timeouts, need to fix this.
-    pub async fn poll_tx(&self, tx_hash: HashType) -> Result<LeeTransaction> {
+    pub async fn poll_tx(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
         let max_blocks_to_query = self.polling_max_blocks_to_query;
 
         info!("Starting poll for transaction {tx_hash}");
@@ -41,7 +42,7 @@ impl TxPoller {
 
             loop {
                 match self.client.get_transaction(tx_hash).await {
-                    Ok(Some(tx)) => return Ok(tx),
+                    Ok(Some((tx, block_id))) => return Ok((tx, block_id)),
                     Ok(None) => {}
                     Err(err) => {
                         warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");

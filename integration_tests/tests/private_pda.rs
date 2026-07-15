@@ -9,9 +9,8 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
 };
-use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use lee::{
     AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
@@ -22,7 +21,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -30,10 +29,7 @@ use lee_core::{
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::{
-    AccountIdentity, WalletCore,
-    cli::{Command, account::AccountSubcommand},
-};
+use wallet::{AccountIdentity, WalletCore};
 
 /// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
@@ -51,7 +47,8 @@ async fn fund_private_pda(
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
-    let pda_account_id = AccountId::for_private_pda(&authority_program_id, &seed, &npk, identifier);
+    let pda_account_id =
+        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
     let sender_account = wallet
         .get_account_public(sender)
         .await
@@ -63,21 +60,17 @@ async fn fund_private_pda(
     let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
 
-    let eph_holder = EphemeralKeyHolder::new(&vpk);
-    let ssk = eph_holder.calculate_shared_secret_sender();
-    let epk = eph_holder.ephemeral_public_key().clone();
-
     let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
         .context("failed to serialize auth_transfer instruction")?;
 
     let account_identities = vec![
         InputAccountIdentity::Public,
         InputAccountIdentity::PrivatePdaInit {
-            epk,
-            view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
+            vpk,
+            random_seed: [0; 32],
             npk,
-            ssk,
             identifier,
+            commitment_root: DUMMY_COMMITMENT_HASH,
             seed: Some((seed, authority_program_id)),
         },
     ];
@@ -175,8 +168,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let spend_program =
         ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
 
-    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
-    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 1);
+    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
+    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();
@@ -217,11 +210,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // Both PDAs must be discoverable and have the correct balance.
     let pda_0_account = ctx
@@ -300,11 +289,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // After spending, PDAs should have the remaining balance.
     let pda_0_spent = ctx

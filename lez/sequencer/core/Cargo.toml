@@ -20,6 +20,8 @@ bridge_core.workspace = true
 vault_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
+cross_zone.workspace = true
+cross_zone_inbox_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
@@ -39,6 +41,7 @@ url.workspace = true
 num-bigint.workspace = true
 risc0-zkvm.workspace = true
 futures.workspace = true
+itertools.workspace = true
 
 [features]
 default = []
