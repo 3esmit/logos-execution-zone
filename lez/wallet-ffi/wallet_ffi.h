@@ -939,15 +939,28 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
  * - `pda_seed`: 32 byte seed
  * - `npk`: 32 byte nullifier public key (can be obtained from
  *   `wallet_ffi_get_private_account_keys`)
+ * - `viewing_public_key`: pointer to u8 (can be obtained from
+ *   `wallet_ffi_get_private_account_keys`)
+ * - `viewing_public_key_len`: length of a `viewing_public_key` (can be obtained from
+ *   `wallet_ffi_get_private_account_keys`), must be `1184`
  * - `identifier`: little endian encoded `u128`
+ * - `account_id`: valid pointer to `FfiBytes32`
  *
  * # Returns
- * - `FfiBytes32` representing account id bytes
+ * - `Success` on successful parsing
+ * - Error code on failure
+ *
+ * # Safety
+ * - `viewing_public_key` must be a valid pointer to a `u8`
+ * - `account_id` must be a valid pointer to a `FfiBytes32` struct
  */
-struct FfiBytes32 wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
-                                                        FfiPdaSeed pda_seed,
-                                                        FfiNullifierPublicKey npk,
-                                                        struct FfiU128 identifier);
+enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+                                                          FfiPdaSeed pda_seed,
+                                                          FfiNullifierPublicKey npk,
+                                                          const uint8_t *viewing_public_key,
+                                                          uintptr_t viewing_public_key_len,
+                                                          struct FfiU128 identifier,
+                                                          struct FfiBytes32 *account_id);
 
 /**
  * Claim a pinata reward using a public transaction.
