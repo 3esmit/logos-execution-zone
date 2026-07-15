@@ -47,6 +47,13 @@ RUN curl -L https://risczero.com/install | bash \
     && rm -rf /root/.risc0 \
     && rzup install
 
+# Copying docker. Static Go binaries, so the alpine-built ones run fine here.
+COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-compose \
+     /usr/local/libexec/docker/cli-plugins/docker-compose
+COPY --from=docker:29-cli /usr/local/libexec/docker/cli-plugins/docker-buildx \
+     /usr/local/libexec/docker/cli-plugins/docker-buildx
+
 # Prebuilt binaries; compiling these from source would dominate the image build.
 RUN curl -L --proto '=https' --tlsv1.2 -sSf \
       https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash \
@@ -70,4 +77,7 @@ RUN cargo --version \
     && taplo --version \
     && cargo machete --version \
     && cargo deny --version \
-    && just --version
+    && just --version \
+    && docker --version \
+    && docker compose version \
+    && docker buildx version
