@@ -92,6 +92,9 @@ required-features = ["programs"]
 # Activating this will cause library to include built binary artifacts and pack them into `Program` structs.
 artifacts = ["dep:build_utils", "dep:lee"]
 
+# Include immutable artifacts deployed by the current Testnet chain.
+testnet = ["artifacts"]
+
 # Import dependencies required for program binaries.
 # You don't need this if you only want to use the library target.
 programs = [
@@ -139,3 +142,7 @@ token_program = { path = "token", optional = true }
 
 [build-dependencies]
 build_utils = { workspace = true, optional = true }
+
+[dev-dependencies]
+sha2.workspace = true
+risc0-binfmt = "3.0.2"

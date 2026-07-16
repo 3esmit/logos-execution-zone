@@ -3,6 +3,9 @@
 #[cfg(feature = "artifacts")]
 pub use inner::*;
 
+#[cfg(feature = "testnet")]
+pub mod testnet;
+
 #[cfg(feature = "artifacts")]
 mod inner {
 

@@ -45,7 +45,12 @@ itertools.workspace = true
 
 [features]
 default = []
-testnet = []
+testnet = [
+  "common/testnet",
+  "storage/testnet",
+  "testnet_initial_state/testnet",
+  "system_accounts/testnet",
+]
 # Generate mock external clients implementations for testing
 mock = []
 

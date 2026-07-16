@@ -4,6 +4,11 @@ use tempfile::tempdir;
 
 use super::*;
 
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
+
 fn genesis_block() -> Block {
     produce_dummy_block(1, None, vec![])
 }
@@ -31,7 +36,7 @@ fn initial_state() -> lee::V03State {
             (
                 id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: network_programs::authenticated_transfer().id(),
                     balance,
                     ..Account::default()
                 },
@@ -44,7 +49,10 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_programs([programs::authenticated_transfer(), programs::clock()])
+        .with_programs([
+            network_programs::authenticated_transfer(),
+            network_programs::clock(),
+        ])
 }
 
 #[test]

@@ -7,6 +7,10 @@ license = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+default = []
+testnet = ["programs/testnet", "system_accounts/testnet"]
+
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true

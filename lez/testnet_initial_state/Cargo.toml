@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 
+[features]
+default = []
+testnet = ["programs/testnet", "system_accounts/testnet"]
+
 [dependencies]
 key_protocol.workspace = true
 lee.workspace = true

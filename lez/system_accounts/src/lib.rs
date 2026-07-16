@@ -5,6 +5,11 @@ use std::str::FromStr as _;
 use clock_core::ClockAccountData;
 use lee_core::account::{Account, AccountId, Nonce};
 
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
+
 #[must_use]
 pub fn pinata_account_id() -> AccountId {
     // TODO: Use derivation from a public key?
@@ -15,7 +20,7 @@ pub fn pinata_account_id() -> AccountId {
 #[must_use]
 pub fn pinata_account() -> Account {
     Account {
-        program_owner: programs::pinata().id(),
+        program_owner: network_programs::pinata().id(),
         balance: 1_500_000,
         // Difficulty: 3
         data: vec![3; 33].try_into().expect("Should fit"),
@@ -25,13 +30,13 @@ pub fn pinata_account() -> Account {
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id())
+    faucet_core::compute_faucet_account_id(network_programs::faucet().id())
 }
 
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: network_programs::authenticated_transfer().id(),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -39,13 +44,13 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id())
+    bridge_core::compute_bridge_account_id(network_programs::bridge().id())
 }
 
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id(),
+        program_owner: network_programs::authenticated_transfer().id(),
         ..Account::default()
     }
 }
@@ -58,7 +63,7 @@ pub const fn clock_account_ids() -> [AccountId; 3] {
 #[must_use]
 pub fn clock_account() -> Account {
     Account {
-        program_owner: programs::clock().id(),
+        program_owner: network_programs::clock().id(),
         data: ClockAccountData {
             block_id: 0,
             timestamp: 0,
