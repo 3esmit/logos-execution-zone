@@ -12,7 +12,7 @@ use cross_zone_inbox_core::{
 };
 use futures::StreamExt as _;
 use lee::PublicKey;
-use log::{error, info};
+use log::{debug, error, info};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -133,6 +133,12 @@ impl CrossZoneVerifier {
 
             let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
             if self.seen.read().await.contains(&key) {
+                debug!(
+                    "Skipping already-seen cross-zone dispatch from zone {} block {} tx {} (replay no-op)",
+                    hex::encode(msg.src_zone),
+                    msg.src_block_id,
+                    msg.src_tx_index
+                );
                 continue;
             }
 

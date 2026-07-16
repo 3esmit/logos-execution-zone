@@ -18,7 +18,7 @@ use cross_zone_inbox_core::{
 };
 use lee::program::Program;
 use lee_core::{
-    account::{Account, AccountId},
+    account::{Account, AccountId, Balance},
     program::ProgramId,
 };
 use serde::{Deserialize, Serialize};
@@ -225,7 +225,7 @@ pub fn build_inbox_config_account(
 /// transaction, so the sequencer and indexer both seed it through this one
 /// builder.
 #[must_use]
-pub fn build_holding_account(holder: AccountId, amount: u128) -> (AccountId, Account) {
+pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
         program_owner: programs::bridge_lock().id(),
         data: bridge_lock_core::balance_bytes(amount)

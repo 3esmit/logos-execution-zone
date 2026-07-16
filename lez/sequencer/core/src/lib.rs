@@ -689,7 +689,7 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
 }
 
 /// Bridge-lock holder balances configured for this zone's genesis.
-fn bridge_lock_holdings(genesis: &[GenesisAction]) -> Vec<(lee::AccountId, u128)> {
+fn bridge_lock_holdings(genesis: &[GenesisAction]) -> Vec<(lee::AccountId, lee::Balance)> {
     genesis
         .iter()
         .filter_map(|action| match action {
