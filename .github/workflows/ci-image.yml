@@ -1,5 +1,9 @@
 name: CI image
 
+concurrency:
+  group: ci-image-${{ github.sha }}
+  cancel-in-progress: false
+
 # Resolves the CI image the calling workflow's jobs run in, building and pushing
 # it only when it isn't published yet.
 on:

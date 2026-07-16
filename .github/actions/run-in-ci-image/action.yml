@@ -51,4 +51,4 @@ runs:
           --workdir "$PWD" \
           "${env_args[@]}" \
           "$INPUT_IMAGE" \
-          bash -o pipefail -c "$INPUT_RUN"
+          bash -e -o pipefail -c "$INPUT_RUN"
