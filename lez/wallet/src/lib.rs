@@ -253,7 +253,8 @@ impl WalletCore {
         Ok(())
     }
 
-    pub async fn dump_statistics(&mut self) -> Result<()> {
+    /// Rotates multi-client and stores metrics.
+    pub async fn client_rotation(&mut self) -> Result<()> {
         let leader_statistic = self
             .statistics
             .get_mut(self.multi_sequencer_client.leader_url())
@@ -262,6 +263,14 @@ impl WalletCore {
         self.multi_sequencer_client
             .update_statistics(leader_statistic)
             .await;
+
+        self.multi_sequencer_client
+            .rotate(
+                &self.config.sequencers,
+                &mut self.statistics,
+                self.config.calibration_limit,
+            )
+            .await?;
 
         let statistics_serialized = serde_json::to_vec_pretty(&self.statistics)?;
         let mut file = tokio::fs::File::create(&self.statistics_path)

@@ -88,11 +88,11 @@ pub struct MultiSequencerClient {
 }
 
 impl MultiSequencerClient {
-    pub async fn new(
+    async fn setup(
         conn_data: &[SequencerConnectionData],
         statistics: &mut HashMap<Url, Statistics>,
         calibration_limit: usize,
-    ) -> Result<Self> {
+    ) -> Result<(Url, SequencerClient)> {
         let mut client_list = HashMap::new();
 
         for SequencerConnectionData {
@@ -141,17 +141,45 @@ impl MultiSequencerClient {
             client_list.insert(sequencer_addr.clone(), sequencer_client);
         }
 
-        let (leader_url, leader) = choose_leader(&client_list, statistics)
+        // Dropping client list, for reasons why, see comment in structure definition.
+
+        let res = choose_leader(&client_list, statistics)
             .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
 
-        log::info!("Chosen leader is {leader_url:?}");
+        log::info!("Chosen leader is {:?}", res.0);
 
-        // Dropping client list, for reasons why, see comment in structure definition.
+        Ok(res)
+    }
+
+    pub async fn new(
+        conn_data: &[SequencerConnectionData],
+        statistics: &mut HashMap<Url, Statistics>,
+        calibration_limit: usize,
+    ) -> Result<Self> {
+        let (leader_url, leader) = Self::setup(conn_data, statistics, calibration_limit).await?;
+
         Ok(Self {
             leader,
             leader_url,
             statistic_updates: Arc::new(RwLock::new(vec![])),
         })
+    }
+
+    /// Re-choose leader, `statistic_updates` must be empty.
+    pub async fn rotate(
+        &mut self,
+        conn_data: &[SequencerConnectionData],
+        statistics: &mut HashMap<Url, Statistics>,
+        calibration_limit: usize,
+    ) -> Result<()> {
+        let (leader_url, leader) = Self::setup(conn_data, statistics, calibration_limit).await?;
+
+        log::info!("Chosen leader is {leader_url:?}");
+
+        self.leader = leader;
+        self.leader_url = leader_url;
+
+        Ok(())
     }
 
     #[must_use]

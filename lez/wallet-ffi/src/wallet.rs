@@ -250,7 +250,7 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
 
     match wallet
         .store_persistent_data()
-        .and_then(|()| block_on(wallet.dump_statistics()))
+        .and_then(|()| block_on(wallet.client_rotation()))
     {
         Ok(()) => WalletFfiError::Success,
         Err(e) => {

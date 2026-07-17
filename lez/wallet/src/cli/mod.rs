@@ -295,9 +295,9 @@ pub async fn execute_subcommand(
     // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
     // statistics
     wallet_core
-        .dump_statistics()
+        .client_rotation()
         .await
-        .context("Failed to store statistics")?;
+        .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
 }
