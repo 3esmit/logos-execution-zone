@@ -38,7 +38,7 @@ pub struct GasConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     /// Connection data of all known sequencers.
-    pub sequencers_conn_data: Vec<SequencerConnectionData>,
+    pub sequencers: Vec<SequencerConnectionData>,
     /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
@@ -48,14 +48,14 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Limit number of sequencer polls during callibration, should not be zero
-    pub callibration_limit: usize,
+    /// Limit number of sequencer polls during calibration, should not be zero
+    pub calibration_limit: usize,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
-            sequencers_conn_data: vec![SequencerConnectionData {
+            sequencers: vec![SequencerConnectionData {
                 sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
                 basic_auth: None,
             }],
@@ -63,7 +63,7 @@ impl Default for WalletConfig {
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            callibration_limit: 100,
+            calibration_limit: 100,
         }
     }
 }
@@ -108,26 +108,26 @@ impl WalletConfig {
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
-            sequencers_conn_data,
+            sequencers,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            callibration_limit,
+            calibration_limit,
         } = self;
 
         let WalletConfigOverrides {
-            sequencers_conn_data: o_sequencers_conn_data,
+            sequencers: o_sequencers,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            callibration_limit: o_callibration_limit,
+            calibration_limit: o_calibration_limit,
         } = overrides;
 
-        if let Some(v) = o_sequencers_conn_data {
-            warn!("Overriding wallet config 'sequencers_conn_data' to {v:?}");
-            *sequencers_conn_data = v;
+        if let Some(v) = o_sequencers {
+            warn!("Overriding wallet config 'sequencers' to {v:?}");
+            *sequencers = v;
         }
         if let Some(v) = o_seq_poll_timeout {
             warn!("Overriding wallet config 'seq_poll_timeout' to {v:?}");
@@ -145,9 +145,9 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
-        if let Some(v) = o_callibration_limit {
-            warn!("Overriding wallet config 'callibration_limit' to {v}");
-            *callibration_limit = v;
+        if let Some(v) = o_calibration_limit {
+            warn!("Overriding wallet config 'calibration_limit' to {v}");
+            *calibration_limit = v;
         }
     }
 }

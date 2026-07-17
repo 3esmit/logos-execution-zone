@@ -10,7 +10,6 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
 };
 
 pub use account_manager::AccountIdentity;
@@ -33,13 +32,13 @@ use lee_core::{
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
-use tokio::{io::AsyncWriteExt as _, sync::RwLock};
+use tokio::io::AsyncWriteExt as _;
 use url::Url;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
-    multi_client::{Metrics, MetricsUpdate, MultiSequencerClient, extract_metrics_from_path},
+    multi_client::{MultiSequencerClient, Statistics, extract_statistics_from_path},
     poller::TxPoller,
     storage::key_chain::{NullifierIndex, SharedAccountEntry},
 };
@@ -99,12 +98,8 @@ pub struct WalletCore {
     storage: Storage,
     storage_path: PathBuf,
 
-    metrics_path: PathBuf,
-    metrics: HashMap<Url, Metrics>,
-    /// Wrapping metric updates in Arc<RwLock> to not break interfaces too much.
-    ///  
-    /// It is assumed, that wallet methods can be accesed via immutable reference.
-    metric_updates: Arc<RwLock<Vec<MetricsUpdate>>>,
+    statistics_path: PathBuf,
+    statistics: HashMap<Url, Statistics>,
 
     multi_sequencer_client: MultiSequencerClient,
 }
@@ -114,15 +109,15 @@ impl WalletCore {
     pub async fn from_env() -> Result<Self> {
         let config_path = helperfunctions::fetch_config_path()?;
         let storage_path = helperfunctions::fetch_persistent_storage_path()?;
-        let metrics_path = helperfunctions::fetch_metrics_path()?;
+        let statistics_path = helperfunctions::fetch_statistics_path()?;
 
-        Self::new_update_chain(config_path, storage_path, metrics_path, None).await
+        Self::new_update_chain(config_path, storage_path, statistics_path, None).await
     }
 
     pub async fn new_update_chain(
         config_path: PathBuf,
         storage_path: PathBuf,
-        metrics_path: PathBuf,
+        statistics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
     ) -> Result<Self> {
         let storage = Storage::from_path(&storage_path)
@@ -131,7 +126,7 @@ impl WalletCore {
         Self::new(
             config_path,
             storage_path,
-            metrics_path,
+            statistics_path,
             config_overrides,
             storage,
         )
@@ -141,7 +136,7 @@ impl WalletCore {
     pub async fn new_init_storage(
         config_path: PathBuf,
         storage_path: PathBuf,
-        metrics_path: PathBuf,
+        statistics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
     ) -> Result<(Self, Mnemonic)> {
@@ -149,7 +144,7 @@ impl WalletCore {
         let wallet = Self::new(
             config_path,
             storage_path,
-            metrics_path,
+            statistics_path,
             config_overrides,
             storage,
         )
@@ -161,7 +156,7 @@ impl WalletCore {
     async fn new(
         config_path: PathBuf,
         storage_path: PathBuf,
-        metrics_path: PathBuf,
+        statistics_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         storage: Storage,
     ) -> Result<Self> {
@@ -176,12 +171,12 @@ impl WalletCore {
             config.apply_overrides(config_overrides);
         }
 
-        let mut metrics = extract_metrics_from_path(&metrics_path)?;
+        let mut statistics = extract_statistics_from_path(&statistics_path)?;
 
         let multi_sequencer_client = MultiSequencerClient::new(
-            &config.sequencers_conn_data,
-            &mut metrics,
-            config.callibration_limit,
+            &config.sequencers,
+            &mut statistics,
+            config.calibration_limit,
         )
         .await?;
 
@@ -189,11 +184,10 @@ impl WalletCore {
             config_path,
             config_overrides,
             config,
-            storage_path,
             storage,
-            metrics_path,
-            metrics,
-            metric_updates: Arc::new(RwLock::new(vec![])),
+            storage_path,
+            statistics_path,
+            statistics,
             multi_sequencer_client,
         })
     }
@@ -215,12 +209,12 @@ impl WalletCore {
 
     #[must_use]
     pub fn leader_owned(&self) -> SequencerClient {
-        self.multi_sequencer_client.leader.clone()
+        self.multi_sequencer_client.leader().clone()
     }
 
     #[must_use]
     pub fn leader_url(&self) -> Url {
-        self.multi_sequencer_client.leader_url.clone()
+        self.multi_sequencer_client.leader_url().clone()
     }
 
     /// Get storage.
@@ -259,39 +253,26 @@ impl WalletCore {
         Ok(())
     }
 
-    async fn update_metrics(&mut self) -> Result<()> {
-        let leader_metric = self
-            .metrics
-            .get_mut(&self.multi_sequencer_client.leader_url)
-            .ok_or_else(|| anyhow::anyhow!("Leader URL is not present in metrics"))?;
+    pub async fn dump_statistics(&mut self) -> Result<()> {
+        let leader_statistic = self
+            .statistics
+            .get_mut(self.multi_sequencer_client.leader_url())
+            .ok_or_else(|| anyhow::anyhow!("Leader URL is not present in statistics"))?;
 
-        {
-            let metric_updates = self.metric_updates.read().await;
-            leader_metric.apply_updates(metric_updates.as_ref());
-        }
+        self.multi_sequencer_client
+            .update_statistics(leader_statistic)
+            .await;
 
-        // Clear updates
-        {
-            let mut metric_updates = self.metric_updates.write().await;
-            metric_updates.clear();
-        }
-
-        Ok(())
-    }
-
-    pub async fn store_metrics(&mut self) -> Result<()> {
-        self.update_metrics().await?;
-
-        let metrics_serialized = serde_json::to_vec_pretty(&self.metrics)?;
-        let mut file = tokio::fs::File::create(&self.metrics_path)
+        let statistics_serialized = serde_json::to_vec_pretty(&self.statistics)?;
+        let mut file = tokio::fs::File::create(&self.statistics_path)
             .await
             .context("Failed to create file")?;
-        file.write_all(&metrics_serialized)
+        file.write_all(&statistics_serialized)
             .await
             .context("Failed to write to file")?;
         file.sync_all().await.context("Failed to sync file")?;
 
-        println!("Stored metrics at {}", self.metrics_path.display());
+        println!("Stored statistics at {}", self.statistics_path.display());
 
         Ok(())
     }
@@ -488,37 +469,26 @@ impl WalletCore {
     }
 
     #[must_use]
-    pub fn get_metrics(&self, sequencer_url: &Url) -> Option<&Metrics> {
-        self.metrics.get(sequencer_url)
+    pub fn get_statistics(&self, sequencer_url: &Url) -> Option<&Statistics> {
+        self.statistics.get(sequencer_url)
     }
 
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
-        let call_f = async |client: &SequencerClient| client.get_account_balance(acc).await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_account_balance(acc).await)
+            .await?)
     }
 
     /// Get accounts nonces.
     pub async fn get_accounts_nonces(&self, accs: &[AccountId]) -> Result<Vec<Nonce>> {
-        let call_f =
-            async |client: &SequencerClient| client.get_accounts_nonces(accs.to_vec()).await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client.get_accounts_nonces(accs.to_vec()).await
+            })
+            .await?)
     }
 
     pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
@@ -535,59 +505,35 @@ impl WalletCore {
     }
 
     pub async fn get_last_block_id(&self) -> Result<u64> {
-        let call_f = async |client: &SequencerClient| client.get_last_block_id().await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_last_block_id().await)
+            .await?)
     }
 
     pub async fn get_block(&self, block_id: u64) -> Result<Option<Block>> {
-        let call_f = async |client: &SequencerClient| client.get_block(block_id).await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_block(block_id).await)
+            .await?)
     }
 
     pub async fn get_transaction(
         &self,
         hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>> {
-        let call_f = async |client: &SequencerClient| client.get_transaction(hash).await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_transaction(hash).await)
+            .await?)
     }
 
     /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
-        let call_f = async |client: &SequencerClient| client.get_account(account_id).await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_account(account_id).await)
+            .await?)
     }
 
     #[must_use]
@@ -623,16 +569,10 @@ impl WalletCore {
     }
 
     pub async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>> {
-        let call_f = async |client: &SequencerClient| client.get_program_ids().await;
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| client.get_program_ids().await)
+            .await?)
     }
 
     /// Poll transactions.
@@ -647,18 +587,12 @@ impl WalletCore {
         &self,
         commitments: Vec<Commitment>,
     ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest)> {
-        let call_f =
-            async |client: &SequencerClient| client.get_proofs_and_root(commitments.clone()).await;
-
-        let (proofs_and_root, metrics_update) =
-            self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(proofs_and_root?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client.get_proofs_and_root(commitments.clone()).await
+            })
+            .await?)
     }
 
     pub fn decode_insert_privacy_preserving_transaction_results(
@@ -797,18 +731,14 @@ impl WalletCore {
             .map(|keys| keys.ssk)
             .collect();
 
-        let call_f = async |client: &SequencerClient| {
-            client
-                .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
-                .await
-        };
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
+        let call_res = self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client
+                    .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
+                    .await
+            })
+            .await;
 
         Ok((call_res?, shared_secrets))
     }
@@ -869,40 +799,28 @@ impl WalletCore {
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
-        let call_f = async |client: &SequencerClient| {
-            client
-                .send_transaction(LeeTransaction::Public(tx.clone()))
-                .await
-        };
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client
+                    .send_transaction(LeeTransaction::Public(tx.clone()))
+                    .await
+            })
+            .await?)
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
         let message = lee::program_deployment_transaction::Message::new(bytecode);
         let transaction = ProgramDeploymentTransaction::new(message);
 
-        let call_f = async |client: &SequencerClient| {
-            client
-                .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
-                .await
-        };
-
-        let (call_res, metrics_update) = self.multi_sequencer_client.metered_call(call_f).await;
-
-        {
-            let mut metric_updates_guard = self.metric_updates.write().await;
-            metric_updates_guard.push(metrics_update);
-        }
-
-        Ok(call_res?)
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client
+                    .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
+                    .await
+            })
+            .await?)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
