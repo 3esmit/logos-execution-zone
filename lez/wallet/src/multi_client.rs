@@ -119,14 +119,13 @@ impl MultiSequencerClient {
             };
 
             // If there is statistics for client, actualize it
-            if statistics.contains_key(sequencer_addr) {
+            if let Some(metric_mut) = statistics.get_mut(sequencer_addr) {
                 let metric_updates = actualize_client(&sequencer_client).await;
 
                 log::debug!(
                     "Metered call for {sequencer_addr:?}, metric updates is {metric_updates:?}"
                 );
 
-                let metric_mut = statistics.get_mut(sequencer_addr).unwrap();
                 metric_mut.apply_updates(&[metric_updates]);
             // Otherwise calibrate client data
             } else if let Some(client_statistics) =
