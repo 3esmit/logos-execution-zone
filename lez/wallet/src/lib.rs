@@ -174,7 +174,7 @@ impl WalletCore {
         let mut statistics = extract_statistics_from_path(&statistics_path)?;
 
         let multi_sequencer_client = MultiSequencerClient::new(
-            &config.sequencers_conn_data,
+            &config.sequencers,
             &mut statistics,
             config.multi_sequencer_client_config.clone(),
         )
@@ -204,17 +204,21 @@ impl WalletCore {
 
     #[must_use]
     pub fn optimal_poller(&self) -> TxPoller {
-        TxPoller::new(self.config(), self.leader_owned())
+        TxPoller::new(self.config(), self.helm_owned())
     }
 
     #[must_use]
-    pub fn leader_owned(&self) -> SequencerClient {
-        self.multi_sequencer_client.leader().clone()
+    pub fn helm_owned(&self) -> SequencerClient {
+        self.multi_sequencer_client.helm().0.clone()
     }
 
     #[must_use]
-    pub fn leader_url(&self) -> Url {
-        self.multi_sequencer_client.leader_url().clone()
+    pub fn helm_url(&self) -> Url {
+        self.multi_sequencer_client.helm().1.clone()
+    }
+
+    pub fn leaders(&self) -> &[(SequencerClient, Url)] {
+        self.multi_sequencer_client.leaders()
     }
 
     /// Get storage.
@@ -255,20 +259,15 @@ impl WalletCore {
 
     /// Rotates multi-client and stores metrics.
     pub async fn client_rotation(&mut self) -> Result<()> {
-        let leader_statistic = self
-            .statistics
-            .get_mut(self.multi_sequencer_client.leader_url())
-            .ok_or_else(|| anyhow::anyhow!("Leader URL is not present in statistics"))?;
-
         self.multi_sequencer_client
-            .update_statistics(leader_statistic)
+            .update_statistics(&mut self.statistics)
             .await;
 
         self.multi_sequencer_client
             .rotate(
                 &self.config.sequencers,
                 &mut self.statistics,
-                self.config.calibration_limit,
+                &self.config.multi_sequencer_client_config,
             )
             .await?;
 
@@ -486,16 +485,16 @@ impl WalletCore {
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_account_balance(acc).await)
+            .metered_get(async |client: &SequencerClient| client.get_account_balance(acc).await)
             .await?)
     }
 
     /// Get accounts nonces.
-    pub async fn get_accounts_nonces(&self, accs: &[AccountId]) -> Result<Vec<Nonce>> {
+    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<Nonce>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
-                client.get_accounts_nonces(accs.to_vec()).await
+            .metered_get(async |client: &SequencerClient| {
+                client.get_accounts_nonces(accs).await
             })
             .await?)
     }
@@ -516,14 +515,14 @@ impl WalletCore {
     pub async fn get_last_block_id(&self) -> Result<u64> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_last_block_id().await)
+            .metered_get(async |client: &SequencerClient| client.get_last_block_id().await)
             .await?)
     }
 
     pub async fn get_block(&self, block_id: u64) -> Result<Option<Block>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_block(block_id).await)
+            .metered_get(async |client: &SequencerClient| client.get_block(block_id).await)
             .await?)
     }
 
@@ -533,7 +532,7 @@ impl WalletCore {
     ) -> Result<Option<(LeeTransaction, BlockId)>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_transaction(hash).await)
+            .metered_get(async |client: &SequencerClient| client.get_transaction(hash).await)
             .await?)
     }
 
@@ -541,7 +540,7 @@ impl WalletCore {
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_account(account_id).await)
+            .metered_get(async |client: &SequencerClient| client.get_account(account_id).await)
             .await?)
     }
 
@@ -580,7 +579,7 @@ impl WalletCore {
     pub async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_program_ids().await)
+            .metered_get(async |client: &SequencerClient| client.get_program_ids().await)
             .await?)
     }
 
@@ -598,8 +597,8 @@ impl WalletCore {
     ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest)> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
-                client.get_proofs_and_root(commitments.clone()).await
+            .metered_get(async |client: &SequencerClient| {
+                client.get_proofs_and_root(commitments).await
             })
             .await?)
     }
@@ -742,7 +741,7 @@ impl WalletCore {
 
         let call_res = self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
                     .await
@@ -810,7 +809,7 @@ impl WalletCore {
 
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::Public(tx.clone()))
                     .await
@@ -824,7 +823,7 @@ impl WalletCore {
 
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
                     .await

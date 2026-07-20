@@ -61,7 +61,7 @@ async fn main() {
     // Construct the public transaction
     // Query the current nonce from the node
     let nonces = wallet_core
-        .get_accounts_nonces(&[account_id])
+        .get_accounts_nonces(vec![account_id])
         .await
         .expect("Node should be reachable to query account data");
     let signing_keys = [&signing_key];

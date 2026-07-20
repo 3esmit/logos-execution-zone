@@ -387,7 +387,7 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
-    let leader_client = wallet_core.leader_owned();
+    let leader_client = wallet_core.helm_owned();
 
     wallet_core
         .storage

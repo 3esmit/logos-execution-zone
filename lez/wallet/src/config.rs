@@ -41,14 +41,14 @@ pub struct MultiSequencerClientConfig {
     /// Maximum numbers of sequencers to send requests
     pub distribution_limit: usize,
     /// Limit number of sequencer polls during callibration, should not be zero
-    pub callibration_limit: usize,
+    pub calibration_limit: usize,
 }
 
 impl Default for MultiSequencerClientConfig {
     fn default() -> Self {
         Self {
             distribution_limit: 1,
-            callibration_limit: 100,
+            calibration_limit: 100,
         }
     }
 }

@@ -76,21 +76,21 @@ impl Statistics {
 
 #[derive(Clone)]
 pub struct MultiSequencerClient {
-    /// Ordered list of leaders, from best to worst
+    /// Ordered list of leaders, from best to worst.
     pub leader_list: Vec<(SequencerClient, Url)>,
     pub multi_sequencer_client_config: MultiSequencerClientConfig,
     /// Wrapping statistic updates in Arc<RwLock> to not break interfaces too much.
     ///  
     /// It is assumed, that wallet methods can be accesed via immutable reference.
-    statistic_updates: Arc<RwLock<Vec<StatisticsUpdate>>>,
+    statistic_updates: Arc<RwLock<HashMap<Url, Vec<StatisticsUpdate>>>>,
 }
 
 impl MultiSequencerClient {
     async fn setup(
         conn_data: &[SequencerConnectionData],
         statistics: &mut HashMap<Url, Statistics>,
-        multi_sequencer_client_config: MultiSequencerClientConfig,
-    ) -> Result<Self> {
+        multi_sequencer_client_config: &MultiSequencerClientConfig,
+    ) -> Result<Vec<(SequencerClient, Url)>> {
         let mut client_list = HashMap::new();
 
         for SequencerConnectionData {
@@ -117,55 +117,52 @@ impl MultiSequencerClient {
             };
 
             // If there is statistics for client, actualize it
-            if let Some(metric_mut) = statistics.get_mut(sequencer_addr) {
-                let metric_updates = actualize_client(&sequencer_client).await;
+            if let Some(statistic_mut) = statistics.get_mut(sequencer_addr) {
+                let statistic_updates = actualize_client(&sequencer_client).await;
 
                 log::debug!(
-                    "Metered call for {sequencer_addr:?}, metric updates is {metric_updates:?}"
+                    "Metered call for {sequencer_addr:?}, statistic updates is {statistic_updates:?}"
                 );
 
-                metric_mut.apply_updates(&[metric_updates]);
+                statistic_mut.apply_updates(&[statistic_updates]);
+
+                client_list.insert(sequencer_addr.clone(), sequencer_client);
             // Otherwise calibrate client data
             } else if let Some(client_statistics) =
-                calibrate_client(&sequencer_client, calibration_limit).await
+                calibrate_client(&sequencer_client, multi_sequencer_client_config.calibration_limit).await
             {
                 statistics.insert(sequencer_addr.clone(), client_statistics);
+                client_list.insert(sequencer_addr.clone(), sequencer_client);
+            // There is no point in adding uncalibrated client
             } else {
-                log::warn!("Client {sequencer_addr:?} failed all {calibration_limit} calibration attempts, it may be unhealthy.
-                    \n Consider bumping calibration_limit or remove this client altogether");
+                log::warn!("Client {sequencer_addr:?} failed all {} calibration attempts, it may be unhealthy.
+                    \n Consider bumping calibration_limit or remove this client altogether", multi_sequencer_client_config.calibration_limit);
             }
-
-            client_list.insert(sequencer_addr.clone(), sequencer_client);
         }
-
-        // Dropping client list, for reasons why, see comment in structure definition.
 
         let leader_list = choose_leaders(
             &client_list,
-            metrics,
+            statistics,
             multi_sequencer_client_config.distribution_limit,
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
 
         log::info!("Chosen leaders is {leader_list:?}");
 
-        Ok(Self {
-            leader_list,
-            multi_sequencer_client_config,
-        })
+        Ok(leader_list)
     }
 
     pub async fn new(
         conn_data: &[SequencerConnectionData],
         statistics: &mut HashMap<Url, Statistics>,
-        calibration_limit: usize,
+        multi_sequencer_client_config: MultiSequencerClientConfig,
     ) -> Result<Self> {
-        let (leader_url, leader) = Self::setup(conn_data, statistics, calibration_limit).await?;
+        let leader_list = Self::setup(conn_data, statistics, &multi_sequencer_client_config).await?;
 
         Ok(Self {
-            leader,
-            leader_url,
-            statistic_updates: Arc::new(RwLock::new(vec![])),
+            leader_list,
+            multi_sequencer_client_config,
+            statistic_updates: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -174,54 +171,95 @@ impl MultiSequencerClient {
         &mut self,
         conn_data: &[SequencerConnectionData],
         statistics: &mut HashMap<Url, Statistics>,
-        calibration_limit: usize,
+        multi_sequencer_client_config: &MultiSequencerClientConfig,
     ) -> Result<()> {
-        let (leader_url, leader) = Self::setup(conn_data, statistics, calibration_limit).await?;
+        let leader_list = Self::setup(conn_data, statistics, multi_sequencer_client_config).await?;
 
-        log::info!("Chosen leader is {leader_url:?}");
+        log::info!("Chosen leaders is {leader_list:#?}");
 
-        self.leader = leader;
-        self.leader_url = leader_url;
+        self.leader_list = leader_list;
 
         Ok(())
     }
 
     #[must_use]
-    pub const fn leader(&self) -> &SequencerClient {
-        &self.leader
+    pub fn leaders(&self) -> &[(SequencerClient, Url)] {
+        &self.leader_list.as_ref()
     }
 
     #[must_use]
-    pub const fn leader_url(&self) -> &Url {
-        &self.leader_url
+    pub fn helm(&self) -> &(SequencerClient, Url) {
+        &self.leader_list.first().expect("At least one leader must be set")
     }
 
-    // Keeping this call abstract, in case if we need to do more than one request
-    pub async fn metered_call<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
+    /// Metered call for main leader(helm), to get data, necessary for send call.
+    pub async fn metered_get<R, E, I: AsyncFnOnce(&SequencerClient) -> Result<R, E>>(
         &self,
         call: I,
     ) -> Result<R, E> {
+        let (helm, helm_url) = self.helm();
+
         let (resp, statistics_update) =
-            tokio::join!(call(self.leader()), actualize_client(self.leader()));
+            tokio::join!(call(helm), actualize_client(helm));
 
         log::debug!(
-            "Metered call for {:?}, metric updates is {:?}",
-            self.leader_url,
+            "Metered call for {:?}, statistic updates is {:?}",
+            helm_url,
             statistics_update
         );
 
         {
             let mut statistic_updates_guard = self.statistic_updates.write().await;
-            statistic_updates_guard.push(statistics_update);
+            statistic_updates_guard.entry(helm_url.clone()).or_default().push(statistics_update);
         }
 
         resp
     }
 
-    /// Update statistics of a leader, clear statist updates log.
-    pub async fn update_statistics(&self, leader_statistic: &mut Statistics) {
+    /// Metered call for `distribution_limit` amount of leaders for sending data, usually transaction.
+    pub async fn metered_send<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
+        &self,
+        call: I,
+    ) -> Vec<Result<R, E>> {
+        let leaders = self.leaders().iter().take(self.multi_sequencer_client_config.distribution_limit);
+
+        // Collecting all statistics into one map to lock updates only once
+        let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
+
+        let mut results = vec![];
+        
+        for (leader, leader_url) in leaders {
+            let (resp, statistics_update) =
+            tokio::join!(call(leader), actualize_client(leader));
+
+            log::debug!(
+            "Metered call for {:?}, statistic updates is {:?}",
+            leader_url,
+            statistics_update
+            );
+
+            statistic_map.entry(leader_url.clone()).or_default().push(statistics_update);
+            results.push(resp);
+        }
+
+        {
+            let mut statistic_updates_guard = self.statistic_updates.write().await;
+
+            statistic_updates_guard.extend(statistic_map.into_iter());
+        }
+
+        results
+    }
+
+    /// Update statistics of a leader, clear statistic updates log.
+    pub async fn update_statistics(&self, statistics: &mut HashMap<Url, Statistics>,) {
         let mut statistic_updates = self.statistic_updates.write().await;
-        leader_statistic.apply_updates(statistic_updates.as_ref());
+
+        for (addr, statistic_updates_vec) in statistic_updates.iter() {
+            let leader_statistic = statistics.get_mut(addr).expect("Leader statistic must be present after setup");
+            leader_statistic.apply_updates(statistic_updates_vec.as_slice());
+        }
+        
         statistic_updates.clear();
     }
 }
@@ -838,9 +876,11 @@ mod tests {
             },
         );
 
-        let (leader_url, _) = choose_leader(&client_list, &statistics).unwrap();
+        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        assert_eq!(leader_url, addr_leader);
+        let (_, leader_url) = leaders.first().unwrap(); 
+
+        assert_eq!(leader_url, &addr_leader);
     }
 
     #[test]
@@ -908,9 +948,11 @@ mod tests {
             },
         );
 
-        let (leader_url, _) = choose_leader(&client_list, &statistics).unwrap();
+        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        assert_eq!(leader_url, addr_leader);
+        let (_, leader_url) = leaders.first().unwrap(); 
+
+        assert_eq!(leader_url, &addr_leader);
     }
 
     #[test]
@@ -978,9 +1020,11 @@ mod tests {
             },
         );
 
-        let (leader_url, _) = choose_leader(&client_list, &statistics).unwrap();
+        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        assert_eq!(leader_url, addr_leader);
+        let (_, leader_url) = leaders.first().unwrap(); 
+
+        assert_eq!(leader_url, &addr_leader);
     }
 
     #[test]
@@ -1048,8 +1092,10 @@ mod tests {
             },
         );
 
-        let (leader_url, _) = choose_leader(&client_list, &statistics).unwrap();
+        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        assert_eq!(leader_url, addr_leader);
+        let (_, leader_url) = leaders.first().unwrap(); 
+
+        assert_eq!(leader_url, &addr_leader);
     }
 }
