@@ -154,8 +154,8 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 /// This loads a wallet that was previously created with `wallet_ffi_create_new()`.
 ///
 /// # Parameters
-/// - `handle` - Valid wallet handle
 /// - `config_path`: Path to the wallet configuration file (JSON)
+/// - `storage_path`: Path to the wallet storage (JSON)
 /// - `statistics_path`: Path to the wallet statistics file (JSON)
 ///
 /// # Returns
@@ -164,7 +164,6 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 ///
 /// # Safety
 /// All string parameters must be valid null-terminated UTF-8 strings.
-/// `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_open(
     config_path: *const c_char,

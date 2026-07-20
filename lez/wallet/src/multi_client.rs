@@ -213,17 +213,11 @@ impl MultiSequencerClient {
         resp
     }
 
+    /// Update statistics of a leader, clear statist updates log.
     pub async fn update_statistics(&self, leader_statistic: &mut Statistics) {
-        {
-            let statistic_updates = self.statistic_updates.read().await;
-            leader_statistic.apply_updates(statistic_updates.as_ref());
-        }
-
-        // Clear updates
-        {
-            let mut statistic_updates = self.statistic_updates.write().await;
-            statistic_updates.clear();
-        }
+        let mut statistic_updates = self.statistic_updates.write().await;
+        leader_statistic.apply_updates(statistic_updates.as_ref());
+        statistic_updates.clear();
     }
 }
 
@@ -368,10 +362,8 @@ pub fn choose_leader(
     client_list: &HashMap<Url, SequencerClient>,
     statistics: &HashMap<Url, Statistics>,
 ) -> Option<(Url, SequencerClient)> {
-    let mut client_vec = vec![];
-
     // Sort out all unmetered clients
-    client_vec = client_list
+    let mut client_vec: Vec<_> = client_list
         .keys()
         .filter(|item| statistics.contains_key(*item))
         .collect();

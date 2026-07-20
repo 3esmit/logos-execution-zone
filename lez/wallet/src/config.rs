@@ -7,6 +7,8 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+const DEFAULT_CALLIBRATION_LIMIT: usize = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
     /// Connection data of all known sequencers.
@@ -49,6 +51,7 @@ pub struct WalletConfig {
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
     /// Limit number of sequencer polls during calibration, should not be zero
+    #[serde(default = "default_calibration_limit")]
     pub calibration_limit: usize,
 }
 
@@ -63,7 +66,7 @@ impl Default for WalletConfig {
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            calibration_limit: 100,
+            calibration_limit: DEFAULT_CALLIBRATION_LIMIT,
         }
     }
 }
@@ -150,4 +153,8 @@ impl WalletConfig {
             *calibration_limit = v;
         }
     }
+}
+
+const fn default_calibration_limit() -> usize {
+    DEFAULT_CALLIBRATION_LIMIT
 }
