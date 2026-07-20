@@ -107,9 +107,6 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
-    /// Basic authentication in the format `user` or `user:password`.
-    #[arg(long)]
-    pub auth: Option<String>,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -296,11 +293,11 @@ pub async fn execute_subcommand(
     };
 
     // Kind of a sledgehammer solution, but it is not clear if there is the case to not store
-    // metrics
+    // statistics
     wallet_core
-        .store_metrics()
+        .client_rotation()
         .await
-        .context("Failed to store metrics")?;
+        .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
 }

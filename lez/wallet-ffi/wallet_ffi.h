@@ -320,6 +320,10 @@ typedef struct LabelList {
   enum WalletFfiError error;
 } LabelList;
 
+typedef struct FfiBytes32 FfiPdaSeed;
+
+typedef struct FfiBytes32 FfiNullifierPublicKey;
+
 typedef struct FfiCreateWalletOutput {
   struct WalletHandle *wallet;
   /**
@@ -913,6 +917,50 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
  *   `wallet_ffi_get_all_labels_for_account`
  */
 enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
+
+/**
+ * Produce account id for public PDA.
+ *
+ * # Parameters
+ * - `program_id`: Id of the owner program
+ * - `pda_seed`: 32 byte seed
+ *
+ * # Returns
+ * - `FfiBytes32` representing account id bytes
+ */
+struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId program_id,
+                                                       FfiPdaSeed pda_seed);
+
+/**
+ * Produce account id for private PDA.
+ *
+ * # Parameters
+ * - `program_id`: Id of the owner program
+ * - `pda_seed`: 32 byte seed
+ * - `npk`: 32 byte nullifier public key (can be obtained from
+ *   `wallet_ffi_get_private_account_keys`)
+ * - `viewing_public_key`: pointer to u8 (can be obtained from
+ *   `wallet_ffi_get_private_account_keys`)
+ * - `viewing_public_key_len`: length of a `viewing_public_key` (can be obtained from
+ *   `wallet_ffi_get_private_account_keys`), must be `1184`
+ * - `identifier`: little endian encoded `u128`
+ * - `account_id`: valid pointer to `FfiBytes32`
+ *
+ * # Returns
+ * - `Success` on successful parsing
+ * - Error code on failure
+ *
+ * # Safety
+ * - `viewing_public_key` must be a valid pointer to a `u8`
+ * - `account_id` must be a valid pointer to a `FfiBytes32` struct
+ */
+enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
+                                                          FfiPdaSeed pda_seed,
+                                                          FfiNullifierPublicKey npk,
+                                                          const uint8_t *viewing_public_key,
+                                                          uintptr_t viewing_public_key_len,
+                                                          struct FfiU128 identifier,
+                                                          struct FfiBytes32 *account_id);
 
 /**
  * Claim a pinata reward using a public transaction.
@@ -1564,7 +1612,7 @@ enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
- * - `metrics_path`: Path to the wallet metrics file (JSON)
+ * - `statistics_path`: Path to the wallet statistics file (JSON)
  * - `password`: Password for encrypting the wallet seed
  *
  * # Returns
@@ -1576,7 +1624,7 @@ enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
-                                                   const char *metrics_path,
+                                                   const char *statistics_path,
                                                    const char *password);
 
 /**
@@ -1585,9 +1633,9 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * This loads a wallet that was previously created with `wallet_ffi_create_new()`.
  *
  * # Parameters
- * - `handle` - Valid wallet handle
  * - `config_path`: Path to the wallet configuration file (JSON)
- * - `metrics_path`: Path to the wallet metrics file (JSON)
+ * - `storage_path`: Path to the wallet storage (JSON)
+ * - `statistics_path`: Path to the wallet statistics file (JSON)
  *
  * # Returns
  * - Opaque wallet handle on success
@@ -1595,11 +1643,10 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  *
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
- * `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
  */
 struct WalletHandle *wallet_ffi_open(const char *config_path,
                                      const char *storage_path,
-                                     const char *metrics_path);
+                                     const char *statistics_path);
 
 /**
  * Destroy a wallet handle and free its resources.

@@ -66,13 +66,13 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
     Ok(accs_path)
 }
 
-/// Fetch path to metrics storage from default home.
+/// Fetch path to statistics storage from default home.
 ///
 /// File must be created through setup beforehand.
-pub fn fetch_metrics_path() -> Result<PathBuf> {
+pub fn fetch_statistics_path() -> Result<PathBuf> {
     let home = get_home()?;
-    let metrics_path = home.join("metrics.json");
-    Ok(metrics_path)
+    let statistics_path = home.join("statistics.json");
+    Ok(statistics_path)
 }
 
 #[expect(dead_code, reason = "Maybe used later")]

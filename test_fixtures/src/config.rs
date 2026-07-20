@@ -194,7 +194,7 @@ pub fn genesis_from_accounts(
 
 pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     Ok(WalletConfig {
-        sequencers_conn_data: vec![SequencerConnectionData {
+        sequencers: vec![SequencerConnectionData {
             sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
@@ -205,7 +205,7 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
         seq_block_poll_max_amount: 100,
         multi_sequencer_client_config: MultiSequencerClientConfig {
             distribution_limit: 1,
-            callibration_limit: 1,
+            callibration_limit: 5,
         },
     })
 }

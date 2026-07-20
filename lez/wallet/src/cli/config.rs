@@ -36,8 +36,8 @@ impl ConfigSubcommand {
             println!("{config_str}");
         } else if let Some(key) = key {
             match key.as_str() {
-                "sequencer_addr" => {
-                    println!("{:?}", config.sequencers_conn_data);
+                "sequencers" => {
+                    println!("{:?}", config.sequencers);
                 }
                 "seq_poll_timeout" => {
                     println!("{:?}", config.seq_poll_timeout);

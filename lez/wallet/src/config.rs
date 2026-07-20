@@ -7,6 +7,8 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+const DEFAULT_CALLIBRATION_LIMIT: usize = 100;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
     /// Connection data of all known sequencers.
@@ -55,7 +57,7 @@ impl Default for MultiSequencerClientConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
     /// Connection data of all known sequencers.
-    pub sequencers_conn_data: Vec<SequencerConnectionData>,
+    pub sequencers: Vec<SequencerConnectionData>,
     /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
@@ -65,13 +67,14 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
+    /// CURR_TODO: Add default serialization
     pub multi_sequencer_client_config: MultiSequencerClientConfig,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
-            sequencers_conn_data: vec![SequencerConnectionData {
+            sequencers: vec![SequencerConnectionData {
                 sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
                 basic_auth: None,
             }],
@@ -124,7 +127,7 @@ impl WalletConfig {
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
-            sequencers_conn_data,
+            sequencers,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
@@ -133,7 +136,7 @@ impl WalletConfig {
         } = self;
 
         let WalletConfigOverrides {
-            sequencers_conn_data: o_sequencers_conn_data,
+            sequencers: o_sequencers,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
@@ -141,9 +144,9 @@ impl WalletConfig {
             multi_sequencer_client_config: o_multi_sequencer_client_config,
         } = overrides;
 
-        if let Some(v) = o_sequencers_conn_data {
-            warn!("Overriding wallet config 'sequencers_conn_data' to {v:?}");
-            *sequencers_conn_data = v;
+        if let Some(v) = o_sequencers {
+            warn!("Overriding wallet config 'sequencers' to {v:?}");
+            *sequencers = v;
         }
         if let Some(v) = o_seq_poll_timeout {
             warn!("Overriding wallet config 'seq_poll_timeout' to {v:?}");
@@ -166,4 +169,8 @@ impl WalletConfig {
             *multi_sequencer_client_config = v;
         }
     }
+}
+
+const fn default_calibration_limit() -> usize {
+    DEFAULT_CALLIBRATION_LIMIT
 }
