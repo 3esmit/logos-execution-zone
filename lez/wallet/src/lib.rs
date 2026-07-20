@@ -855,7 +855,7 @@ impl WalletCore {
 
         println!("Syncing to block {block_id}. Blocks to sync: {num_of_blocks}");
 
-        let poller = self.optimal_poller().clone();
+        let poller = self.optimal_poller();
         let mut blocks =
             std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 
