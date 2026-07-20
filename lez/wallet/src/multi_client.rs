@@ -95,8 +95,6 @@ impl MultiSequencerClient {
     ) -> Result<(Url, SequencerClient)> {
         let mut client_list = HashMap::new();
 
-        println!("Connection data {conn_data:?}");
-
         for SequencerConnectionData {
             sequencer_addr,
             basic_auth,

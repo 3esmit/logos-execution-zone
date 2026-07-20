@@ -28,7 +28,6 @@ use lee::{
 };
 use lee_core::program::DEFAULT_PROGRAM_ID;
 use log::info;
-use tempfile::tempdir;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -371,28 +370,6 @@ fn new_wallet_ffi_with_test_context_config(
     Ok(create_wallet_result)
 }
 
-fn new_wallet_ffi_with_default_config(password: &str) -> Result<FfiCreateWalletOutput> {
-    let tempdir = tempdir()?;
-    let config_path = tempdir.path().join("wallet_config.json");
-    let storage_path = tempdir.path().join("storage.json");
-    let metrics_path = tempdir.path().join("metrics.json");
-    let config_path_c = CString::new(config_path.to_str().unwrap())?;
-    let storage_path_c = CString::new(storage_path.to_str().unwrap())?;
-    let metrics_path_c = CString::new(metrics_path.to_str().unwrap())?;
-    let password = CString::new(password)?;
-
-    let create_wallet_result = unsafe {
-        wallet_ffi_create_new(
-            config_path_c.as_ptr(),
-            storage_path_c.as_ptr(),
-            metrics_path_c.as_ptr(),
-            password.as_ptr(),
-        )
-    };
-
-    Ok(create_wallet_result)
-}
-
 fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
@@ -412,17 +389,18 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
 
 #[test]
 fn wallet_ffi_create_public_accounts() -> Result<()> {
-    let password = "password_for_tests";
+    let ctx = BlockingTestContext::new()?;
     let n_accounts = 10;
 
     // Create `n_accounts` public accounts with wallet FFI
     let new_public_account_ids_ffi = unsafe {
         let mut account_ids = Vec::new();
 
+        let home = tempfile::tempdir()?;
         let FfiCreateWalletOutput {
             wallet: wallet_ffi_handle,
             mnemonic: _,
-        } = new_wallet_ffi_with_default_config(password)?;
+        } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
         for _ in 0..n_accounts {
             let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
             wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id).unwrap();
@@ -452,16 +430,17 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
 
 #[test]
 fn wallet_ffi_create_private_accounts() -> Result<()> {
-    let password = "password_for_tests";
+    let ctx = BlockingTestContext::new()?;
     let n_accounts = 10;
     // Create `n_accounts` receiving keys with wallet FFI
     let new_npks_ffi = unsafe {
         let mut npks = Vec::new();
 
+        let home = tempfile::tempdir()?;
         let FfiCreateWalletOutput {
             wallet: wallet_ffi_handle,
             mnemonic: _,
-        } = new_wallet_ffi_with_default_config(password)?;
+        } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
         for _ in 0..n_accounts {
             let mut out_keys = FfiPrivateAccountKeys::default();
             wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
