@@ -526,14 +526,14 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_list_accounts() -> Result<()> {
-    let password = "password_for_tests";
-
+    let ctx = BlockingTestContext::new()?;
     // Create the wallet FFI and track which account IDs were created as public/private
     let (wallet_ffi_handle, created_public_ids) = unsafe {
+        let home = tempfile::tempdir()?;
         let FfiCreateWalletOutput {
             wallet: handle,
             mnemonic: _,
-        } = new_wallet_ffi_with_default_config(password)?;
+        } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
         let mut public_ids: Vec<[u8; 32]> = Vec::new();
 
         // Create 5 public accounts and 5 receiving keys
