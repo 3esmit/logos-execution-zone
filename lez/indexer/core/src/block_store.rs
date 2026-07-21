@@ -364,6 +364,9 @@ fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), Blo
             reason: format!("{err:#}"),
         };
         if is_genesis {
+            // Every genesis transaction is public (program config, supplies, clock);
+            // a non-public one is unexpected and parks the indexer rather than
+            // silently diverging.
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };

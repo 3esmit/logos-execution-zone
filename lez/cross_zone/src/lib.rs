@@ -16,12 +16,10 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
     inbox_seen_shard_account_id,
 };
-use lee::program::Program;
 use lee_core::{
     account::{Account, AccountId, Balance},
     program::ProgramId,
 };
-use serde::{Deserialize, Serialize};
 
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
@@ -30,47 +28,6 @@ pub struct Emission {
     pub target_program_id: ProgramId,
     pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
-}
-
-/// A cross-zone builtin a zone deploys at genesis via `DeployProgram`.
-///
-/// Keeps the cross-zone programs out of the production builtin set. A zone lists
-/// the ones it uses (a sender needs the outbox and its emitter, a receiver the
-/// inbox and its targets); [`CrossZoneProgram::ALL`] deploys the whole set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CrossZoneProgram {
-    Outbox,
-    Inbox,
-    PingSender,
-    PingReceiver,
-    BridgeLock,
-    WrappedToken,
-}
-
-impl CrossZoneProgram {
-    /// Every cross-zone builtin, for a zone that participates in all flows.
-    pub const ALL: [Self; 6] = [
-        Self::Outbox,
-        Self::Inbox,
-        Self::PingSender,
-        Self::PingReceiver,
-        Self::BridgeLock,
-        Self::WrappedToken,
-    ];
-
-    /// Resolves to the builtin program to register in genesis state.
-    #[must_use]
-    pub const fn program(self) -> Program {
-        match self {
-            Self::Outbox => programs::cross_zone_outbox(),
-            Self::Inbox => programs::cross_zone_inbox(),
-            Self::PingSender => programs::ping_sender(),
-            Self::PingReceiver => programs::ping_receiver(),
-            Self::BridgeLock => programs::bridge_lock(),
-            Self::WrappedToken => programs::wrapped_token(),
-        }
-    }
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
@@ -235,13 +192,6 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
         ..Default::default()
     };
     (holder, account)
-}
-
-/// Resolves a list of [`CrossZoneProgram`] selectors to the builtin programs to
-/// register in genesis state.
-#[must_use]
-pub fn deployed_programs(programs: &[CrossZoneProgram]) -> Vec<Program> {
-    programs.iter().map(|p| p.program()).collect()
 }
 
 /// The wrapped-token config account, pinning the cross-zone inbox as the

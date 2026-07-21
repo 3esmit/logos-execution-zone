@@ -271,6 +271,16 @@ fn initial_programs() -> Vec<Program> {
         programs::vault(),
         programs::faucet(),
         programs::bridge(),
+        // Cross-zone programs are builtins: their bytecode is baked into every node,
+        // so registering them in the base state (rather than shipping ELFs through
+        // the genesis block, which exceeds the inscription size limit) keeps the two
+        // nodes in lock-step with nothing to desync.
+        programs::cross_zone_inbox(),
+        programs::cross_zone_outbox(),
+        programs::ping_sender(),
+        programs::ping_receiver(),
+        programs::bridge_lock(),
+        programs::wrapped_token(),
     ]
 }
 

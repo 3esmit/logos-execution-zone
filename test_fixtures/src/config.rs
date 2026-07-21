@@ -6,9 +6,7 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use sequencer_core::config::{
-    BedrockConfig, CrossZoneConfig, CrossZoneProgram, GenesisAction, SequencerConfig,
-};
+use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
 use wallet::config::WalletConfig;
 
@@ -210,7 +208,6 @@ pub fn indexer_config(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     cross_zone: Option<CrossZoneConfig>,
-    deploy_programs: Vec<CrossZoneProgram>,
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
@@ -223,24 +220,7 @@ pub fn indexer_config(
         cross_zone,
         bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
-        deploy_programs,
     })
-}
-
-/// All cross-zone builtins as `DeployProgram` genesis actions, for a demo zone's
-/// sequencer config.
-#[must_use]
-pub fn cross_zone_deploy_actions() -> Vec<GenesisAction> {
-    CrossZoneProgram::ALL
-        .into_iter()
-        .map(|program| GenesisAction::DeployProgram { program })
-        .collect()
-}
-
-/// All cross-zone builtins, for a demo zone's indexer `deploy_programs`.
-#[must_use]
-pub fn all_cross_zone_programs() -> Vec<CrossZoneProgram> {
-    CrossZoneProgram::ALL.to_vec()
 }
 
 pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
@@ -274,59 +254,4 @@ pub fn bedrock_channel_id_b() -> ChannelId {
         .try_into()
         .unwrap_or_else(|_| unreachable!());
     ChannelId::from(channel_id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A demo zone declares its cross-zone deploy set twice: as the sequencer's
-    /// `DeployProgram` genesis actions and as the indexer's `deploy_programs`. Pin
-    /// the two helpers to the same genesis fingerprint, and check the fingerprint
-    /// actually detects a divergent set and ignores registration order, since that
-    /// is what makes it a usable drift guard.
-    #[test]
-    fn cross_zone_demo_genesis_matches_across_sequencer_and_indexer() {
-        let seq_selectors: Vec<CrossZoneProgram> = cross_zone_deploy_actions()
-            .into_iter()
-            .filter_map(|action| match action {
-                GenesisAction::DeployProgram { program } => Some(program),
-                GenesisAction::SupplyAccount { .. }
-                | GenesisAction::SupplyBridgeAccount { .. }
-                | GenesisAction::SupplyBridgeLockHolding { .. } => None,
-            })
-            .collect();
-        let idx_selectors = all_cross_zone_programs();
-
-        let fingerprint = |selectors: &[CrossZoneProgram]| {
-            lee::V03State::new()
-                .with_programs(selectors.iter().map(|p| p.program()))
-                .genesis_fingerprint()
-        };
-
-        // Matched configs agree.
-        assert_eq!(
-            fingerprint(&seq_selectors),
-            fingerprint(&idx_selectors),
-            "sequencer DeployProgram set and indexer deploy_programs must agree"
-        );
-
-        // A dropped program on one side changes the fingerprint.
-        let mut drifted = idx_selectors.clone();
-        drifted.pop().expect("deploy set is non-empty");
-        assert_ne!(
-            fingerprint(&seq_selectors),
-            fingerprint(&drifted),
-            "genesis fingerprint must detect a divergent deploy set"
-        );
-
-        // Registration order does not change the fingerprint.
-        let mut reversed = idx_selectors.clone();
-        reversed.reverse();
-        assert_eq!(
-            fingerprint(&idx_selectors),
-            fingerprint(&reversed),
-            "genesis fingerprint must be independent of program order"
-        );
-    }
 }

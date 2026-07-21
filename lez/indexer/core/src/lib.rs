@@ -93,8 +93,7 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
-        // Cross-zone programs, mirroring the sequencer's DeployProgram set.
-        let genesis_programs = cross_zone::deployed_programs(&config.deploy_programs);
+        // Cross-zone programs are base builtins, so none are seeded here.
         // Bridge-lock holdings (source side) always; inbox + wrapped-token config only when
         // cross_zone is set.
         let mut genesis_accounts: Vec<_> = config
@@ -113,7 +112,7 @@ impl IndexerCore {
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
-            store: IndexerStore::open_db(&home, genesis_programs, genesis_accounts)?,
+            store: IndexerStore::open_db(&home, Vec::new(), genesis_accounts)?,
             node,
             config,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),

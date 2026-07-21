@@ -65,31 +65,20 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
 
     // Zone A seeds the holder's bridgeable balance. Zone B runs the watcher on its
     // sequencer and the verifier on its indexer.
-    let mut genesis_a = vec![GenesisAction::SupplyBridgeLockHolding {
+    let genesis_a = vec![GenesisAction::SupplyBridgeLockHolding {
         holder: holder_id,
         amount: INITIAL_BALANCE,
     }];
-    genesis_a.extend(config::cross_zone_deploy_actions());
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, genesis_a, channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (_seq_b, _seq_b_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        config::cross_zone_deploy_actions(),
-        channel_b,
-        Some(cross_zone.clone()),
-    )
-    .await
-    .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(
-        bedrock_addr,
-        channel_b,
-        Some(cross_zone),
-        config::all_cross_zone_programs(),
-    )
-    .await
-    .context("Failed to set up zone B indexer")?;
+    let (_seq_b, _seq_b_home) =
+        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone.clone()))
+            .await
+            .context("Failed to set up zone B sequencer")?;
+    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
+        .await
+        .context("Failed to set up zone B indexer")?;
 
     // Lock LOCK_AMOUNT on zone A, addressed to the recipient on zone B.
     let lock = build_lock_tx(&holder_key, holder_id, zone_b);

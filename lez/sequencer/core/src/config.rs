@@ -8,7 +8,6 @@ use std::{
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
-pub use cross_zone::CrossZoneProgram;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use humantime_serde;
 use lee::{AccountId, Balance};
@@ -31,13 +30,6 @@ pub enum GenesisAction {
     SupplyBridgeLockHolding {
         holder: AccountId,
         amount: Balance,
-    },
-    /// Registers a cross-zone builtin at genesis, keeping the cross-zone programs
-    /// out of the production builtin set. A zone lists the ones it uses. This set
-    /// must match the indexer's `deploy_programs`, or the two genesis states
-    /// diverge; compare the genesis fingerprint both nodes log at startup.
-    DeployProgram {
-        program: CrossZoneProgram,
     },
 }
 

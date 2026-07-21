@@ -54,24 +54,13 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         }],
     };
 
-    let (seq_a, _seq_a_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        config::cross_zone_deploy_actions(),
-        channel_a,
-        None,
-    )
-    .await
-    .context("Failed to set up zone A sequencer")?;
-    let (seq_b, _seq_b_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        config::cross_zone_deploy_actions(),
-        channel_b,
-        Some(cross_zone),
-    )
-    .await
-    .context("Failed to set up zone B sequencer")?;
+    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
+        .await
+        .context("Failed to set up zone A sequencer")?;
+    let (seq_b, _seq_b_home) =
+        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone))
+            .await
+            .context("Failed to set up zone B sequencer")?;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);

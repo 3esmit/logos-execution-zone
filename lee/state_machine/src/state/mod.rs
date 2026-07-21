@@ -287,12 +287,12 @@ impl V03State {
     /// Order-independent fingerprint of the genesis-relevant state: the public
     /// account set, the deployed program set, and the commitment-set digest.
     ///
-    /// The sequencer and the indexer build genesis separately from their own
-    /// configs (the cross-zone deploy set is seeded directly, not carried by a
-    /// genesis transaction), so a mismatched `DeployProgram` / `deploy_programs`
-    /// list would otherwise diverge silently. Both nodes log this at startup;
-    /// equal values mean the two genesis states agree. Entries are sorted by id
-    /// before hashing, so the value does not depend on `HashMap` iteration order.
+    /// The sequencer and the indexer build the directly-seeded part of genesis
+    /// (base builtins plus any directly-seeded accounts) separately from their own
+    /// configs, so a divergence there would otherwise go unnoticed. Both nodes log
+    /// this at startup; equal values mean the two genesis states agree. Entries are
+    /// sorted by id before hashing, so the value does not depend on `HashMap`
+    /// iteration order.
     #[must_use]
     pub fn genesis_fingerprint(&self) -> [u8; 32] {
         use sha2::{Digest as _, Sha256};

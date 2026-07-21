@@ -116,7 +116,6 @@ pub async fn setup_indexer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    deploy_programs: Vec<sequencer_core::config::CrossZoneProgram>,
 ) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
@@ -126,9 +125,8 @@ pub async fn setup_indexer(
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config =
-        config::indexer_config(bedrock_addr, channel_id, cross_zone, deploy_programs)
-            .context("Failed to create Indexer config")?;
+    let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
+        .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
         indexer_config,

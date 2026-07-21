@@ -337,7 +337,7 @@ impl TestContextBuilder {
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) =
-                setup_indexer(bedrock_addr, config::bedrock_channel_id(), None, Vec::new())
+                setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
                     .await
                     .context("Failed to setup Indexer")?;
             let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())

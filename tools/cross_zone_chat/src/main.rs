@@ -292,7 +292,7 @@ async fn main() -> Result<()> {
     let (seq_a, _home_a) = setup_sequencer(
         partial,
         bedrock_addr,
-        config::cross_zone_deploy_actions(),
+        vec![],
         channel_a,
         Some(cross_zone_a),
     )
@@ -301,7 +301,7 @@ async fn main() -> Result<()> {
     let (seq_b, _home_b) = setup_sequencer(
         partial,
         bedrock_addr,
-        config::cross_zone_deploy_actions(),
+        vec![],
         channel_b,
         Some(cross_zone_b),
     )

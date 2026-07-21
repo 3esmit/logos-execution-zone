@@ -637,8 +637,8 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     #[cfg(feature = "testnet")]
     let base = testnet_initial_state::initial_state_testnet();
 
-    // Cross-zone programs this zone declares; the indexer reproduces the set from config.
-    let mut state = base.with_programs(deployed_programs(&config.genesis));
+    // Cross-zone programs are base builtins, so nothing extra is registered here.
+    let mut state = base;
     // Bridge-lock holdings belong to the source side, seeded regardless of receiving config.
     let holdings: Vec<_> = bridge_lock_holdings(&config.genesis)
         .into_iter()
@@ -670,11 +670,8 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
             GenesisAction::SupplyBridgeAccount { balance } => {
                 Some(build_supply_bridge_account_genesis_transaction(*balance))
             }
-            // Seeded/registered directly (accounts via `cross_zone::genesis_accounts`,
-            // programs via `with_programs`), not by a genesis tx.
-            GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::DeployProgram { .. } => {
-                None
-            }
+            // Seeded directly (accounts via `cross_zone::genesis_accounts`), not by a genesis tx.
+            GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
@@ -694,26 +691,9 @@ fn bridge_lock_holdings(genesis: &[GenesisAction]) -> Vec<(lee::AccountId, lee::
         .iter()
         .filter_map(|action| match action {
             GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyBridgeAccount { .. }
-            | GenesisAction::DeployProgram { .. } => None,
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
         })
         .collect()
-}
-
-/// The cross-zone builtins this zone deploys at genesis, from its `DeployProgram`
-/// actions.
-fn deployed_programs(genesis: &[GenesisAction]) -> Vec<lee::program::Program> {
-    let selectors: Vec<_> = genesis
-        .iter()
-        .filter_map(|action| match action {
-            GenesisAction::DeployProgram { program } => Some(*program),
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyBridgeAccount { .. }
-            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
-        })
-        .collect();
-    cross_zone::deployed_programs(&selectors)
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.

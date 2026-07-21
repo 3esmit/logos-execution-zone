@@ -2,7 +2,6 @@ use std::{fs::File, io::BufReader, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
-use cross_zone::CrossZoneProgram;
 use cross_zone_inbox_core::CrossZoneConfig;
 use humantime_serde;
 use lee::AccountId;
@@ -38,12 +37,6 @@ pub struct IndexerConfig {
     /// Defaults to `false`: on mismatch the indexer refuses to start.
     #[serde(default)]
     pub allow_chain_reset: bool,
-    /// Cross-zone builtins to deploy at genesis, mirroring the sequencer's
-    /// `DeployProgram` actions so the replayed genesis is identical. This set
-    /// must match the sequencer's; compare the genesis fingerprint both nodes
-    /// log at startup to confirm.
-    #[serde(default)]
-    pub deploy_programs: Vec<CrossZoneProgram>,
 }
 
 /// A genesis-funded bridge-lock holder balance, configured identically on the
