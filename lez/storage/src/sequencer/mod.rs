@@ -344,8 +344,9 @@ impl RocksDBIO {
         self.put_batch(&LatestBlockMetaCellRef(block_meta), (), batch)
     }
 
-    pub fn latest_block_meta(&self) -> DbResult<BlockMeta> {
-        self.get::<LatestBlockMetaCellOwned>(()).map(|val| val.0)
+    pub fn latest_block_meta(&self) -> DbResult<Option<BlockMeta>> {
+        self.get_opt::<LatestBlockMetaCellOwned>(())
+            .map(|val| val.map(|cell| cell.0))
     }
 
     pub fn get_zone_sdk_checkpoint_bytes(&self) -> DbResult<Option<Vec<u8>>> {

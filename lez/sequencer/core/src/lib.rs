@@ -201,7 +201,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let latest_block_meta = store
             .latest_block_meta()
-            .expect("Failed to read latest block meta from store");
+            .expect("Failed to read latest block meta from store")
+            .expect("Sequencer store should have at least the genesis block after reconstruction");
 
         let sequencer_core = Self {
             state,
@@ -256,14 +257,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let local_tip = store
             .latest_block_meta()
             .context("Failed to read latest block meta")?
-            .id;
+            .map(|meta| meta.id);
         let had_checkpoint_before_start = !is_fresh_start;
-        let has_committed_to_channel = local_tip > GENESIS_BLOCK_ID && had_checkpoint_before_start;
-        if has_committed_to_channel && channel_tip_slot.is_none() {
+        if let Some(local_tip) = local_tip
+            && had_checkpoint_before_start
+            && channel_tip_slot.is_none()
+        {
             return Err(anyhow!(
                 "Sequencer holds committed blocks (tip {local_tip}) but the Bedrock channel \
-                 no longer exists on the connected chain — the channel was wiped or the node \
-                 points at a different chain. Refusing to resume onto a foreign channel."
+                    no longer exists on the connected chain — the channel was wiped or the node \
+                    points at a different chain. Refusing to resume onto a foreign channel."
             ));
         }
 
@@ -348,7 +351,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         // A block at/below the tip must match what we already stored, otherwise
         // the channel is a different chain.
-        if block_id <= tip.id {
+        if let Some(tip) = &tip
+            && block_id <= tip.id
+        {
             match store
                 .get_block_at_id(block_id)
                 .context("Failed to read stored block")?
@@ -375,14 +380,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
 
         // New continuation: validate it chains onto the tip, then apply.
-        let cc_tip = Tip {
+        let cc_tip = tip.as_ref().map(|tip| Tip {
             block_id: tip.id,
             hash: tip.hash,
-        };
-        chain_consistency::validate_against_tip(Some(&cc_tip), block).map_err(|err| {
+        });
+        chain_consistency::validate_against_tip(cc_tip, block).map_err(|err| {
             anyhow!(
-                "Channel block {block_id} does not extend local tip {}: {err}",
-                tip.id
+                "Channel block {block_id} does not extend local tip {:?}: {err}",
+                tip.map(|tip| tip.id)
             )
         })?;
 
@@ -650,7 +655,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let latest_block_meta = self
             .store
             .latest_block_meta()
-            .context("Failed to get latest block meta from store")?;
+            .context("Failed to get latest block meta from store")?
+            .context("Sequencer store should have at least the genesis block")?;
 
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");

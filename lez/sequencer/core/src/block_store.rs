@@ -68,21 +68,24 @@ impl SequencerStore {
         signing_key: lee::PrivateKey,
     ) -> DbResult<Self> {
         let genesis_id = dbio.get_meta_first_block_in_db()?;
-        let last_id = dbio.latest_block_meta()?.id;
+        let last_id = dbio.latest_block_meta()?.map(|meta| meta.id);
 
-        info!("Preparing block cache");
         let mut tx_hash_to_block_map = HashMap::new();
-        for i in genesis_id..=last_id {
-            let block = dbio
-                .get_block(i)?
-                .expect("Block should be present in the database");
 
-            tx_hash_to_block_map.extend(block_to_transactions_map(&block));
+        if let Some(last_id) = last_id {
+            info!("Preparing block cache");
+            for i in genesis_id..=last_id {
+                let block = dbio
+                    .get_block(i)?
+                    .expect("Block should be present in the database");
+
+                tx_hash_to_block_map.extend(block_to_transactions_map(&block));
+            }
+            info!(
+                "Block cache prepared. Total blocks in cache: {}",
+                tx_hash_to_block_map.len()
+            );
         }
-        info!(
-            "Block cache prepared. Total blocks in cache: {}",
-            tx_hash_to_block_map.len()
-        );
 
         Ok(Self {
             dbio,
@@ -131,7 +134,7 @@ impl SequencerStore {
         );
     }
 
-    pub fn latest_block_meta(&self) -> DbResult<BlockMeta> {
+    pub fn latest_block_meta(&self) -> DbResult<Option<BlockMeta>> {
         self.dbio.latest_block_meta()
     }
 
@@ -299,7 +302,7 @@ mod tests {
         .unwrap();
 
         // Verify that initially the latest block hash equals genesis hash
-        let latest_meta = node_store.latest_block_meta().unwrap();
+        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
         assert_eq!(latest_meta.hash, genesis_hash);
     }
 
@@ -337,7 +340,7 @@ mod tests {
             .unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
-        let latest_meta = node_store.latest_block_meta().unwrap();
+        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
         assert_eq!(latest_meta.hash, block_hash);
     }
 

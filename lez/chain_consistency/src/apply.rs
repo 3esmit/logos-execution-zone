@@ -65,6 +65,7 @@ impl BlockIngestError {
 }
 
 /// The last successfully applied block a candidate must extend.
+#[derive(Debug, Copy, Clone)]
 pub struct Tip {
     pub block_id: BlockId,
     pub hash: HashType,
@@ -73,7 +74,7 @@ pub struct Tip {
 /// Checks that `block` is the valid continuation of `tip`: hash integrity,
 /// then block-id continuity, then `prev_block_hash` linkage. A `None` tip
 /// (cold store) expects the genesis block.
-pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIngestError> {
+pub fn validate_against_tip(tip: Option<Tip>, block: &Block) -> Result<(), BlockIngestError> {
     let computed = block.recompute_hash();
     if computed != block.header.hash {
         return Err(BlockIngestError::HashMismatch {

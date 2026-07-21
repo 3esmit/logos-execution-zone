@@ -253,7 +253,7 @@ impl IndexerStore {
             return Ok(AcceptOutcome::AlreadyApplied);
         }
 
-        if let Err(err) = chain_consistency::validate_against_tip(tip.as_ref(), block) {
+        if let Err(err) = chain_consistency::validate_against_tip(tip, block) {
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }

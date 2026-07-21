@@ -27,7 +27,7 @@ fn block_to_channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
 /// one block per slot at `slot_step` spacing.
 fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessage, Slot)> {
     let genesis_id = store.genesis_id();
-    let tip_id = store.latest_block_meta().expect("tip").id;
+    let tip_id = store.latest_block_meta().expect("tip").expect("present").id;
     (genesis_id..=tip_id)
         .enumerate()
         .map(|(index, id)| {
@@ -45,7 +45,7 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
     seq_a.produce_new_block().await.unwrap();
     seq_a.produce_new_block().await.unwrap();
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap();
+    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
 
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -67,7 +67,7 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     .expect("reconstruct");
     assert!(!channel_was_empty);
 
-    let tip_b = store_b.latest_block_meta().unwrap();
+    let tip_b = store_b.latest_block_meta().unwrap().unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
 
@@ -93,7 +93,7 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     .await
     .expect("reconstruct idempotent");
     assert!(!channel_was_empty);
-    assert_eq!(store_b.latest_block_meta().unwrap().id, tip_a.id);
+    assert_eq!(store_b.latest_block_meta().unwrap().unwrap().id, tip_a.id);
 }
 
 #[tokio::test]
@@ -243,7 +243,7 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
 
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap();
+    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
     let channel_id = config_a.bedrock_config.channel_id;
@@ -274,9 +274,9 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     )
     .await
     .expect("reconstruct");
-    seq_b.chain_height = seq_b.store.latest_block_meta().unwrap().id;
+    seq_b.chain_height = seq_b.store.latest_block_meta().unwrap().unwrap().id;
 
-    let tip_b = seq_b.block_store().latest_block_meta().unwrap();
+    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
 
@@ -412,7 +412,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .await
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
-    let deposit_block_id = seq_a.block_store().latest_block_meta().unwrap().id;
+    let deposit_block_id = seq_a.block_store().latest_block_meta().unwrap().unwrap().id;
 
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -476,14 +476,14 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
             SequencerCoreWithMockClients::start_from_config(config.clone()).await;
         seq.produce_new_block().await.unwrap();
         seq.produce_new_block().await.unwrap();
-        assert!(seq.block_store().latest_block_meta().unwrap().id > 1);
+        assert!(seq.block_store().latest_block_meta().unwrap().unwrap().id > 1);
     } // drop releases the store so we can reopen it
 
     // Reopen: blocks beyond genesis, no anchor. `is_fresh_start = false` stands in
     // for a checkpoint persisted by a prior sync (the mock never emits one).
     let (mut store, mut state) = SequencerCore::<MockBlockPublisher>::open_or_create_store(&config);
     assert!(store.get_zone_anchor().unwrap().is_none());
-    assert!(store.latest_block_meta().unwrap().id > 1);
+    assert!(store.latest_block_meta().unwrap().unwrap().id > 1);
 
     // The channel is gone: no tip, no messages.
     let mock =
