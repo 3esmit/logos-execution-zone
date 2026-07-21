@@ -72,10 +72,15 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, genesis_a, channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (_seq_b, _seq_b_home) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone.clone()))
-            .await
-            .context("Failed to set up zone B sequencer")?;
+    let (_seq_b, _seq_b_home) = setup_sequencer(
+        partial,
+        bedrock_addr,
+        vec![],
+        channel_b,
+        Some(cross_zone.clone()),
+    )
+    .await
+    .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
         .await
         .context("Failed to set up zone B indexer")?;
@@ -106,16 +111,12 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // escrow now.
     let seq_a_client = sequencer_client(seq_a.addr())?;
     let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
-    let escrowed = bridge_lock_core::read_balance(
-        &seq_a_client.get_account(escrow_id).await?.data.into_inner(),
-    );
+    let escrowed = seq_a_client.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = bridge_lock_core::read_balance(
-        &seq_a_client.get_account(holder_id).await?.data.into_inner(),
-    );
+    let remaining = seq_a_client.get_account(holder_id).await?.balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,

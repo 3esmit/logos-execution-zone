@@ -176,17 +176,14 @@ pub fn build_inbox_init_config_tx(
 
 /// Builds the genesis holding account funding a holder's bridgeable balance.
 ///
-/// Owned by `bridge_lock`, data is the LE balance. Not produced by any
-/// transaction, so the sequencer and indexer both seed it through this one
-/// builder.
+/// A real native balance owned by `bridge_lock`, which can debit it on a lock; it
+/// is conserved like any other balance. Not produced by any transaction, so the
+/// sequencer and indexer both seed it through this one builder.
 #[must_use]
 pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
         program_owner: programs::bridge_lock().id(),
-        data: bridge_lock_core::balance_bytes(amount)
-            .to_vec()
-            .try_into()
-            .expect("balance fits in account data"),
+        balance: amount,
         ..Default::default()
     };
     (holder, account)

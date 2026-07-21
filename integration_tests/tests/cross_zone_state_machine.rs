@@ -174,12 +174,8 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         holder_id,
         Account {
             program_owner: bridge_lock_id,
-            balance: 0,
-            data: bridge_lock_core::balance_bytes(INITIAL_BALANCE)
-                .to_vec()
-                .try_into()
-                .expect("balance fits in account data"),
-            nonce: 0_u128.into(),
+            balance: INITIAL_BALANCE,
+            ..Default::default()
         },
     )]);
 
@@ -214,16 +210,14 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holder_after =
-        bridge_lock_core::read_balance(&public_diff[&holder_id].data.clone().into_inner());
+    let holder_after = public_diff[&holder_id].balance;
     assert_eq!(
         holder_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
         "holder debited"
     );
 
-    let escrow_after =
-        bridge_lock_core::read_balance(&public_diff[&escrow_id].data.clone().into_inner());
+    let escrow_after = public_diff[&escrow_id].balance;
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
     let record =
