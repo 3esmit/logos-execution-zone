@@ -1612,6 +1612,7 @@ enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
+ * - `statistics_path`: Path to the wallet statistics file (JSON)
  * - `password`: Password for encrypting the wallet seed
  *
  * # Returns
@@ -1623,6 +1624,7 @@ enum WalletFfiError wallet_ffi_vault_claim_private(struct WalletHandle *handle,
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
+                                                   const char *statistics_path,
                                                    const char *password);
 
 /**
@@ -1632,7 +1634,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  *
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
- * - `storage_path`: Path where wallet data is stored
+ * - `storage_path`: Path to the wallet storage (JSON)
+ * - `statistics_path`: Path to the wallet statistics file (JSON)
  *
  * # Returns
  * - Opaque wallet handle on success
@@ -1641,7 +1644,9 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings.
  */
-struct WalletHandle *wallet_ffi_open(const char *config_path, const char *storage_path);
+struct WalletHandle *wallet_ffi_open(const char *config_path,
+                                     const char *storage_path,
+                                     const char *statistics_path);
 
 /**
  * Destroy a wallet handle and free its resources.

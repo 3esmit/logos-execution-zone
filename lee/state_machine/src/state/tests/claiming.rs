@@ -308,7 +308,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
     let mut state =
-        V03State::new().with_private_accounts([(sender_commitment.clone(), sender_init_nullifier)]);
+        V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
@@ -401,8 +401,8 @@ fn private_chained_call(number_of_calls: u32) {
     let to_init_nullifier = Nullifier::for_account_initialization(&to_account_id);
     let mut state = V03State::new()
         .with_private_accounts([
-            (from_commitment.clone(), from_init_nullifier),
-            (to_commitment.clone(), to_init_nullifier),
+            (from_commitment, from_init_nullifier),
+            (to_commitment, to_init_nullifier),
         ])
         .with_test_programs();
     let amount: u128 = 37;

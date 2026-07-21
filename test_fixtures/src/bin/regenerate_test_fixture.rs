@@ -65,6 +65,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         &initial_private_accounts,
         WalletConfigOverrides::default(),
     )
+    .await
     .context("Failed to setup wallet for fixture generation")?;
 
     setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)

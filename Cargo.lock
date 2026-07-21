@@ -11019,13 +11019,11 @@ version = "0.1.0"
 dependencies = [
  "bip39",
  "cbindgen",
- "common",
  "key_protocol",
  "lee",
  "lee_core",
  "programs",
  "risc0-zkvm",
- "sequencer_service_rpc",
  "serde_json",
  "tokio",
  "vault_core",

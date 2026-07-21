@@ -91,7 +91,7 @@ async fn fund_private_pda(
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     wallet
-        .sequencer_client
+        .leader_owned()
         .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
@@ -180,7 +180,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Sending to alice_pda_0 (identifier=0)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_0,
         alice_npk,
         alice_vpk.clone(),
@@ -194,7 +194,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Sending to alice_pda_1 (identifier=1)");
     fund_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         sender_1,
         alice_npk,
         alice_vpk.clone(),
@@ -231,7 +231,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_0_id)
         .context("commitment for alice_pda_0 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_0.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_0, ctx.sequencer_client()).await,
         "alice_pda_0 commitment not in state after receive"
     );
 
@@ -240,7 +240,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         .get_private_account_commitment(alice_pda_1_id)
         .context("commitment for alice_pda_1 missing")?;
     assert!(
-        verify_commitment_is_in_state(commitment_1.clone(), ctx.sequencer_client()).await,
+        verify_commitment_is_in_state(commitment_1, ctx.sequencer_client()).await,
         "alice_pda_1 commitment not in state after receive"
     );
     assert_ne!(
@@ -262,7 +262,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Alice spending from alice_pda_0");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_0_id,
         recipient_npk_0,
         recipient_vpk_0,
@@ -275,7 +275,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     info!("Alice spending from alice_pda_1");
     spend_private_pda(
-        ctx.wallet(),
+        ctx.wallet_mut(),
         alice_pda_1_id,
         recipient_npk_1,
         recipient_vpk_1,

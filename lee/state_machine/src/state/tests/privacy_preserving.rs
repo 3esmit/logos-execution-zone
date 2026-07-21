@@ -505,7 +505,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
             sender_account.account_id,
             sender_account.account.balance,
         )]))
-        .with_private_accounts([(recipient_commitment.clone(), recipient_init_nullifier)])
+        .with_private_accounts([(recipient_commitment, recipient_init_nullifier)])
         .with_test_programs();
 
     let balance_to_transfer = 10_u128;

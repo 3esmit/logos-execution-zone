@@ -393,6 +393,7 @@ impl TestContextBuilder {
             &initial_private_accounts,
             wallet_config_overrides,
         )
+        .await
         .context("Failed to setup wallet")?;
 
         if use_prebuilt {
@@ -454,6 +455,10 @@ impl BlockingTestContext {
 
     pub const fn ctx(&self) -> &TestContext {
         self.ctx.as_ref().expect("TestContext is set")
+    }
+
+    pub const fn ctx_mut(&mut self) -> &mut TestContext {
+        self.ctx.as_mut().expect("TestContext is set")
     }
 
     pub const fn runtime(&self) -> &tokio::runtime::Runtime {
