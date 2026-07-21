@@ -311,15 +311,81 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
         "the re-delivered mint must be skipped, not re-included in a block"
     );
 
+    // A reconstructed withdraw's finalized L1 event was already re-delivered (and
+    // dropped) by cold-start backfill, so it will never be consumed again.
+    // Reconstruction must not count it, or the count stays phantom-inflated forever.
     let withdraw_arg = crate::extract_bridge_withdraw_data(&withdraw_tx).expect("withdraw data");
     let key = crate::withdraw_event_reconciliation_key(&withdraw_arg.outputs).expect("recon key");
     assert!(
-        seq_b
+        !seq_b
             .block_store()
             .dbio()
             .consume_unseen_withdraw_count(key)
             .unwrap(),
-        "reconstruction must record an unseen withdraw for bridge reconciliation"
+        "reconstruction must not leave a phantom unseen-withdraw count"
+    );
+}
+
+/// A reconstructed withdraw block must not touch the unseen-withdraw counter.
+/// Its finalized L1 Withdraw event was already re-delivered (and dropped as a
+/// no-op) by cold-start backfill, so counting it during reconstruction would
+/// leave a permanent phantom that nothing ever consumes.
+#[tokio::test]
+async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {
+    let recipient = initial_public_user_accounts()[0].account_id;
+    let withdraw_amount = 100_u64;
+    let bedrock_account_pk = [0x33_u8; 32];
+
+    // Sequencer A produces a single withdraw block; treat its chain as the channel.
+    let config_a = bridge_funded_config();
+    let (mut seq_a, mempool_a) =
+        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    let withdraw_tx = build_public_withdraw_tx(
+        recipient,
+        0,
+        withdraw_amount,
+        bedrock_account_pk,
+        &create_signing_key_for_account1(),
+    );
+    mempool_a
+        .push((TransactionOrigin::User, withdraw_tx.clone()))
+        .await
+        .unwrap();
+    seq_a.produce_new_block().await.unwrap();
+
+    let withdraw_arg = crate::extract_bridge_withdraw_data(&withdraw_tx).expect("withdraw data");
+    let key = crate::withdraw_event_reconciliation_key(&withdraw_arg.outputs).expect("recon key");
+    // Producing the withdraw counts it as unseen, awaiting its L1 event.
+    assert!(
+        seq_a
+            .block_store()
+            .dbio()
+            .consume_unseen_withdraw_count(key)
+            .unwrap(),
+        "producing a withdraw must count it as unseen"
+    );
+
+    let messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_slot = messages.last().unwrap().1;
+    let channel_id = config_a.bedrock_config.channel_id;
+
+    // Sequencer B reconstructs A's chain from a fresh store.
+    let config_b = bridge_funded_config();
+    let (mut store_b, mut state_b) =
+        SequencerCore::<MockBlockPublisher>::open_or_create_store(&config_b);
+    let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b,
+        &mut store_b,
+        &mut state_b,
+        true,
+    )
+    .await
+    .expect("reconstruct");
+
+    assert!(
+        !store_b.dbio().consume_unseen_withdraw_count(key).unwrap(),
+        "reconstruction must not leave a phantom unseen-withdraw count"
     );
 }
 

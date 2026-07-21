@@ -390,21 +390,20 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         chain_consistency::apply_block(block, &mut scratch)
             .map_err(|err| anyhow!("Failed to apply channel block {block_id}: {err}"))?;
 
-        // Derive bridge bookkeeping from the block's transactions, matching the
-        // production path so the reconciliation counters stay consistent.
-        let mut deposit_event_ids = Vec::new();
-        let mut withdrawals = Vec::new();
-        for tx in &block.body.transactions {
-            if let Some(deposit_id) = extract_bridge_deposit_id(tx) {
-                deposit_event_ids.push(deposit_id);
-            }
-            if let Some(withdraw) = extract_bridge_withdraw_data(tx) {
-                withdrawals.push(withdraw_event_reconciliation_key(&withdraw.outputs)?);
-            }
-        }
+        // Mark the deposits' pending records submitted so the production-time
+        // guard drops the mints cold-start backfill re-queued for them. Withdraw
+        // intents are deliberately not counted: backfill already re-delivered and
+        // dropped their finalized L1 events, so an increment here would never be
+        // consumed and would leave a phantom count.
+        let deposit_event_ids: Vec<_> = block
+            .body
+            .transactions
+            .iter()
+            .filter_map(extract_bridge_deposit_id)
+            .collect();
 
         store
-            .update(block, &deposit_event_ids, withdrawals, &scratch)
+            .update(block, &deposit_event_ids, Vec::new(), &scratch)
             .context("Failed to persist reconstructed block")?;
         *state = scratch;
         store
