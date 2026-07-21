@@ -22,7 +22,7 @@ use crate::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
         LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
         PendingDepositEventsCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneAnchorRecord, ZoneCursorCell, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -364,12 +364,12 @@ impl RocksDBIO {
         self.del::<ZoneSdkCheckpointCellOwned>(())
     }
 
-    pub fn get_zone_cursor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
-        Ok(self.get_opt::<ZoneCursorCell>(())?.map(|cell| cell.0))
+    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
+        Ok(self.get_opt::<ZoneAnchorCell>(())?.map(|cell| cell.0))
     }
 
-    pub fn put_zone_cursor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
-        self.put(&ZoneCursorCell(*anchor), ())
+    pub fn put_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
+        self.put(&ZoneAnchorCell(*anchor), ())
     }
 
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {

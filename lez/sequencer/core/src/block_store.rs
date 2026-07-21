@@ -204,11 +204,11 @@ impl SequencerStore {
     /// The last channel block read back and verified from Bedrock (L1 slot +
     /// `id`/`hash`), or `None` before any block has been read from the channel.
     pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
-        self.dbio.get_zone_cursor()
+        self.dbio.get_zone_anchor()
     }
 
     pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
-        self.dbio.put_zone_cursor(anchor)
+        self.dbio.put_zone_anchor(anchor)
     }
 
     pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {

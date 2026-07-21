@@ -147,18 +147,18 @@ pub struct ZoneAnchorRecord {
 }
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
-pub struct ZoneCursorCell(pub ZoneAnchorRecord);
+pub struct ZoneAnchorCell(pub ZoneAnchorRecord);
 
-impl SimpleStorableCell for ZoneCursorCell {
+impl SimpleStorableCell for ZoneAnchorCell {
     type KeyParams = ();
 
     const CELL_NAME: &'static str = DB_META_ZONE_CURSOR_KEY;
     const CF_NAME: &'static str = CF_META_NAME;
 }
 
-impl SimpleReadableCell for ZoneCursorCell {}
+impl SimpleReadableCell for ZoneAnchorCell {}
 
-impl SimpleWritableCell for ZoneCursorCell {
+impl SimpleWritableCell for ZoneAnchorCell {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
             DbError::borsh_cast_message(err, Some("Failed to serialize zone cursor".to_owned()))
