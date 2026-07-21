@@ -154,6 +154,124 @@ async fn fails_when_channel_is_missing() {
     assert!(result.is_err(), "missing channel must abort startup");
 }
 
+// The following cases exercise the divergence branches of
+// `apply_reconstructed_block` reached with no recorded anchor, so the block's own
+// validation fires rather than the up-front `AnchorConsistencyCheck`.
+
+#[tokio::test]
+async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
+    let config = setup_sequencer_config();
+    let (mut store, mut state) = SequencerCore::<MockBlockPublisher>::open_or_create_store(&config);
+
+    // Fresh store, no anchor. The channel serves a genesis at the same id but a
+    // different hash — a foreign chain reinscribing genesis.
+    let mut reinscribed = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    reinscribed.header.hash = HashType([0xAB_u8; 32]);
+
+    let messages = vec![block_to_channel_message(&reinscribed, 10)];
+    let mock = MockBlockPublisher::with_canned_channel(
+        config.bedrock_config.channel_id,
+        Some(Slot::from(10)),
+        messages,
+    );
+    let result = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &mut store, &mut state, true,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a reinscribed genesis with a different hash must abort startup"
+    );
+}
+
+#[tokio::test]
+async fn fails_when_a_stored_block_hash_diverges_from_the_channel() {
+    // A sequencer that committed blocks past genesis but never recorded an anchor.
+    let config = setup_sequencer_config();
+    let (mut seq, _handle) = SequencerCoreWithMockClients::start_from_config(config.clone()).await;
+    seq.produce_new_block().await.unwrap();
+    seq.produce_new_block().await.unwrap();
+
+    // A below-tip block re-served with a corrupted hash: we already hold this id
+    // with a different hash, so the channel is a different chain.
+    let below_tip_id = seq.block_store().genesis_id() + 1;
+    let mut block = seq
+        .block_store()
+        .get_block_at_id(below_tip_id)
+        .unwrap()
+        .unwrap();
+    block.header.hash = HashType([0xCD_u8; 32]);
+
+    let messages = vec![block_to_channel_message(&block, 10)];
+    let mock = MockBlockPublisher::with_canned_channel(
+        config.bedrock_config.channel_id,
+        Some(Slot::from(10)),
+        messages,
+    );
+    let result = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock,
+        &mut seq.store,
+        &mut seq.state,
+        true,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a diverging below-tip block hash must abort startup"
+    );
+}
+
+#[tokio::test]
+async fn fails_when_a_channel_block_is_missing_locally() {
+    let config = setup_sequencer_config();
+    let (mut store, mut state) = SequencerCore::<MockBlockPublisher>::open_or_create_store(&config);
+
+    // A block numbered below our genesis is at/below the local tip yet absent from
+    // the store — a foreign chain with a lower numbering.
+    let mut foreign = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    foreign.header.block_id = store.genesis_id() - 1;
+
+    let messages = vec![block_to_channel_message(&foreign, 10)];
+    let mock = MockBlockPublisher::with_canned_channel(
+        config.bedrock_config.channel_id,
+        Some(Slot::from(10)),
+        messages,
+    );
+    let result = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &mut store, &mut state, true,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a channel block below the local range must abort startup"
+    );
+}
+
+#[tokio::test]
+async fn fails_when_a_channel_block_does_not_extend_the_tip() {
+    let config = setup_sequencer_config();
+    let (mut store, mut state) = SequencerCore::<MockBlockPublisher>::open_or_create_store(&config);
+
+    // A block claiming an id far past genesis does not chain onto the local tip.
+    let mut orphan = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
+    orphan.header.block_id = store.genesis_id() + 5;
+
+    let messages = vec![block_to_channel_message(&orphan, 10)];
+    let mock = MockBlockPublisher::with_canned_channel(
+        config.bedrock_config.channel_id,
+        Some(Slot::from(10)),
+        messages,
+    );
+    let result = SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &mut store, &mut state, true,
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "a non-contiguous channel block must abort startup"
+    );
+}
+
 /// A sequencer config whose genesis funds the bridge account, so replayed bridge
 /// deposit transactions have a source balance to mint from.
 fn bridge_funded_config() -> SequencerConfig {
