@@ -186,7 +186,9 @@ impl CrossZoneVerifier {
             &public_tx.message().instruction_data,
         ) {
             Ok(InboxInstruction::Dispatch(msg)) => Some(msg),
-            Err(_) => None,
+            // Only a dispatch carries a cross-zone message to re-derive; a genesis
+            // `InitConfig` is not verifier-relevant.
+            Ok(InboxInstruction::InitConfig(_)) | Err(_) => None,
         }
     }
 

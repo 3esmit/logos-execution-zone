@@ -637,19 +637,12 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     #[cfg(feature = "testnet")]
     let base = testnet_initial_state::initial_state_testnet();
 
-    // Cross-zone programs are base builtins, so nothing extra is registered here.
-    let mut state = base;
     // Bridge-lock holdings belong to the source side, seeded regardless of receiving config.
     let holdings: Vec<_> = bridge_lock_holdings(&config.genesis)
         .into_iter()
         .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount))
         .collect();
-    state = state.with_public_accounts(holdings);
-    // Receiving-side accounts (inbox + wrapped-token config), only when cross_zone is set.
-    if let Some(cross_zone) = &config.cross_zone {
-        let self_zone = *config.bedrock_config.channel_id.as_ref();
-        state = state.with_public_accounts(cross_zone::genesis_accounts(self_zone, cross_zone));
-    }
+    let mut state = base.with_public_accounts(holdings);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
     info!(
@@ -657,22 +650,37 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         hex::encode(state.genesis_fingerprint())
     );
 
-    let genesis_txs = config
-        .genesis
-        .iter()
-        .filter_map(|genesis_tx| match genesis_tx {
-            GenesisAction::SupplyAccount {
-                account_id,
-                balance,
-            } => Some(build_supply_account_genesis_transaction(
-                account_id, *balance,
-            )),
-            GenesisAction::SupplyBridgeAccount { balance } => {
-                Some(build_supply_bridge_account_genesis_transaction(*balance))
-            }
-            // Seeded directly (accounts via `cross_zone::genesis_accounts`), not by a genesis tx.
-            GenesisAction::SupplyBridgeLockHolding { .. } => None,
-        })
+    // Config txs seed the config accounts by transaction, so every node
+    // reconstructs them by replaying the genesis block. The wrapped-token minter is
+    // initialized on every zone (wrapped_token is a builtin), since its InitConfig
+    // is user-callable and a config PDA left default would be claimable by anyone as
+    // the first initializer (a minter hijack). The inbox allowlist is initialized
+    // only on receiving zones; the inbox is sequencer-only, so its default config
+    // PDA is not user-claimable, merely unused until the zone receives.
+    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx());
+    let inbox_config_tx = config.cross_zone.as_ref().map(|cross_zone| {
+        let self_zone = *config.bedrock_config.channel_id.as_ref();
+        cross_zone::build_inbox_init_config_tx(self_zone, cross_zone)
+    });
+    let supply_txs = config.genesis.iter().filter_map(|action| match action {
+        GenesisAction::SupplyAccount {
+            account_id,
+            balance,
+        } => Some(build_supply_account_genesis_transaction(
+            account_id, *balance,
+        )),
+        GenesisAction::SupplyBridgeAccount { balance } => {
+            Some(build_supply_bridge_account_genesis_transaction(*balance))
+        }
+        // Seeded directly (holdings via `build_holding_account`), not by a genesis tx.
+        GenesisAction::SupplyBridgeLockHolding { .. } => None,
+    });
+
+    // Applied in order with the mandatory clock last, then committed to the genesis
+    // block so external observers can replay them. Every genesis tx is public.
+    let genesis_txs = wrapped_token_config_tx
+        .chain(inbox_config_tx)
+        .chain(supply_txs)
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state

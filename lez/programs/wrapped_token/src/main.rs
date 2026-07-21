@@ -1,10 +1,10 @@
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{Account, AccountWithMetadata},
     program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
-    Instruction, balance_bytes, config_account_id, holding_account_id, holding_seed, read_balance,
-    read_minter,
+    Instruction, balance_bytes, config_account_id, config_seed, holding_account_id, holding_seed,
+    minter_bytes, read_balance, read_minter,
 };
 
 fn main() {
@@ -18,8 +18,33 @@ fn main() {
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
 
-    let Instruction::Mint { recipient, amount } = instruction;
+    match instruction {
+        Instruction::Mint { recipient, amount } => mint(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+            recipient,
+            amount,
+        ),
+        Instruction::InitConfig { minter } => init_config(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+            minter,
+        ),
+    }
+}
 
+fn mint(
+    self_program_id: lee_core::program::ProgramId,
+    caller_program_id: Option<lee_core::program::ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+    recipient: [u8; 32],
+    amount: u128,
+) {
     // pre_states: [config PDA, recipient holding PDA].
     let [config, holding] = <[AccountWithMetadata; 2]>::try_from(pre_states)
         .expect("Mint requires the config and recipient holding accounts");
@@ -65,6 +90,54 @@ fn main() {
         instruction_words,
         vec![config, holding],
         vec![config_post, holding_post],
+    )
+    .write();
+}
+
+/// Writes the authorized minter into the config PDA exactly once at genesis.
+fn init_config(
+    self_program_id: lee_core::program::ProgramId,
+    caller_program_id: Option<lee_core::program::ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+    minter: lee_core::program::ProgramId,
+) {
+    assert!(
+        caller_program_id.is_none(),
+        "InitConfig is a top-level genesis transaction"
+    );
+
+    // pre_states: [config PDA].
+    let [config] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+        .expect("InitConfig requires the config account");
+    assert_eq!(
+        config.account_id,
+        config_account_id(self_program_id),
+        "account must be the wrapped-token config PDA"
+    );
+    // Init-once: a default pre-state cannot be re-run to overwrite the minter, and
+    // `new_claimed_if_default` alone would not stop the owning program from
+    // rewriting its own config data on a later call.
+    assert_eq!(
+        config.account,
+        Account::default(),
+        "wrapped-token config already initialized"
+    );
+
+    let mut config_account = config.account.clone();
+    config_account.data = minter_bytes(minter)
+        .to_vec()
+        .try_into()
+        .expect("minter id fits in account data");
+    let config_post =
+        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        vec![config],
+        vec![config_post],
     )
     .write();
 }

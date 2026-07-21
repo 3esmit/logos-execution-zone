@@ -93,18 +93,15 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
-        // Cross-zone programs are base builtins, so none are seeded here.
-        // Bridge-lock holdings (source side) always; inbox + wrapped-token config only when
-        // cross_zone is set.
-        let mut genesis_accounts: Vec<_> = config
+        // Cross-zone programs are base builtins, and their config accounts are
+        // reconstructed by replaying the genesis block's InitConfig transactions;
+        // neither is seeded here. Only bridge-lock holdings (source side), not
+        // produced by any transaction, are still seeded directly.
+        let genesis_accounts: Vec<_> = config
             .bridge_lock_holdings
             .iter()
             .map(|holding| cross_zone::build_holding_account(holding.holder, holding.amount))
             .collect();
-        if let Some(cross_zone) = config.cross_zone.as_ref() {
-            let self_zone: [u8; 32] = *config.channel_id.as_ref();
-            genesis_accounts.extend(cross_zone::genesis_accounts(self_zone, cross_zone));
-        }
 
         // Option B verifier: re-derives each cross-zone dispatch from the peer's
         // finalized blocks. `None` when cross-zone messaging is disabled.

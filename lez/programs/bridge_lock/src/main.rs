@@ -36,7 +36,10 @@ fn main() {
     let WrappedInstruction::Mint {
         amount: mint_amount,
         ..
-    } = decode_mint(&payload);
+    } = decode_mint(&payload)
+    else {
+        panic!("bridge_lock payload must be a wrapped-token mint");
+    };
     assert_eq!(
         mint_amount, amount,
         "locked amount must equal the wrapped mint amount"
