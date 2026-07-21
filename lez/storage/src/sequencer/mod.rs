@@ -446,6 +446,14 @@ impl RocksDBIO {
         Ok(removed)
     }
 
+    /// Whether a bridge deposit for `deposit_op_id` is already recorded as
+    /// included in a block (its pending record is marked submitted).
+    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
+        Ok(self.get_pending_deposit_events()?.iter().any(|record| {
+            record.deposit_op_id == deposit_op_id && record.submitted_in_block_id.is_some()
+        }))
+    }
+
     fn increment_unseen_withdraw_count(
         &self,
         withdrawal: WithdrawalReconciliationKey,

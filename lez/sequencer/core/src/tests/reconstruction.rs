@@ -203,19 +203,20 @@ fn build_public_withdraw_tx(
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }
 
-/// The channel is ahead of the local store and its extra blocks carry
-/// bridge deposit and withdraw transactions. Reconstruction must replay them,
-/// reproducing both the minted/burned balances and the withdraw reconciliation
-/// bookkeeping the production path records.
+/// The cold-start backfill re-delivers an already-finalized deposit into the
+/// mempool before reconstruction applies the same deposit block, and the queued
+/// mint cannot be pulled back out. Since the bridge program does not dedup on
+/// `l1_deposit_op_id`, block production must skip the already-submitted deposit
+/// so the vault is minted exactly once.
 #[tokio::test]
-async fn reconstructs_channel_with_deposit_and_withdraw() {
+async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let recipient = initial_public_user_accounts()[0].account_id;
     let deposit_amount = 500_u64;
     let withdraw_amount = 100_u64;
     let bedrock_account_pk = [0x22_u8; 32];
     let deposit_op_id = [0x0d_u8; 32];
 
-    // Sequencer A: a deposit block (sequencer-origin) then a withdraw block (user).
+    // Sequencer A produces a deposit block then a withdraw block.
     let config_a = bridge_funded_config();
     let (mut seq_a, mempool_a) =
         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
@@ -224,7 +225,7 @@ async fn reconstructs_channel_with_deposit_and_withdraw() {
     let deposit_tx =
         crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
     mempool_a
-        .push((TransactionOrigin::Sequencer, deposit_tx))
+        .push((TransactionOrigin::Sequencer, deposit_tx.clone()))
         .await
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
@@ -247,46 +248,77 @@ async fn reconstructs_channel_with_deposit_and_withdraw() {
     let tip_slot = messages.last().unwrap().1;
     let channel_id = config_a.bedrock_config.channel_id;
 
-    // Sequencer B reconstructs A's chain (bridge blocks included) from empty.
     let config_b = bridge_funded_config();
-    let (mut store_b, mut state_b) =
-        SequencerCore::<MockBlockPublisher>::open_or_create_store(&config_b);
+    let (mut seq_b, mempool_b) = SequencerCoreWithMockClients::start_from_config(config_b).await;
+
+    // Backfill re-delivery: persist the pending record and queue the mint, as
+    // `on_deposit_event` does, before reconstruction runs.
+    assert!(
+        seq_b
+            .block_store()
+            .dbio()
+            .add_pending_deposit_event(deposit_record.clone())
+            .unwrap()
+    );
+    mempool_b
+        .push((TransactionOrigin::Sequencer, deposit_tx))
+        .await
+        .unwrap();
+
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
         &mock_b,
-        &mut store_b,
-        &mut state_b,
+        &mut seq_b.store,
+        &mut seq_b.state,
         true,
     )
     .await
     .expect("reconstruct");
+    seq_b.chain_height = seq_b.store.latest_block_meta().unwrap().id;
 
-    let tip_b = store_b.latest_block_meta().unwrap();
+    let tip_b = seq_b.block_store().latest_block_meta().unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
 
-    // The deposit minted into the vault and the withdraw burned from the sender —
-    // reconstructed balances agree with sequencer A for every affected account.
+    seq_b.produce_new_block().await.unwrap();
+
     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
     let bridge_id = system_accounts::bridge_account_id();
     for account in [vault_id, bridge_id, recipient] {
         assert_eq!(
-            state_b.get_account_by_id(account).balance,
+            seq_b.state().get_account_by_id(account).balance,
             seq_a.state().get_account_by_id(account).balance,
             "reconstructed balance mismatch for {account:?}",
         );
     }
     assert_eq!(
-        state_b.get_account_by_id(vault_id).balance,
+        seq_b.state().get_account_by_id(vault_id).balance,
         u128::from(deposit_amount),
-        "deposit must mint into the recipient vault"
+        "deposit must mint into the recipient vault exactly once, not twice"
     );
 
-    // Reconstruction recorded the withdraw so the later L1 withdraw event reconciles.
+    let produced = seq_b
+        .block_store()
+        .get_block_at_id(tip_b.id + 1)
+        .unwrap()
+        .expect("produced block present");
+    assert!(
+        !produced
+            .body
+            .transactions
+            .iter()
+            .any(|tx| crate::extract_bridge_deposit_id(tx) == Some(HashType(deposit_op_id))),
+        "the re-delivered mint must be skipped, not re-included in a block"
+    );
+
     let withdraw_arg = crate::extract_bridge_withdraw_data(&withdraw_tx).expect("withdraw data");
     let key = crate::withdraw_event_reconciliation_key(&withdraw_arg.outputs).expect("recon key");
     assert!(
-        store_b.dbio().consume_unseen_withdraw_count(key).unwrap(),
+        seq_b
+            .block_store()
+            .dbio()
+            .consume_unseen_withdraw_count(key)
+            .unwrap(),
         "reconstruction must record an unseen withdraw for bridge reconciliation"
     );
 }

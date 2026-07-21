@@ -615,6 +615,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 };
 
                 if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
+                    if self
+                        .store
+                        .is_deposit_event_submitted(deposit_op_id)
+                        .context("Failed to check whether deposit was already submitted")?
+                    {
+                        info!("Skipping already-submitted bridge deposit {deposit_op_id}");
+                        return Ok(false);
+                    }
                     deposit_event_ids.push(deposit_op_id);
                 }
 
