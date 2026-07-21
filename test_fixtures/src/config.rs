@@ -205,7 +205,7 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
         seq_block_poll_max_amount: 100,
         multi_sequencer_client_config: MultiSequencerClientConfig {
             distribution_limit: 1,
-            callibration_limit: 5,
+            calibration_limit: 5,
         },
     })
 }

@@ -34,6 +34,17 @@ pub struct StatisticsUpdate {
     pub is_failed: bool,
 }
 
+impl StatisticsUpdate {
+    #[must_use]
+    pub const fn failure() -> Self {
+        Self {
+            latency: 0_f32,
+            new_latest_block_id: None,
+            is_failed: true,
+        }
+    }
+}
+
 impl Statistics {
     pub fn apply_updates(&mut self, updates: &[StatisticsUpdate]) {
         let CumulativeUpdates {
@@ -77,8 +88,8 @@ impl Statistics {
 #[derive(Clone)]
 pub struct MultiSequencerClient {
     /// Ordered list of leaders, from best to worst.
-    pub leader_list: Vec<(SequencerClient, Url)>,
-    pub multi_sequencer_client_config: MultiSequencerClientConfig,
+    leader_list: Vec<(SequencerClient, Url)>,
+    config: MultiSequencerClientConfig,
     /// Wrapping statistic updates in Arc<RwLock> to not break interfaces too much.
     ///  
     /// It is assumed, that wallet methods can be accesed via immutable reference.
@@ -128,8 +139,11 @@ impl MultiSequencerClient {
 
                 client_list.insert(sequencer_addr.clone(), sequencer_client);
             // Otherwise calibrate client data
-            } else if let Some(client_statistics) =
-                calibrate_client(&sequencer_client, multi_sequencer_client_config.calibration_limit).await
+            } else if let Some(client_statistics) = calibrate_client(
+                &sequencer_client,
+                multi_sequencer_client_config.calibration_limit,
+            )
+            .await
             {
                 statistics.insert(sequencer_addr.clone(), client_statistics);
                 client_list.insert(sequencer_addr.clone(), sequencer_client);
@@ -147,6 +161,8 @@ impl MultiSequencerClient {
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
 
+        assert_ne!(leader_list.len(), 0);
+
         log::info!("Chosen leaders is {leader_list:?}");
 
         Ok(leader_list)
@@ -157,11 +173,12 @@ impl MultiSequencerClient {
         statistics: &mut HashMap<Url, Statistics>,
         multi_sequencer_client_config: MultiSequencerClientConfig,
     ) -> Result<Self> {
-        let leader_list = Self::setup(conn_data, statistics, &multi_sequencer_client_config).await?;
+        let leader_list =
+            Self::setup(conn_data, statistics, &multi_sequencer_client_config).await?;
 
         Ok(Self {
             leader_list,
-            multi_sequencer_client_config,
+            config: multi_sequencer_client_config,
             statistic_updates: Arc::new(RwLock::new(HashMap::new())),
         })
     }
@@ -184,61 +201,107 @@ impl MultiSequencerClient {
 
     #[must_use]
     pub fn leaders(&self) -> &[(SequencerClient, Url)] {
-        &self.leader_list.as_ref()
+        self.leader_list.as_ref()
     }
 
     #[must_use]
     pub fn helm(&self) -> &(SequencerClient, Url) {
-        &self.leader_list.first().expect("At least one leader must be set")
+        self.leader_list
+            .first()
+            .expect("At least one leader must be set")
+    }
+
+    #[must_use]
+    pub const fn config(&self) -> &MultiSequencerClientConfig {
+        &self.config
     }
 
     /// Metered call for main leader(helm), to get data, necessary for send call.
-    pub async fn metered_get<R, E, I: AsyncFnOnce(&SequencerClient) -> Result<R, E>>(
+    ///
+    /// If current leader errors, we ask next one in list.
+    pub async fn metered_get<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
         &self,
         call: I,
     ) -> Result<R, E> {
+        // Collecting all statistics into one map to lock updates only once
+        let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
+
         let (helm, helm_url) = self.helm();
 
-        let (resp, statistics_update) =
-            tokio::join!(call(helm), actualize_client(helm));
+        let (mut resp, statistics_update) = tokio::join!(call(helm), actualize_client(helm));
 
-        log::debug!(
-            "Metered call for {:?}, statistic updates is {:?}",
-            helm_url,
-            statistics_update
-        );
+        log::debug!("Metered call for {helm_url:?}, statistic updates is {statistics_update:?}",);
+
+        statistic_map
+            .entry(helm_url.clone())
+            .or_default()
+            .push(statistics_update);
+
+        if resp.is_err() {
+            statistic_map
+                .entry(helm_url.clone())
+                .or_default()
+                .push(StatisticsUpdate::failure());
+
+            for (leader, leader_url) in self.leaders().iter().skip(1) {
+                let (curr_resp, statistics_update) =
+                    tokio::join!(call(leader), actualize_client(leader));
+
+                log::debug!(
+                    "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
+                );
+
+                statistic_map
+                    .entry(leader_url.clone())
+                    .or_default()
+                    .push(statistics_update);
+
+                resp = curr_resp;
+
+                if resp.is_err() {
+                    statistic_map
+                        .entry(leader_url.clone())
+                        .or_default()
+                        .push(StatisticsUpdate::failure());
+                } else {
+                    break;
+                }
+            }
+        }
 
         {
             let mut statistic_updates_guard = self.statistic_updates.write().await;
-            statistic_updates_guard.entry(helm_url.clone()).or_default().push(statistics_update);
+
+            statistic_updates_guard.extend(statistic_map.into_iter());
         }
 
         resp
     }
 
-    /// Metered call for `distribution_limit` amount of leaders for sending data, usually transaction.
+    /// Metered call for `distribution_limit` amount of leaders for sending data, usually
+    /// transaction.
     pub async fn metered_send<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
         &self,
         call: I,
     ) -> Vec<Result<R, E>> {
-        let leaders = self.leaders().iter().take(self.multi_sequencer_client_config.distribution_limit);
+        let leaders = self.leaders().iter().take(self.config().distribution_limit);
 
         // Collecting all statistics into one map to lock updates only once
         let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
 
         let mut results = vec![];
-        
+
         for (leader, leader_url) in leaders {
-            let (resp, statistics_update) =
-            tokio::join!(call(leader), actualize_client(leader));
+            let (resp, statistics_update) = tokio::join!(call(leader), actualize_client(leader));
 
             log::debug!(
-            "Metered call for {:?}, statistic updates is {:?}",
-            leader_url,
-            statistics_update
+                "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
             );
 
-            statistic_map.entry(leader_url.clone()).or_default().push(statistics_update);
+            statistic_map
+                .entry(leader_url.clone())
+                .or_default()
+                .push(statistics_update);
             results.push(resp);
         }
 
@@ -252,14 +315,17 @@ impl MultiSequencerClient {
     }
 
     /// Update statistics of a leader, clear statistic updates log.
-    pub async fn update_statistics(&self, statistics: &mut HashMap<Url, Statistics>,) {
+    pub async fn update_statistics(&self, statistics: &mut HashMap<Url, Statistics>) {
         let mut statistic_updates = self.statistic_updates.write().await;
 
+        #[expect(clippy::iter_over_hash_type, reason = "Ordering is unnecesary here")]
         for (addr, statistic_updates_vec) in statistic_updates.iter() {
-            let leader_statistic = statistics.get_mut(addr).expect("Leader statistic must be present after setup");
+            let leader_statistic = statistics
+                .get_mut(addr)
+                .expect("Leader statistic must be present after setup");
             leader_statistic.apply_updates(statistic_updates_vec.as_slice());
         }
-        
+
         statistic_updates.clear();
     }
 }
@@ -495,7 +561,7 @@ pub fn choose_leaders(
         // +left_std]
         //
         // is still better, but it is up to discussion
-        if (right_lat <= right_lat) && ((right_lat + right_std) < (left_lat + left_std)) {
+        if (right_lat <= left_lat) && ((right_lat + right_std) < (left_lat + left_std)) {
             std::cmp::Ordering::Less
         } else {
             std::cmp::Ordering::Greater
@@ -878,7 +944,7 @@ mod tests {
 
         let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        let (_, leader_url) = leaders.first().unwrap(); 
+        let (_, leader_url) = leaders.first().unwrap();
 
         assert_eq!(leader_url, &addr_leader);
     }
@@ -950,7 +1016,7 @@ mod tests {
 
         let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        let (_, leader_url) = leaders.first().unwrap(); 
+        let (_, leader_url) = leaders.first().unwrap();
 
         assert_eq!(leader_url, &addr_leader);
     }
@@ -1022,7 +1088,7 @@ mod tests {
 
         let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        let (_, leader_url) = leaders.first().unwrap(); 
+        let (_, leader_url) = leaders.first().unwrap();
 
         assert_eq!(leader_url, &addr_leader);
     }
@@ -1094,7 +1160,7 @@ mod tests {
 
         let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
 
-        let (_, leader_url) = leaders.first().unwrap(); 
+        let (_, leader_url) = leaders.first().unwrap();
 
         assert_eq!(leader_url, &addr_leader);
     }

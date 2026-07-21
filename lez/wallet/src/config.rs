@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 const DEFAULT_CALLIBRATION_LIMIT: usize = 100;
+const DEFAULT_DISTRIBUTION_LIMIT: usize = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
@@ -38,17 +39,17 @@ pub struct GasConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiSequencerClientConfig {
-    /// Maximum numbers of sequencers to send requests
+    /// Maximum numbers of sequencers to send requests.
     pub distribution_limit: usize,
-    /// Limit number of sequencer polls during callibration, should not be zero
+    /// Limit number of sequencer polls during callibration, should not be zero.
     pub calibration_limit: usize,
 }
 
 impl Default for MultiSequencerClientConfig {
     fn default() -> Self {
         Self {
-            distribution_limit: 1,
-            calibration_limit: 100,
+            distribution_limit: DEFAULT_DISTRIBUTION_LIMIT,
+            calibration_limit: DEFAULT_CALLIBRATION_LIMIT,
         }
     }
 }
@@ -67,7 +68,7 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// CURR_TODO: Add default serialization
+    #[serde(default = "MultiSequencerClientConfig::default")]
     pub multi_sequencer_client_config: MultiSequencerClientConfig,
 }
 
@@ -169,8 +170,4 @@ impl WalletConfig {
             *multi_sequencer_client_config = v;
         }
     }
-}
-
-const fn default_calibration_limit() -> usize {
-    DEFAULT_CALLIBRATION_LIMIT
 }
