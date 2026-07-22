@@ -246,7 +246,8 @@ impl MultiSequencerClient {
         // Collecting all statistics into one map to lock updates only once
         let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
 
-        // We need helm response to avoid constructing guard Result<R, E>, which we can not do with generics. 
+        // We need helm response to avoid constructing guard Result<R, E>, which we can not do with
+        // generics.
         let (helm, helm_url) = self.helm();
 
         let mut resp = self
