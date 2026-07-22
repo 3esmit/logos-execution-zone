@@ -2,8 +2,8 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-pub use chain_consistency::BlockIngestError;
-use chain_consistency::{Anchor, ChainConsistency};
+pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
+use chain_state::{Anchor, ChainConsistency};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
@@ -12,10 +12,9 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use retry::ApplyRetryGate;
-pub use status::StallReason;
 
 use crate::{
-    block_store::{AcceptOutcome, IndexerStore},
+    block_store::IndexerStore,
     config::IndexerConfig,
     cross_zone_verifier::CrossZoneVerifier,
     status::{IndexerStatus, IndexerSyncStatus},
@@ -136,8 +135,7 @@ impl IndexerCore {
             return Ok(ChainConsistency::Inconclusive);
         };
 
-        chain_consistency::verify_chain_consistency(&self.node, self.config.channel_id, &anchor)
-            .await
+        chain_state::verify_chain_consistency(&self.node, self.config.channel_id, &anchor).await
     }
 
     /// Builds the anchor for the startup check.

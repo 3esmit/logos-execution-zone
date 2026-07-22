@@ -8,7 +8,7 @@
     reason = "Integration tests live at crate root and don't care about these lints"
 )]
 
-use std::{net::SocketAddr, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
@@ -16,11 +16,11 @@ use integration_tests::L2_TO_L1_TIMEOUT;
 use lee::{AccountId, PrivateKey, PublicKey};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use sequencer_core::config::GenesisAction;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     config::{SequencerPartialConfig, UrlProtocol, addr_to_url},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, setup_bedrock_node, setup_indexer},
+    setup::{SequencerSetup, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use tokio::test;
 
@@ -39,13 +39,6 @@ fn slow_blocks() -> SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(30),
         ..SequencerPartialConfig::default()
     }
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = addr_to_url(UrlProtocol::Http, addr).context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }
 
 /// Polls the indexer's last finalized block id until it reaches `target`. The

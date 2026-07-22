@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use anyhow::Result;
 use clap::Parser;
@@ -12,6 +15,14 @@ struct Args {
     config_path: PathBuf,
     #[clap(short, long, default_value = "3040")]
     port: u16,
+    /// Interface the RPC server binds to. The RPC has no caller auth —
+    /// bind loopback unless the port is firewalled.
+    #[clap(long, default_value = "0.0.0.0")]
+    listen_address: IpAddr,
+    /// Override the config's home directory (`RocksDB` + bedrock signing key),
+    /// so multiple instances can share one config file.
+    #[clap(long)]
+    home: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -22,14 +33,23 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args { config_path, port } = Args::parse();
+    let Args {
+        config_path,
+        port,
+        listen_address,
+        home,
+    } = Args::parse();
 
     // TODO: handle this cancellation token more gracefully within Sequencer service
     // similar to how we do in Indexer
     let cancellation_token = listen_for_shutdown_signal();
 
-    let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    let sequencer_handle = sequencer_service::run(config, port).await?;
+    let mut config = sequencer_service::SequencerConfig::from_path(&config_path)?;
+    if let Some(home) = home {
+        config.home = home;
+    }
+    let sequencer_handle =
+        sequencer_service::run(config, SocketAddr::new(listen_address, port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {

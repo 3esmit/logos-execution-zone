@@ -1,23 +1,44 @@
 use std::{pin::Pin, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
 use futures::Stream;
 use log::{info, warn};
-pub use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
-pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
+pub use logos_blockchain_core::mantle::ops::channel::{Ed25519PublicKey, MsgId};
+use logos_blockchain_core::{
+    mantle::{
+        MantleTx, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
+        ops::{
+            Op, OpProof,
+            channel::{
+                ChannelId,
+                config::{ChannelConfigOp, Keys},
+                inscribe::Inscription,
+            },
+        },
+    },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+};
+pub use logos_blockchain_key_management_system_service::keys::{
+    ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey,
+};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage,
     adapter::{Node as _, NodeHttpClient},
     indexer::ZoneIndexer,
     sequencer::{
-        DepositInfo, Event, FinalizedOp, InscriptionInfo,
-        SequencerConfig as ZoneSdkSequencerConfig, WithdrawArg, WithdrawInfo, ZoneSequencer,
+        DepositInfo, Event, FinalizedOp, InscriptionInfo, OrphanedTx,
+        SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+        ZoneSequencer,
     },
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot, watch},
+    task::JoinHandle,
+};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::BedrockConfig;
 
@@ -43,6 +64,36 @@ pub type OnDepositEventSink =
 pub type OnWithdrawEventSink =
     Box<dyn Fn(WithdrawInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
+/// The channel delta the follow path consumes from one `Event::BlocksProcessed`,
+/// with inscription payloads decoded into `(MsgId, Block)` pairs.
+pub struct FollowUpdate {
+    /// Inscriptions newly on the followed L1 branch, in channel order: they
+    /// extend (or, after a reorg, replace part of) the `head` tier.
+    pub adopted: Vec<(MsgId, Block)>,
+    /// Inscriptions dropped from the branch by an L1 reorg: their blocks are
+    /// reverted from the `head` and their user txs resubmitted to the mempool.
+    pub orphaned: Vec<(MsgId, Block)>,
+    /// Inscriptions whose containing L1 block reached finality: their blocks
+    /// move into the irreversible `final` tier.
+    pub finalized: Vec<(MsgId, Block)>,
+}
+
+/// Sink for the follow path: apply adopted/finalized blocks to chain state and
+/// revert orphaned ones.
+pub type OnFollowSink = Box<dyn Fn(FollowUpdate) + Send + 'static>;
+
+/// Commands the drive task executes with `&mut sequencer`.
+enum Command {
+    /// Publish an inscription (+ atomic withdrawals); responds with the assigned `MsgId`.
+    Publish {
+        inscription: Inscription,
+        withdrawals: Vec<WithdrawArg>,
+        resp: oneshot::Sender<Result<MsgId>>,
+    },
+}
+
+type CommandSender = mpsc::Sender<Command>;
+
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Sized {
     #[expect(
@@ -58,13 +109,22 @@ pub trait BlockPublisherTrait: Sized {
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
         on_withdraw_event: OnWithdrawEventSink,
+        on_follow: OnFollowSink,
     ) -> Result<Self>;
 
-    /// Fire-and-forget publish. Zone-sdk drives the actual submission and
-    /// retries internally; this just hands the payload off.
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
+    /// Publish a block and return the `MsgId` zone-sdk assigned its inscription.
+    /// Zone-sdk drives the actual submission and retries internally.
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId>;
 
     fn channel_id(&self) -> ChannelId;
+
+    /// Whether this sequencer is currently authorized to write to the channel.
+    fn is_our_turn(&self) -> bool;
+
+    /// A [`CancellationToken`] cancelled when the publisher's background driver
+    /// terminates (a panicked sink, an ended event stream). No channel events
+    /// are processed past that point, so the node must halt.
+    fn driver_cancellation(&self) -> CancellationToken;
 
     /// Current channel frontier slot on the connected chain, or `None` if the
     /// channel does not exist there. Drives the startup frontier check.
@@ -85,7 +145,10 @@ pub struct ZoneSdkPublisher {
     /// Direct node handle retained for channel reads (startup consistency check
     /// and reconstruction); the sequencer itself lives in the drive task.
     node: NodeHttpClient,
-    publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
+    command_tx: CommandSender,
+    turn_rx: watch::Receiver<TurnNotification>,
+    // Cancelled when the drive task ends for any reason, including a panic.
+    driver_cancellation: CancellationToken,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
     indexer: ZoneIndexer<NodeHttpClient>,
@@ -109,6 +172,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
         on_withdraw_event: OnWithdrawEventSink,
+        on_follow: OnFollowSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
@@ -129,11 +193,18 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         // Grab readiness receiver before moving the sequencer into the drive
         // task so we can await cold-start completion below.
         let mut ready_rx = sequencer.subscribe_ready();
+        // Grab the turn watch before the move; the sdk actor keeps it current.
+        let turn_rx = sequencer.subscribe_turn_to_write();
 
-        let (publish_tx, mut publish_rx) =
-            mpsc::channel::<(Inscription, Vec<WithdrawArg>)>(PUBLISH_INBOX_CAPACITY);
+        let (command_tx, mut command_rx): (CommandSender, _) =
+            mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
+        let driver_cancellation = CancellationToken::new();
+        let driver_guard = driver_cancellation.clone().drop_guard();
         let drive_task = tokio::spawn(async move {
+            // Dropped when this task ends (including panics in the sinks),
+            // cancelling every `driver_cancellation`.
+            let _driver_guard = driver_guard;
             loop {
                 #[expect(
                     clippy::integer_division_remainder_used,
@@ -141,32 +212,38 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                 )]
                 {
                     tokio::select! {
-                        // Drain external publish requests by calling the
-                        // borrowing handle — `&mut sequencer` is only
-                        // available here.
-                        Some((data_bounded, withdrawals)) = publish_rx.recv() => {
-                            let data_byte_size = data_bounded.len();
-                            if withdrawals.is_empty() {
-                                if let Err(e) = sequencer.handle()
-                                                .publish(data_bounded)
-                                                .context("Failed to publish block") {
-                                                    warn!("zone-sdk publish failed: {e:?}");
-                                                }
-
-                                info!("Published block with the size of {data_byte_size} bytes");
-                            } else {
+                        // Drain external commands by calling the borrowing
+                        // handle — `&mut sequencer` is only available here.
+                        Some(command) = command_rx.recv() => match command {
+                            Command::Publish { inscription: data_bounded, withdrawals, resp: resp_tx } => {
+                                let data_byte_size = data_bounded.len();
                                 let withdraw_count = withdrawals.len();
-                                if let Err(e) = sequencer.handle()
-                                                .publish_atomic_withdraw(data_bounded, withdrawals)
-                                                .context("Failed to publish block with withdrawals") {
-                                                    warn!("zone-sdk publish failed: {e:?}");
-                                                }
+                                let published = if withdrawals.is_empty() {
+                                    sequencer.handle()
+                                        .publish(data_bounded)
+                                        .context("Failed to publish block")
+                                } else {
+                                    sequencer.handle()
+                                        .publish_atomic_withdraw(data_bounded, withdrawals)
+                                        .context("Failed to publish block with withdrawals")
+                                };
 
-                                info!(
-                                    "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
-                                );
+                                let msg_result = published
+                                    .map(|(result, _checkpoint)| result.tx.inscription().this_msg);
+                                match &msg_result {
+                                    Ok(_) if withdraw_count == 0 => {
+                                        info!("Published block with the size of {data_byte_size} bytes");
+                                    }
+                                    Ok(_) => {
+                                        info!(
+                                            "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+                                        );
+                                    }
+                                    Err(e) => warn!("zone-sdk publish failed: {e:?}"),
+                                }
+                                let _dontcare = resp_tx.send(msg_result);
                             }
-                        }
+                        },
                         event = sequencer.next_event() => {
                             let Some(event) = event else {
                                 continue;
@@ -174,17 +251,32 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
-                                    channel_update: _,
+                                    channel_update,
                                     finalized,
                                 } => {
                                     on_checkpoint(checkpoint);
+
+                                    let adopted = channel_update
+                                        .adopted
+                                        .iter()
+                                        .filter_map(block_from_inscription)
+                                        .collect();
+                                    let orphaned = channel_update
+                                        .orphaned
+                                        .iter()
+                                        .map(orphan_inscription)
+                                        .filter_map(block_from_inscription)
+                                        .collect();
+
+                                    let mut finalized_blocks = Vec::new();
                                     for op in finalized.into_iter().flat_map(|item| item.ops) {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                if let Some(block_id) =
-                                                    block_id_from_inscription(&inscription)
+                                                if let Some((msg, block)) =
+                                                    block_from_inscription(&inscription)
                                                 {
-                                                    on_finalized_block(block_id);
+                                                    on_finalized_block(block.header.block_id);
+                                                    finalized_blocks.push((msg, block));
                                                 }
                                             }
                                             FinalizedOp::Deposit(deposit) => {
@@ -195,8 +287,22 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                             }
                                         }
                                     }
+
+                                    on_follow(FollowUpdate {
+                                        adopted,
+                                        orphaned,
+                                        finalized: finalized_blocks,
+                                    });
                                 }
-                                Event::Ready | Event::TurnNotification { .. } => {}
+                                Event::Ready => {}
+                                Event::TurnNotification { notification } => {
+                                    info!(
+                                        "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
+                                        notification.our_turn_to_write,
+                                        notification.starting_slot,
+                                        notification.ends_at_slot
+                                    );
+                                }
                             }
                         }
                     }
@@ -215,27 +321,44 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             channel_id: config.channel_id,
             indexer: ZoneIndexer::new(config.channel_id, node.clone()),
             node,
-            publish_tx,
+            command_tx,
+            turn_rx,
+            driver_cancellation,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
     }
 
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()> {
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
-        self.publish_tx
-            .send((data_bounded, withdrawals))
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::Publish {
+                inscription: data_bounded,
+                withdrawals,
+                resp: resp_tx,
+            })
             .await
             .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
-        Ok(())
+        resp_rx
+            .await
+            .map_err(|_closed| anyhow!("Drive task dropped the publish response"))?
     }
 
     fn channel_id(&self) -> ChannelId {
         self.channel_id
+    }
+
+    fn is_our_turn(&self) -> bool {
+        self.turn_rx.borrow().our_turn_to_write
+    }
+
+    fn driver_cancellation(&self) -> CancellationToken {
+        self.driver_cancellation.clone()
     }
 
     async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
@@ -260,13 +383,87 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     }
 }
 
-/// Deserialize inscription payload as a `Block` and return it's`block_id`.
-/// Bad payloads are logged and skipped.
-fn block_id_from_inscription(inscription: &InscriptionInfo) -> Option<u64> {
+/// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
+/// logged and skipped.
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block)> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
         .ok()
-        .map(|block| block.header.block_id)
+        .map(|block| (inscription.this_msg, block))
+}
+
+/// The inscription carried by an orphaned tx (plain or atomic-withdraw bundle).
+const fn orphan_inscription(orphan: &OrphanedTx) -> &InscriptionInfo {
+    match orphan {
+        OrphanedTx::Inscription(info) => info,
+        OrphanedTx::AtomicWithdraw(bundle) => &bundle.inscription,
+    }
+}
+
+/// Signs a `ChannelConfig` op (accredited keys + rotation params) with
+/// `signing_key` and posts it straight to the bedrock node.
+///
+/// A standalone one-shot — no running sequencer involved, so authorization is
+/// holding the admin key: the L1 rejects non-admin signers. `Ok(())` means the
+/// node accepted the transaction; channel acceptance is asynchronous and a
+/// rejection only shows up in node logs and on-chain behavior.
+pub async fn post_channel_config(
+    config: &BedrockConfig,
+    signing_key: &Ed25519Key,
+    keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: u32,
+    posting_timeout: u32,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
+) -> Result<()> {
+    ensure!(!keys.is_empty(), "Channel key list must not be empty");
+    for (name, threshold) in [
+        ("configuration_threshold", configuration_threshold),
+        ("withdraw_threshold", withdraw_threshold),
+    ] {
+        ensure!(
+            threshold >= 1 && usize::from(threshold) <= keys.len(),
+            "{name} must be between 1 and the key count ({}), got {threshold}",
+            keys.len()
+        );
+    }
+    ensure!(
+        posting_timeframe > 0 && posting_timeout >= posting_timeframe,
+        "posting_timeframe must be nonzero and posting_timeout at least as long, \
+         got {posting_timeframe} and {posting_timeout}"
+    );
+
+    let keys = Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+    let config_op = ChannelConfigOp {
+        channel: config.channel_id,
+        keys,
+        posting_timeframe: SlotTimeframe::from(posting_timeframe),
+        posting_timeout: SlotTimeout::from(posting_timeout),
+        configuration_threshold,
+        withdraw_threshold,
+    };
+
+    let mantle_tx = MantleTx([Op::ChannelConfig(config_op)].into());
+    let tx_hash = mantle_tx.hash();
+    // The admin key is `keys[0]`, hence signature index 0.
+    let signature = IndexedSignature::new(
+        0,
+        signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+    );
+    let proof = ChannelMultiSigProof::new(vec![signature])
+        .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
+    let signed_tx = SignedMantleTx {
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
+        mantle_tx,
+    };
+
+    let node = NodeHttpClient::new(
+        CommonHttpClient::new(config.auth.clone().map(Into::into)),
+        config.node_url.clone(),
+    );
+    node.post_transaction(signed_tx)
+        .await
+        .context("Failed to post channel config transaction")
 }

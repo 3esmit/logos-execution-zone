@@ -7,8 +7,12 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::block_store::{DbDump, SequencerStore};
+use sequencer_core::{
+    block_publisher::ED25519_SECRET_KEY_SIZE,
+    block_store::{DbDump, SequencerStore},
+};
 use sequencer_service::{GenesisAction, SequencerHandle};
+use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{
@@ -20,6 +24,7 @@ use wallet::{
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
     config::{self, InitialPrivateAccountForWallet},
+    indexer_client::IndexerClient,
     private_mention, public_mention,
 };
 
@@ -29,6 +34,7 @@ pub struct SequencerSetup {
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
 }
 
 impl SequencerSetup {
@@ -40,6 +46,7 @@ impl SequencerSetup {
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
             cross_zone: None,
+            bedrock_signing_key: None,
         }
     }
 
@@ -67,6 +74,15 @@ impl SequencerSetup {
         self
     }
 
+    /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
+    /// before boot, so tests know the sequencer's public key in advance (e.g.
+    /// to accredit a committee member that has not started yet).
+    #[must_use]
+    pub const fn with_bedrock_signing_key(mut self, key: [u8; ED25519_SECRET_KEY_SIZE]) -> Self {
+        self.bedrock_signing_key = Some(key);
+        self
+    }
+
     /// Set up the sequencer in a fresh temporary home directory, returning the
     /// owning [`TempDir`] alongside the handle.
     pub async fn setup(self) -> Result<(SequencerHandle, TempDir)> {
@@ -88,9 +104,15 @@ impl SequencerSetup {
             channel_id,
             genesis_transactions,
             cross_zone,
+            bedrock_signing_key,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
+
+        if let Some(key_bytes) = bedrock_signing_key {
+            std::fs::write(home.join("bedrock_signing_key"), key_bytes)
+                .context("Failed to write pre-generated bedrock signing key")?;
+        }
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis
@@ -119,7 +141,7 @@ impl SequencerSetup {
         )
         .context("Failed to create Sequencer config")?;
 
-        sequencer_service::run(config, 0)
+        sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
             .await
             .context("Failed to run Sequencer Service")
     }
@@ -137,6 +159,24 @@ fn load_prebuilt_dump() -> Result<DbDump> {
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read prebuilt db dump at {}", path.display()))?;
     DbDump::from_bytes(&bytes).context("Failed to deserialize prebuilt db dump")
+}
+
+/// Builds an HTTP RPC client for the sequencer at `addr`.
+pub fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
+    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
+        .context("Failed to build sequencer URL")?;
+    SequencerClientBuilder::default()
+        .build(url)
+        .context("Failed to build sequencer client")
+}
+
+/// Builds a WebSocket RPC client for the indexer at `addr`.
+pub async fn indexer_client(addr: SocketAddr) -> Result<IndexerClient> {
+    let url = config::addr_to_url(config::UrlProtocol::Ws, addr)
+        .context("Failed to build indexer URL")?;
+    IndexerClient::new(&url)
+        .await
+        .context("Failed to build indexer client")
 }
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {

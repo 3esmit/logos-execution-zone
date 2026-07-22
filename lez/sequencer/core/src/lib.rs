@@ -1,17 +1,23 @@
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
-use chain_consistency::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, Tip};
+use chain_state::{
+    AcceptOutcome, Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, ChainState, Tip,
+};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, HashableBlockData},
+    block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
 use futures::StreamExt as _;
 use itertools::Itertools as _;
-use lee::{AccountId, PublicTransaction, V03State, public_transaction::Message};
+use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -30,7 +36,7 @@ use storage::sequencer::{
 };
 
 use crate::{
-    block_publisher::{BlockPublisherTrait, ZoneSdkPublisher},
+    block_publisher::{BlockPublisherTrait, MsgId, ZoneSdkPublisher},
     block_store::SequencerStore,
 };
 
@@ -56,18 +62,13 @@ struct DepositMetadata {
     recipient_id: lee::AccountId,
 }
 
-impl DepositMetadata {
-    fn decode(bytes: &[u8]) -> Result<Self, std::io::Error> {
-        Self::try_from_slice(bytes)
-    }
-}
-
 pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
-    state: lee::V03State,
+    /// Two-tier chain state: production builds on its head; the publisher's
+    /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
+    chain: Arc<Mutex<ChainState>>,
     store: SequencerStore,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
-    chain_height: u64,
     block_publisher: BP,
 }
 
@@ -120,14 +121,66 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
     }
 
+    /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
+    /// final snapshot (pre-genesis state when absent), the head tier by replaying
+    /// every stored block above it, so a post-restart orphan can still revert.
+    fn restore_chain_state(
+        config: &SequencerConfig,
+        store: &SequencerStore,
+        stored_head_state: &lee::V03State,
+    ) -> ChainState {
+        let final_snapshot = store
+            .dbio()
+            .get_final_snapshot()
+            .expect("Failed to read final snapshot from store");
+        let (final_state, final_tip) = match final_snapshot {
+            Some((state, meta)) => (state, Some(Tip::from(meta))),
+            // Nothing finalized yet: replay the whole stored chain.
+            None => (build_initial_state(config), None),
+        };
+        let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);
+
+        let mut head_blocks = store
+            .get_all_blocks()
+            .filter_ok(|block| block.header.block_id > boundary)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("Failed to read blocks from store while restoring chain state");
+        head_blocks.sort_unstable_by_key(|block| block.header.block_id);
+
+        let mut chain = ChainState::from_final(final_state, final_tip);
+        for block in head_blocks {
+            let block_id = block.header.block_id;
+            chain.restore_head_block(block).unwrap_or_else(|err| {
+                panic!("Stored block {block_id} does not replay while restoring chain state: {err}")
+            });
+        }
+
+        // The replayed head must reproduce the persisted state, else store
+        // and config disagree (e.g. edited genesis actions).
+        assert!(
+            chain.head_state() == stored_head_state,
+            "Persisted state does not match the replayed chain; reset the store or restore the original config"
+        );
+
+        chain
+    }
+
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
+        info!(
+            "Bedrock signing public key: {}",
+            hex::encode(bedrock_signing_key.public_key().to_bytes())
+        );
 
-        let (mut store, mut state) = Self::open_or_create_store(&config);
+        let (store, state) = Self::open_or_create_store(&config);
+
+        let chain = Arc::new(Mutex::new(Self::restore_chain_state(
+            &config, &store, &state,
+        )));
 
         let initial_checkpoint = store
             .get_zone_checkpoint()
@@ -146,6 +199,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::on_finalized_block(store.dbio()),
             Self::on_deposit_event(store.dbio(), mempool_handle.clone()),
             Self::on_withdraw_event(store.dbio()),
+            Self::on_follow(store.dbio(), Arc::clone(&chain), mempool_handle.clone()),
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -163,15 +217,15 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // Before producing, verify our local state still belongs to the chain
         // the channel serves and replay any channel blocks we are missing
         // (e.g. from other sequencers).
-        let chanel_was_empty =
-            Self::verify_and_reconstruct(&block_publisher, &mut store, &mut state, is_fresh_start)
+        let channel_was_empty =
+            Self::verify_and_reconstruct(&block_publisher, &store, &chain, is_fresh_start)
                 .await
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
         // Publish our blocks only when bootstrapping an empty channel. If the
         // channel already has blocks (another sequencer bootstrapped it), we
         // adopted them during reconstruction instead.
-        if is_fresh_start && chanel_was_empty {
+        if is_fresh_start && channel_was_empty {
             let mut pending_blocks = store
                 .get_all_blocks()
                 .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
@@ -199,16 +253,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        let latest_block_meta = store
-            .latest_block_meta()
-            .expect("Failed to read latest block meta from store")
-            .expect("Sequencer store should have at least the genesis block after reconstruction");
-
         let sequencer_core = Self {
-            state,
+            chain,
             store,
             mempool,
-            chain_height: latest_block_meta.id,
             sequencer_config: config,
             block_publisher,
         };
@@ -224,8 +272,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Returns whatever channel was empty or not.
     async fn verify_and_reconstruct(
         publisher: &BP,
-        store: &mut SequencerStore,
-        state: &mut V03State,
+        store: &SequencerStore,
+        chain: &Mutex<ChainState>,
         is_fresh_start: bool,
     ) -> Result<bool> {
         let anchor_record = store
@@ -322,7 +370,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 )
             })?;
             channel_is_empty = false;
-            Self::apply_reconstructed_block(store, state, &block, slot)?;
+            // Locked per message (not across the stream `await`): concurrent
+            // follow events interleave safely — both paths apply idempotently
+            // and persist under this same lock.
+            let mut chain = chain.lock().expect("chain state mutex poisoned");
+            Self::apply_reconstructed_block(store, &mut chain, &block, slot)?;
         }
 
         Ok(channel_is_empty)
@@ -332,8 +384,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// blocks we already hold (verifying their hash), a validated continuation
     /// for new ones. Advances the persisted anchor to the block's slot.
     fn apply_reconstructed_block(
-        store: &mut SequencerStore,
-        state: &mut V03State,
+        store: &SequencerStore,
+        chain: &mut ChainState,
         block: &Block,
         slot: Slot,
     ) -> Result<()> {
@@ -379,21 +431,31 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        // New continuation: validate it chains onto the tip, then apply.
-        let cc_tip = tip.as_ref().map(|tip| Tip {
-            block_id: tip.id,
-            hash: tip.hash,
-        });
-        chain_consistency::validate_against_tip(cc_tip, block).map_err(|err| {
-            anyhow!(
-                "Channel block {block_id} does not extend local tip {:?}: {err}",
-                tip.map(|tip| tip.id)
-            )
-        })?;
+        // New continuation: channel history is finalized, so it goes through
+        // the final tier — validation happens inside `apply_finalized`.
+        match chain.apply_finalized(MsgId::from(block.header.hash.0), block, slot) {
+            AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
+            AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
+                return Err(anyhow!(
+                    "Channel block {block_id} does not extend local tip {:?}: {err}",
+                    tip.map(|tip| tip.id)
+                ));
+            }
+        }
 
-        let mut scratch = state.clone();
-        chain_consistency::apply_block(block, &mut scratch)
-            .map_err(|err| anyhow!("Failed to apply channel block {block_id}: {err}"))?;
+        // Persist like the follow path: the tip meta stays pinned to the head
+        // tip even when the reconstructed block lands below it.
+        let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
+        let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
+        store
+            .dbio()
+            .store_followed_blocks(
+                &[(block, true)],
+                head_tip.as_ref(),
+                chain.head_state(),
+                final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
+            )
+            .context("Failed to persist reconstructed block")?;
 
         // Mark the deposits' pending records submitted so the production-time
         // guard drops the mints cold-start backfill re-queued for them. Withdraw
@@ -406,11 +468,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .iter()
             .filter_map(extract_bridge_deposit_id)
             .collect();
-
         store
-            .update(block, &deposit_event_ids, Vec::new(), &scratch)
-            .context("Failed to persist reconstructed block")?;
-        *state = scratch;
+            .mark_deposit_events_submitted(&deposit_event_ids, block_id)
+            .context("Failed to mark reconstructed deposits submitted")?;
+
         store
             .set_zone_anchor(&record)
             .context("Failed to persist zone anchor")?;
@@ -547,6 +608,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
+    /// Publisher sink adapter over [`apply_follow_update`].
+    fn on_follow(
+        dbio: Arc<RocksDBIO>,
+        chain: Arc<Mutex<ChainState>>,
+        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    ) -> block_publisher::OnFollowSink {
+        Box::new(move |update: block_publisher::FollowUpdate| {
+            apply_follow_update(&dbio, &chain, &mempool_handle, update);
+        })
+    }
+
     /// Produces a new block from mempool transactions and publishes it via zone-sdk.
     pub async fn produce_new_block(&mut self) -> Result<u64> {
         let BlockWithMeta {
@@ -563,26 +635,77 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect::<Result<_>>()
             .context("Failed to build reconciliation keys for block withdrawals")?;
 
-        self.block_publisher
+        let this_msg = self
+            .block_publisher
             .publish_block(&block, withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
 
-        self.store.update(
+        self.record_produced_block(
+            this_msg,
             &block,
             &deposit_event_ids,
             withdrawal_reconciliation_keys,
-            &self.state,
         )?;
 
-        Ok(self.chain_height)
+        Ok(block.header.block_id)
+    }
+
+    /// Applies our own freshly-published block to the head with the [`MsgId`] the
+    /// publish assigned it, so the head advances and the later adopted
+    /// redelivery dedups, then persists it.
+    ///
+    /// Persistence is gated on the block actually becoming the head: if a peer
+    /// block won this height while we were publishing (`AlreadyApplied`, or
+    /// `Parked` when the head reorged to a different parent), the canonical
+    /// block is persisted by the follow path instead, and our invalidated
+    /// inscription comes back via `orphaned`.
+    fn record_produced_block(
+        &mut self,
+        this_msg: MsgId,
+        block: &Block,
+        deposit_event_ids: &[HashType],
+        withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
+    ) -> Result<()> {
+        let mut chain = self.chain.lock().expect("chain state mutex poisoned");
+        match chain.apply_adopted(this_msg, block) {
+            AcceptOutcome::Applied => {
+                // Persisted under the lock so disk writes land in apply order
+                // with the follow path.
+                self.store.update(
+                    block,
+                    deposit_event_ids,
+                    withdrawal_reconciliation_keys,
+                    chain.head_state(),
+                )?;
+            }
+            AcceptOutcome::AlreadyApplied => {
+                warn!(
+                    "Produced block {} lost a competing-write race, skipping persistence",
+                    block.header.block_id
+                );
+            }
+            AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
+                warn!(
+                    "Produced block {} no longer chains on the head, skipping persistence: {err}",
+                    block.header.block_id
+                );
+            }
+        }
+
+        Ok(())
     }
 
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "splitting the produce-path accumulators into a struct buys nothing"
+    )]
     fn apply_mempool_transaction(
-        &mut self,
+        store: &SequencerStore,
+        state: &mut lee::V03State,
         origin: TransactionOrigin,
         tx: &LeeTransaction,
         block_height: u64,
@@ -593,11 +716,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let tx_hash = tx.hash();
         match origin {
             TransactionOrigin::User => {
-                let validated_diff = match tx.validate_on_state(
-                    &self.state,
-                    block_height,
-                    timestamp,
-                ) {
+                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
                     Ok(diff) => diff,
                     Err(err) => {
                         error!(
@@ -611,7 +730,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     withdrawals.push(withdraw_data);
                 }
 
-                self.state.apply_state_diff(validated_diff);
+                state.apply_state_diff(validated_diff);
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -619,8 +738,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 };
 
                 if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
-                    if self
-                        .store
+                    if store
                         .is_deposit_event_submitted(deposit_op_id)
                         .context("Failed to check whether deposit was already submitted")?
                     {
@@ -630,7 +748,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     deposit_event_ids.push(deposit_op_id);
                 }
 
-                self.state
+                state
                     .transition_from_public_transaction(public_tx, block_height, timestamp)
                     .context("Failed to execute sequencer-generated transaction")?;
             }
@@ -643,7 +761,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
-        let new_block_height = self.next_block_id();
+        // Build on the head: its tip is the parent, its state the validation base.
+        let (prev_block_hash, new_block_height, mut working_state) = {
+            let chain = self.chain.lock().expect("chain state mutex poisoned");
+            let tip = chain.head_tip();
+            let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
+                head.block_id
+                    .checked_add(1)
+                    .expect("block id should not overflow")
+            });
+            let prev = tip.map_or(HashType([0; 32]), |head| head.hash);
+            (prev, height, chain.head_state().clone())
+        };
 
         let mut valid_transactions = Vec::new();
         let mut deposit_event_ids = Vec::new();
@@ -651,12 +780,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
             .expect("`max_block_size` should fit into usize");
-
-        let latest_block_meta = self
-            .store
-            .latest_block_meta()
-            .context("Failed to get latest block meta from store")?
-            .context("Sequencer store should have at least the genesis block")?;
 
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
@@ -676,7 +799,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             let temp_hashable_data = HashableBlockData {
                 block_id: new_block_height,
                 transactions: temp_valid_transactions,
-                prev_block_hash: latest_block_meta.hash,
+                prev_block_hash,
                 timestamp: new_block_timestamp,
             };
 
@@ -693,7 +816,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 break;
             }
 
-            if self.apply_mempool_transaction(
+            if Self::apply_mempool_transaction(
+                &self.store,
+                &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
@@ -709,7 +834,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        self.state
+        working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
@@ -717,15 +842,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
             transactions: valid_transactions,
-            prev_block_hash: latest_block_meta.hash,
+            prev_block_hash,
             timestamp: new_block_timestamp,
         };
 
         let block = hashable_data
             .clone()
             .into_pending_block(self.store.signing_key());
-
-        self.chain_height = new_block_height;
 
         log::info!(
             "Created block with {} transactions in {} seconds",
@@ -740,16 +863,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    pub const fn state(&self) -> &lee::V03State {
-        &self.state
+    /// Reads the current head state under the lock without cloning it, so callers
+    /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
+    pub fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
+        f(self
+            .chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .head_state())
     }
 
     pub const fn block_store(&self) -> &SequencerStore {
         &self.store
     }
 
-    pub const fn chain_height(&self) -> u64 {
-        self.chain_height
+    #[must_use]
+    pub fn chain_height(&self) -> u64 {
+        self.chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .head_tip()
+            .map_or(0, |tip| tip.block_id)
     }
 
     pub const fn sequencer_config(&self) -> &SequencerConfig {
@@ -786,10 +920,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &self.block_publisher
     }
 
-    fn next_block_id(&self) -> u64 {
-        self.chain_height
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("Max block height reached: {}", self.chain_height))
+    /// Whether this sequencer is currently authorized to write to the channel.
+    #[must_use]
+    pub fn is_our_turn(&self) -> bool {
+        self.block_publisher.is_our_turn()
+    }
+
+    /// Shared handle to the two-tier follow state, for tests to drive the
+    /// follow path directly.
+    #[cfg(all(test, feature = "mock"))]
+    fn chain(&self) -> Arc<Mutex<ChainState>> {
+        Arc::clone(&self.chain)
     }
 }
 
@@ -797,6 +938,105 @@ struct BlockWithMeta {
     block: Block,
     deposit_event_ids: Vec<HashType>,
     withdrawals: Vec<WithdrawArg>,
+}
+
+/// Feed one channel delta into the follow state and mirror it to the store:
+/// revert orphaned, then apply and persist adopted and finalized blocks.
+/// Production builds on this same head. Wired to the publisher via
+/// [`SequencerCore::on_follow`]; a free function so tests can drive it directly.
+///
+/// TODO: unlike the indexer's ingest loop, this path does not retry
+/// `is_retryable` (transient) apply failures — a failed block just parks and
+/// relies on a valid successor or a restart. `ChainState` never emits
+/// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
+/// follow-up.
+fn apply_follow_update(
+    dbio: &RocksDBIO,
+    chain: &Mutex<ChainState>,
+    mempool_handle: &MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    update: block_publisher::FollowUpdate,
+) {
+    let block_publisher::FollowUpdate {
+        adopted,
+        orphaned,
+        finalized,
+    } = update;
+
+    // The lock is held across the persist below so disk writes land in apply
+    // order — the produce path persists under this same lock.
+    let resubmit_txs = {
+        let mut chain = chain.lock().expect("chain state mutex poisoned");
+
+        // User txs of orphaned blocks, returned to the mempool below.
+        let resubmit_txs: Vec<LeeTransaction> = orphaned
+            .iter()
+            .flat_map(|(_, block)| resubmittable_txs(block))
+            .collect();
+
+        // Outcomes align with `adopted`.
+        let outcomes = chain.apply_channel_update(&orphaned, &adopted);
+        let mut to_persist: Vec<(&Block, bool)> = adopted
+            .iter()
+            .zip(&outcomes)
+            .filter(|(_, outcome)| matches!(outcome, AcceptOutcome::Applied))
+            .map(|((_, block), _)| (block, false))
+            .collect();
+
+        let mut final_advanced = false;
+        for (this_msg, block) in &finalized {
+            // FIXME: thread the finalized inscription's L1 slot once the
+            // sdk surfaces it; only used for the invalid-finalized stall.
+            if matches!(
+                chain.apply_finalized(*this_msg, block, Slot::from(0)),
+                AcceptOutcome::Applied
+            ) {
+                to_persist.push((block, true));
+                final_advanced = true;
+            }
+        }
+        // Snapshot the advanced final tier so a restart re-anchors on it.
+        let final_meta = final_advanced.then(|| {
+            let tip = chain.final_tip().expect("advanced final tier has a tip");
+            BlockMeta::from(&tip)
+        });
+        let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
+
+        // One atomic write for the whole update: blocks, tip meta and the
+        // state after the last block land together, so a crash can never
+        // leave the stored state ahead of the stored blocks. A persist
+        // failure is fatal: the in-memory chain has already advanced, and
+        // continuing would leave a permanent gap in the store.
+        //
+        // The `panic!` ends the drive task, whose cancellation halts the node.
+        //
+        // TODO: the zone-sdk checkpoint is persisted by `on_checkpoint`
+        // before this write; a crash in between resumes past these blocks
+        // without them ever landing in the store. Full `BlocksProcessed`
+        // atomicity (checkpoint + blocks + state in one batch, per the sdk's
+        // event contract) is a follow-up.
+        dbio.store_followed_blocks(
+            &to_persist,
+            head_tip.as_ref(),
+            chain.head_state(),
+            final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
+        )
+        .unwrap_or_else(|err| panic!("Failed to persist followed blocks: {err:#}"));
+
+        resubmit_txs
+    };
+
+    // Rebuild orphaned work: return its user txs to the mempool so the
+    // next on-turn production re-includes them on the new head.
+    //
+    // We use [`try_push`] here because this is called from the
+    // publisher's drive task, and only the block production drains the mempool.
+    // A blocking push on a full mempool would deadlock here.
+    for tx in resubmit_txs {
+        let tx_hash = tx.hash();
+        if let Err(err) = mempool_handle.try_push((TransactionOrigin::User, tx)) {
+            warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
+        }
+    }
 }
 
 /// Checks the database for any pending deposit events that have not yet been marked as submitted in
@@ -848,40 +1088,14 @@ fn replay_unfulfilled_deposit_events(
     });
 }
 
-/// Builds the initial genesis state from `testnet_initial_state` plus configured genesis
-/// transactions. Returns the final state and the list of [`LeeTransaction`]s that should be
-/// committed to the genesis block so external observers can replay them.
-fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
+/// The pre-genesis state: `testnet_initial_state` plus accounts seeded outside
+/// any transaction (bridge-lock holdings, the cross-zone inbox config).
+fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let mut state = testnet_initial_state::initial_state();
 
     #[cfg(feature = "testnet")]
     let mut state = testnet_initial_state::initial_state_testnet();
-
-    let genesis_txs = config
-        .genesis
-        .iter()
-        .filter_map(|genesis_tx| match genesis_tx {
-            GenesisAction::SupplyAccount {
-                account_id,
-                balance,
-            } => Some(build_supply_account_genesis_transaction(
-                account_id, *balance,
-            )),
-            GenesisAction::SupplyBridgeAccount { balance } => {
-                Some(build_supply_bridge_account_genesis_transaction(*balance))
-            }
-            // Force-inserted below: bridge_lock has no mint transaction.
-            GenesisAction::SupplyBridgeLockHolding { .. } => None,
-        })
-        .chain(std::iter::once(clock_invocation(0)))
-        .inspect(|tx| {
-            state
-                .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
-                .expect("Failed to execute genesis transaction");
-        })
-        .map(LeeTransaction::Public)
-        .collect();
 
     // Seed bridge-lock holder balances directly: they are not produced by any tx.
     for action in &config.genesis {
@@ -899,6 +1113,41 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
             cross_zone::build_inbox_config_account(self_zone, cross_zone);
         state.insert_genesis_account(config_id, config_account);
     }
+
+    state
+}
+
+/// Builds the initial genesis state from [`build_initial_state`] plus configured
+/// genesis transactions. Returns the final state and the list of
+/// [`LeeTransaction`]s that should be committed to the genesis block so external
+/// observers can replay them.
+fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
+    let mut state = build_initial_state(config);
+
+    let genesis_txs = config
+        .genesis
+        .iter()
+        .filter_map(|genesis_tx| match genesis_tx {
+            GenesisAction::SupplyAccount {
+                account_id,
+                balance,
+            } => Some(build_supply_account_genesis_transaction(
+                account_id, *balance,
+            )),
+            GenesisAction::SupplyBridgeAccount { balance } => {
+                Some(build_supply_bridge_account_genesis_transaction(*balance))
+            }
+            // Force-inserted in `build_initial_state`: bridge_lock has no mint transaction.
+            GenesisAction::SupplyBridgeLockHolding { .. } => None,
+        })
+        .chain(std::iter::once(clock_invocation(0)))
+        .inspect(|tx| {
+            state
+                .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
+                .expect("Failed to execute genesis transaction");
+        })
+        .map(LeeTransaction::Public)
+        .collect();
 
     (state, genesis_txs)
 }
@@ -964,7 +1213,7 @@ fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRec
 }
 
 fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Result<LeeTransaction> {
-    let metadata = DepositMetadata::decode(&event.metadata)
+    let metadata = DepositMetadata::try_from_slice(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     let bridge_program_id = programs::bridge().id();
@@ -990,6 +1239,26 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         message,
         witness_set,
     )))
+}
+
+/// User transactions of an orphaned block to return to the mempool: everything
+/// except the trailing clock tx, sequencer-generated bridge deposits (replayed
+/// from their own bedrock events) and sequencer-only cross-zone txs (replayed
+/// by the watcher; the ingress guard rejects them as `User`).
+fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
+    let Some((_clock, rest)) = block.body.transactions.split_last() else {
+        return Vec::new();
+    };
+    rest.iter()
+        .filter(|tx| extract_bridge_deposit_id(tx).is_none() && !is_sequencer_only_tx(tx))
+        .cloned()
+        .collect()
+}
+
+#[must_use]
+fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
+    matches!(tx, LeeTransaction::Public(tx)
+        if is_sequencer_only_program(tx.message().program_id))
 }
 
 #[must_use]
@@ -1081,7 +1350,7 @@ fn withdraw_event_reconciliation_key(
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.
-fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
+pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
 

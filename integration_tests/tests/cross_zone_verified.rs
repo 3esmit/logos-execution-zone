@@ -9,7 +9,7 @@
 //! payload landing in the indexer's state proves verification passed; a forgery
 //! would have halted the indexer instead.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -17,13 +17,13 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, setup_bedrock_node, setup_indexer},
+    setup::{SequencerSetup, indexer_client, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer};
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -83,9 +83,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // Wait until zone B's indexer records the delivered payload. The indexer only
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
-    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, idx_b.addr())
-        .context("Failed to build indexer URL")?;
-    let indexer = IndexerClient::new(&indexer_url)
+    let indexer = indexer_client(idx_b.addr())
         .await
         .context("Failed to build indexer client")?;
 
@@ -128,14 +126,6 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ))
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }
 
 /// Polls zone B's indexer until the ping record PDA holds a payload.

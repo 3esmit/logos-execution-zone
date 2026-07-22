@@ -9,8 +9,6 @@
 //! inbox guest's caller-is-none assertion passes for a top-level user tx, so the
 //! sequencer ingress guard is the only thing that stops this.
 
-use std::net::SocketAddr;
-
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use cross_zone_inbox_core::{
@@ -18,13 +16,13 @@ use cross_zone_inbox_core::{
 };
 use integration_tests::{
     config::{self, SequencerPartialConfig},
-    setup::{SequencerSetup, setup_bedrock_node},
+    setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
 use lee::{
     PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 #[test]
@@ -72,12 +70,4 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         "rejection should cite the sequencer-only guard, got: {err}"
     );
     Ok(())
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }
