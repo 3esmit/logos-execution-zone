@@ -88,6 +88,8 @@ pub enum ExecutionFailureKind {
     SignError(anyhow::Error),
     #[error(transparent)]
     KeycardError(#[from] pyo3::PyErr),
+    #[error("Sending transaction failed for each client")]
+    MultiSequencerTransactionSendError,
 }
 
 pub struct WalletCore {
@@ -756,9 +758,7 @@ impl WalletCore {
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
-            .ok_or(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
-                "All sequencers rejected transaction"
-            )))?;
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)?;
 
         Ok((call_res?, shared_secrets))
     }
@@ -829,9 +829,7 @@ impl WalletCore {
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
-            .ok_or(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
-                "All sequencers rejected transaction"
-            )))??)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
@@ -848,9 +846,7 @@ impl WalletCore {
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
-            .ok_or(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
-                "All sequencers rejected transaction"
-            )))??)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {

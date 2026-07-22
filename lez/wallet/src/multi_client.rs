@@ -28,21 +28,12 @@ pub struct Statistics {
 }
 
 #[derive(Debug, Clone)]
-pub struct StatisticsUpdate {
-    pub latency: f32,
-    pub new_latest_block_id: Option<BlockId>,
-    pub is_failed: bool,
-}
-
-impl StatisticsUpdate {
-    #[must_use]
-    pub const fn failure() -> Self {
-        Self {
-            latency: 0_f32,
-            new_latest_block_id: None,
-            is_failed: true,
-        }
-    }
+pub enum StatisticsUpdate {
+    Success {
+        latency: f32,
+        new_latest_block_id: BlockId,
+    },
+    Failure,
 }
 
 impl Statistics {
@@ -259,7 +250,7 @@ impl MultiSequencerClient {
             statistic_map
                 .entry(helm_url.clone())
                 .or_default()
-                .push(StatisticsUpdate::failure());
+                .push(StatisticsUpdate::Failure);
 
             for (leader, leader_url) in self.leaders().iter().skip(1) {
                 resp = self
@@ -270,7 +261,7 @@ impl MultiSequencerClient {
                     statistic_map
                         .entry(leader_url.clone())
                         .or_default()
-                        .push(StatisticsUpdate::failure());
+                        .push(StatisticsUpdate::Failure);
                 } else {
                     break;
                 }
@@ -353,35 +344,33 @@ impl CumulativeUpdates {
         let (failure_count, latest_block_id, cumulative_latency, cumulative_latency_squares) =
             metric_updates
                 .iter()
-                .fold((0_u64, None, 0_f32, 0_f32), |acc, x| {
-                    let StatisticsUpdate {
-                        latency,
-                        new_latest_block_id,
-                        is_failed,
-                    } = x;
-                    (
-                        if *is_failed {
-                            acc.0.saturating_add(1)
-                        } else {
-                            acc.0
-                        },
-                        match (acc.1, new_latest_block_id) {
-                            (None, None) => None,
-                            (None, Some(val)) | (Some(val), None) => Some(val),
-                            (Some(val_old), Some(val_new)) => Some(std::cmp::max(val_old, val_new)),
-                        },
-                        if *is_failed { acc.2 } else { acc.2 + latency },
-                        if *is_failed {
-                            acc.3
-                        } else {
-                            latency.mul_add(*latency, acc.3)
-                        },
-                    )
+                .fold((0_u64, None, 0_f32, 0_f32), |mut acc, x| {
+                    match x {
+                        StatisticsUpdate::Success {
+                            latency,
+                            new_latest_block_id,
+                        } => {
+                            match acc.1 {
+                                Some(val_old) => {
+                                    acc.1 = Some(std::cmp::max(val_old, *new_latest_block_id));
+                                }
+                                None => {
+                                    acc.1 = Some(*new_latest_block_id);
+                                }
+                            }
+                            acc.2 += latency;
+                            acc.3 = latency.mul_add(*latency, acc.3);
+                        }
+                        StatisticsUpdate::Failure => {
+                            acc.0 = acc.0.saturating_add(1);
+                        }
+                    }
+                    acc
                 });
 
         Self {
             failure_count,
-            latest_block_id: latest_block_id.copied(),
+            latest_block_id,
             cumulative_latency,
             cumulative_latency_squares,
             additional_sample_size: metric_updates.len().saturating_sub(
@@ -467,11 +456,12 @@ pub async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
     #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
     let latency = latency as f32;
 
-    StatisticsUpdate {
-        latency,
-        new_latest_block_id: block_id,
-        is_failed: block_id.is_none(),
-    }
+    block_id.map_or(StatisticsUpdate::Failure, |new_latest_block_id| {
+        StatisticsUpdate::Success {
+            latency,
+            new_latest_block_id,
+        }
+    })
 }
 
 #[must_use]
@@ -715,21 +705,15 @@ mod tests {
     #[test]
     fn cumulative_updates_test() {
         let statistics_updates_vec = vec![
-            StatisticsUpdate {
+            StatisticsUpdate::Success {
                 latency: 100_f32,
-                new_latest_block_id: Some(15),
-                is_failed: false,
+                new_latest_block_id: 15,
             },
-            StatisticsUpdate {
+            StatisticsUpdate::Success {
                 latency: 115_f32,
-                new_latest_block_id: Some(16),
-                is_failed: false,
+                new_latest_block_id: 16,
             },
-            StatisticsUpdate {
-                latency: 50_f32,
-                new_latest_block_id: None,
-                is_failed: true,
-            },
+            StatisticsUpdate::Failure,
         ];
 
         let CumulativeUpdates {
@@ -836,21 +820,15 @@ mod tests {
     #[test]
     fn metric_updates_correctness() {
         let statistics_updates_vec = vec![
-            StatisticsUpdate {
+            StatisticsUpdate::Success {
                 latency: 100_f32,
-                new_latest_block_id: Some(105),
-                is_failed: false,
+                new_latest_block_id: 105,
             },
-            StatisticsUpdate {
+            StatisticsUpdate::Success {
                 latency: 115_f32,
-                new_latest_block_id: Some(106),
-                is_failed: false,
+                new_latest_block_id: 106,
             },
-            StatisticsUpdate {
-                latency: 50_f32,
-                new_latest_block_id: None,
-                is_failed: true,
-            },
+            StatisticsUpdate::Failure,
         ];
 
         let addr_leader = Url::parse("https://127.0.0.1:3040").unwrap();
