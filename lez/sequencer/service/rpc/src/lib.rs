@@ -88,6 +88,10 @@ pub trait Rpc {
     #[method(name = "getProgramIds")]
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned>;
 
+    /// Lists every program currently registered in sequencer state, ordered by identifier.
+    #[method(name = "listPrograms")]
+    async fn list_programs(&self) -> Result<Vec<ProgramId>, ErrorObjectOwned>;
+
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
 

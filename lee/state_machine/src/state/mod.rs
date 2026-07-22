@@ -283,6 +283,14 @@ impl V03State {
         self.private_state.0.get_proof_for(commitment)
     }
 
+    /// Returns every program registered in state in ascending identifier order.
+    #[must_use]
+    pub fn program_ids(&self) -> Vec<ProgramId> {
+        let mut program_ids = self.programs.keys().copied().collect::<Vec<_>>();
+        program_ids.sort_unstable();
+        program_ids
+    }
+
     pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
         &self.programs
     }
