@@ -80,7 +80,26 @@ pub fn sequencer_config(
     home: PathBuf,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    cross_zone: Option<CrossZoneConfig>,
+) -> Result<SequencerConfig> {
+    sequencer_config_with_channel(
+        partial,
+        home,
+        bedrock_addr,
+        bedrock_channel_id(),
+        genesis_transactions,
+        cross_zone,
+    )
+}
+
+/// Like [`sequencer_config`] but with an explicit Bedrock `channel_id`, so tests
+/// can point a sequencer at a fresh/empty channel (e.g. to model a wiped Bedrock).
+pub fn sequencer_config_with_channel(
+    partial: SequencerPartialConfig,
+    home: PathBuf,
+    bedrock_addr: SocketAddr,
     channel_id: ChannelId,
+    genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {

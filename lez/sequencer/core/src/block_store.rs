@@ -12,7 +12,7 @@ use log::info;
 use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use storage::sequencer::{
     RocksDBIO,
-    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey},
+    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord},
 };
 pub use storage::{DbResult, sequencer::DbDump};
 
@@ -28,29 +28,17 @@ impl SequencerStore {
     /// Open existing database at the given location. Fails if no database is found.
     pub fn open_db(location: &Path, signing_key: lee::PrivateKey) -> DbResult<Self> {
         let dbio = Arc::new(RocksDBIO::open(location)?);
-        let genesis_id = dbio.get_meta_first_block_in_db()?;
-        let last_id = dbio.latest_block_meta()?.id;
+        Self::from_dbio_and_signing_key(dbio, signing_key)
+    }
 
-        info!("Preparing block cache");
-        let mut tx_hash_to_block_map = HashMap::new();
-        for i in genesis_id..=last_id {
-            let block = dbio
-                .get_block(i)?
-                .expect("Block should be present in the database");
-
-            tx_hash_to_block_map.extend(block_to_transactions_map(&block));
-        }
-        info!(
-            "Block cache prepared. Total blocks in cache: {}",
-            tx_hash_to_block_map.len()
-        );
-
-        Ok(Self {
-            dbio,
-            tx_hash_to_block_map,
-            genesis_id,
-            signing_key,
-        })
+    /// Create a fresh rocksdb at `location` from `dump`.
+    pub fn restore_db_from_dump(
+        location: &Path,
+        dump: &DbDump,
+        signing_key: lee::PrivateKey,
+    ) -> DbResult<Self> {
+        let dbio = Arc::new(RocksDBIO::restore_from_dump(location, dump)?);
+        Self::from_dbio_and_signing_key(dbio, signing_key)
     }
 
     /// Starting database at the start of new chain.
@@ -66,6 +54,38 @@ impl SequencerStore {
         let dbio = Arc::new(RocksDBIO::create(location, genesis_block, genesis_state)?);
         let genesis_id = dbio.get_meta_first_block_in_db()?;
         let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
+
+        Ok(Self {
+            dbio,
+            tx_hash_to_block_map,
+            genesis_id,
+            signing_key,
+        })
+    }
+
+    fn from_dbio_and_signing_key(
+        dbio: Arc<RocksDBIO>,
+        signing_key: lee::PrivateKey,
+    ) -> DbResult<Self> {
+        let genesis_id = dbio.get_meta_first_block_in_db()?;
+        let last_id = dbio.latest_block_meta()?.map(|meta| meta.id);
+
+        let mut tx_hash_to_block_map = HashMap::new();
+
+        if let Some(last_id) = last_id {
+            info!("Preparing block cache");
+            for i in genesis_id..=last_id {
+                let block = dbio
+                    .get_block(i)?
+                    .expect("Block should be present in the database");
+
+                tx_hash_to_block_map.extend(block_to_transactions_map(&block));
+            }
+            info!(
+                "Block cache prepared. Total blocks in cache: {}",
+                tx_hash_to_block_map.len()
+            );
+        }
 
         Ok(Self {
             dbio,
@@ -114,7 +134,7 @@ impl SequencerStore {
         );
     }
 
-    pub fn latest_block_meta(&self) -> DbResult<BlockMeta> {
+    pub fn latest_block_meta(&self) -> DbResult<Option<BlockMeta>> {
         self.dbio.latest_block_meta()
     }
 
@@ -165,13 +185,6 @@ impl SequencerStore {
         self.dbio.dump_all()
     }
 
-    /// Create a fresh rocksdb at `location` from `dump`, closing it before returning so a sequencer
-    /// can open it normally afterwards.
-    pub fn restore_db_from_dump(location: &Path, dump: &DbDump) -> DbResult<()> {
-        RocksDBIO::restore_from_dump(location, dump)?;
-        Ok(())
-    }
-
     pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
         let Some(bytes) = self.dbio.get_zone_sdk_checkpoint_bytes()? else {
             return Ok(None);
@@ -188,8 +201,22 @@ impl SequencerStore {
         Ok(())
     }
 
+    /// The last channel block read back and verified from Bedrock (L1 slot +
+    /// `id`/`hash`), or `None` before any block has been read from the channel.
+    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
+        self.dbio.get_zone_anchor()
+    }
+
+    pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
+        self.dbio.put_zone_anchor(anchor)
+    }
+
     pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
         self.dbio.get_pending_deposit_events()
+    }
+
+    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
+        self.dbio.is_deposit_event_submitted(deposit_op_id)
     }
 }
 
@@ -275,7 +302,7 @@ mod tests {
         .unwrap();
 
         // Verify that initially the latest block hash equals genesis hash
-        let latest_meta = node_store.latest_block_meta().unwrap();
+        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
         assert_eq!(latest_meta.hash, genesis_hash);
     }
 
@@ -313,7 +340,7 @@ mod tests {
             .unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
-        let latest_meta = node_store.latest_block_meta().unwrap();
+        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
         assert_eq!(latest_meta.hash, block_hash);
     }
 

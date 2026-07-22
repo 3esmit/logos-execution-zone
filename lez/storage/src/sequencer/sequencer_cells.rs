@@ -9,7 +9,8 @@ use crate::{
     sequencer::{
         CF_LEE_STATE_NAME, DB_LEE_STATE_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
         DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_DEPOSIT_EVENTS_KEY,
-        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
+        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
+        DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
 
@@ -128,6 +129,39 @@ impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
                 err,
                 Some("Failed to serialize zone-sdk checkpoint cell".to_owned()),
             )
+        })
+    }
+}
+
+/// The last channel block read back and verified from Bedrock.
+///
+/// Holds its L1 inscription `slot` plus the block's `id`/`hash`, and serves as
+/// both the anchor for the startup consistency check and the resume point for
+/// reconstruction. `slot` is stored as a raw `u64` because the zone-sdk `Slot`
+/// does not derive borsh; the caller converts to/from `Slot`.
+#[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize)]
+pub struct ZoneAnchorRecord {
+    pub slot: u64,
+    pub block_id: u64,
+    pub hash: HashType,
+}
+
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct ZoneAnchorCell(pub ZoneAnchorRecord);
+
+impl SimpleStorableCell for ZoneAnchorCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ZoneAnchorCell {}
+
+impl SimpleWritableCell for ZoneAnchorCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize zone cursor".to_owned()))
         })
     }
 }

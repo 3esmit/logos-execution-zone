@@ -2,9 +2,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::block::Block;
+use futures::Stream;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage, sequencer::WithdrawArg};
 
 use crate::{
     block_publisher::{
@@ -19,6 +20,28 @@ pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>
 #[derive(Clone)]
 pub struct MockBlockPublisher {
     channel_id: ChannelId,
+    /// Canned channel frontier returned by [`Self::channel_tip_slot`].
+    tip_slot: Option<Slot>,
+    /// Canned finalized channel history returned by [`Self::read_channel_after`].
+    messages: Vec<(ZoneMessage, Slot)>,
+}
+
+impl MockBlockPublisher {
+    /// Builds a mock publisher backed by a canned channel, for reconstruction
+    /// and consistency tests. The default (via [`BlockPublisherTrait::new`])
+    /// serves an empty channel.
+    #[must_use]
+    pub const fn with_canned_channel(
+        channel_id: ChannelId,
+        tip_slot: Option<Slot>,
+        messages: Vec<(ZoneMessage, Slot)>,
+    ) -> Self {
+        Self {
+            channel_id,
+            tip_slot,
+            messages,
+        }
+    }
 }
 
 impl BlockPublisherTrait for MockBlockPublisher {
@@ -34,6 +57,8 @@ impl BlockPublisherTrait for MockBlockPublisher {
     ) -> Result<Self> {
         Ok(Self {
             channel_id: config.channel_id,
+            tip_slot: None,
+            messages: Vec::new(),
         })
     }
 
@@ -47,5 +72,22 @@ impl BlockPublisherTrait for MockBlockPublisher {
 
     fn channel_id(&self) -> ChannelId {
         self.channel_id
+    }
+
+    async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.tip_slot)
+    }
+
+    async fn read_channel_after(
+        &self,
+        after_slot: Option<Slot>,
+    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_> {
+        // Mirror `next_messages`: `after_slot` is exclusive.
+        let messages = self
+            .messages
+            .iter()
+            .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
+            .cloned();
+        Ok(futures::stream::iter(messages))
     }
 }

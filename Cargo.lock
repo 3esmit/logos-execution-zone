@@ -1369,6 +1369,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "chain_consistency"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "borsh",
+ "common",
+ "futures",
+ "lee",
+ "lee_core",
+ "log",
+ "logos-blockchain-core",
+ "logos-blockchain-zone-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "chkstk_stub"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3939,6 +3958,7 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "borsh",
+ "chain_consistency",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -3958,7 +3978,6 @@ dependencies = [
  "storage",
  "tempfile",
  "testnet_initial_state",
- "thiserror 2.0.18",
  "tokio",
  "url",
 ]
@@ -9023,6 +9042,7 @@ dependencies = [
  "borsh",
  "bridge_core",
  "bytesize",
+ "chain_consistency",
  "chrono",
  "common",
  "cross_zone",
