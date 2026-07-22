@@ -4152,7 +4152,6 @@ dependencies = [
  "reqwest",
  "risc0-zkvm",
  "sequencer_core",
- "sequencer_service_protocol",
  "sequencer_service_rpc",
  "serde_json",
  "system_accounts",
