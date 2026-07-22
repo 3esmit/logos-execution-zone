@@ -13,7 +13,7 @@ use anyhow::{Context as _, Result};
 use lee_core::BlockId;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinSet};
 use url::Url;
 
 use crate::config::{MultiSequencerClientConfig, SequencerConnectionData};
@@ -450,7 +450,7 @@ pub async fn calibrate_client(
     })
 }
 
-pub async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
+async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
     let (latency, block_id) = measure_request_duration(client).await;
 
     #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
@@ -462,6 +462,36 @@ pub async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
             new_latest_block_id,
         }
     })
+}
+
+async fn actualize_client_owned(client: SequencerClient) -> StatisticsUpdate {
+    let (latency, block_id) = measure_request_duration(&client).await;
+
+    #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
+    let latency = latency as f32;
+
+    block_id.map_or(StatisticsUpdate::Failure, |new_latest_block_id| {
+        StatisticsUpdate::Success {
+            latency,
+            new_latest_block_id,
+        }
+    })
+}
+
+pub async fn multi_actualize_clients(clients: &[SequencerClient]) -> Vec<StatisticsUpdate> {
+    let mut join_set = JoinSet::new();
+
+    for client in clients {
+        join_set.spawn(actualize_client_owned(client.clone()));
+    }
+
+    let mut statistic_updates = vec![];
+
+    while let Some(statistic_resp) = join_set.join_next().await {
+        statistic_updates.push(statistic_resp.unwrap_or(StatisticsUpdate::Failure));
+    }
+
+    statistic_updates
 }
 
 #[must_use]
