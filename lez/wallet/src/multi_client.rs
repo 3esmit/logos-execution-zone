@@ -216,6 +216,26 @@ impl MultiSequencerClient {
         &self.config
     }
 
+    /// Helperfunction for the `metered_get`.
+    async fn metered_get_helper<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
+        &self,
+        call: &I,
+        leader: &SequencerClient,
+        leader_url: &Url,
+        statistic_map: &mut HashMap<Url, Vec<StatisticsUpdate>>,
+    ) -> Result<R, E> {
+        let (resp, statistics_update) = tokio::join!(call(leader), actualize_client(leader));
+
+        log::debug!("Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",);
+
+        statistic_map
+            .entry(leader_url.clone())
+            .or_default()
+            .push(statistics_update);
+
+        resp
+    }
+
     /// Metered call for main leader(helm), to get data, necessary for send call.
     ///
     /// If current leader errors, we ask next one in list.
@@ -226,17 +246,14 @@ impl MultiSequencerClient {
         // Collecting all statistics into one map to lock updates only once
         let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
 
+        // We need helm response to avoid constructing guard Result<R, E>, which we can not do with generics. 
         let (helm, helm_url) = self.helm();
 
-        let (mut resp, statistics_update) = tokio::join!(call(helm), actualize_client(helm));
+        let mut resp = self
+            .metered_get_helper(&call, helm, helm_url, &mut statistic_map)
+            .await;
 
-        log::debug!("Metered call for {helm_url:?}, statistic updates is {statistics_update:?}",);
-
-        statistic_map
-            .entry(helm_url.clone())
-            .or_default()
-            .push(statistics_update);
-
+        // Not the cleanest approach, but I am not sure how to have it both clean and async.
         if resp.is_err() {
             statistic_map
                 .entry(helm_url.clone())
@@ -244,19 +261,9 @@ impl MultiSequencerClient {
                 .push(StatisticsUpdate::failure());
 
             for (leader, leader_url) in self.leaders().iter().skip(1) {
-                let (curr_resp, statistics_update) =
-                    tokio::join!(call(leader), actualize_client(leader));
-
-                log::debug!(
-                    "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
-                );
-
-                statistic_map
-                    .entry(leader_url.clone())
-                    .or_default()
-                    .push(statistics_update);
-
-                resp = curr_resp;
+                resp = self
+                    .metered_get_helper(&call, leader, leader_url, &mut statistic_map)
+                    .await;
 
                 if resp.is_err() {
                     statistic_map
@@ -552,16 +559,14 @@ pub fn choose_leaders(
 
         // Client is better if its average is better and variance does not make it worse
         // So basically we want this:
-        // [-left_std............right_lat.......left_lat...............+right_std.........
-        // +left_std]
+        // [-right_std < left_lat < right_lat < +left_std < +right_std]
         //
         // However one can argue that this:
         //
-        // [-left_std...................left_lat........right_lat.........+right_std.......
-        // +left_std]
+        // [-right_std < right_lat < left_lat < +left_std < +right_std]
         //
         // is still better, but it is up to discussion
-        if (right_lat <= left_lat) && ((right_lat + right_std) < (left_lat + left_std)) {
+        if (left_lat <= right_lat) && ((left_lat + left_std) < (right_lat + right_std)) {
             std::cmp::Ordering::Less
         } else {
             std::cmp::Ordering::Greater
@@ -656,7 +661,7 @@ fn error_ratio(errors: u64, size: usize) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
     use url::Url;
@@ -683,6 +688,27 @@ mod tests {
     fn client_from_url_unchecked(url: &Url) -> SequencerClient {
         let builder = SequencerClientBuilder::default();
         builder.build(url).unwrap()
+    }
+
+    fn four_client_list() -> (HashMap<Url, SequencerClient>, [Url; 4]) {
+        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
+        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
+        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
+        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
+
+        let leader = client_from_url_unchecked(&addr_leader);
+        let client_1 = client_from_url_unchecked(&addr_1);
+        let client_2 = client_from_url_unchecked(&addr_2);
+        let client_3 = client_from_url_unchecked(&addr_3);
+
+        let mut client_list = HashMap::new();
+
+        client_list.insert(addr_leader.clone(), leader);
+        client_list.insert(addr_1.clone(), client_1);
+        client_list.insert(addr_2.clone(), client_2);
+        client_list.insert(addr_3.clone(), client_3);
+
+        (client_list, [addr_leader, addr_1, addr_2, addr_3])
     }
 
     #[test]
@@ -879,22 +905,7 @@ mod tests {
 
     #[test]
     fn choose_leader_latest_block() {
-        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
-        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
-        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
-        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
-
-        let leader = client_from_url_unchecked(&addr_leader);
-        let client_1 = client_from_url_unchecked(&addr_1);
-        let client_2 = client_from_url_unchecked(&addr_2);
-        let client_3 = client_from_url_unchecked(&addr_3);
-
-        let mut client_list = HashMap::new();
-
-        client_list.insert(addr_leader.clone(), leader);
-        client_list.insert(addr_1.clone(), client_1);
-        client_list.insert(addr_2.clone(), client_2);
-        client_list.insert(addr_3.clone(), client_3);
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
 
         let mut statistics = HashMap::new();
 
@@ -951,22 +962,7 @@ mod tests {
 
     #[test]
     fn choose_leader_least_errors() {
-        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
-        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
-        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
-        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
-
-        let leader = client_from_url_unchecked(&addr_leader);
-        let client_1 = client_from_url_unchecked(&addr_1);
-        let client_2 = client_from_url_unchecked(&addr_2);
-        let client_3 = client_from_url_unchecked(&addr_3);
-
-        let mut client_list = HashMap::new();
-
-        client_list.insert(addr_leader.clone(), leader);
-        client_list.insert(addr_1.clone(), client_1);
-        client_list.insert(addr_2.clone(), client_2);
-        client_list.insert(addr_3.clone(), client_3);
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
 
         let mut statistics = HashMap::new();
 
@@ -1023,22 +1019,7 @@ mod tests {
 
     #[test]
     fn choose_leader_simple_latency_check() {
-        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
-        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
-        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
-        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
-
-        let leader = client_from_url_unchecked(&addr_leader);
-        let client_1 = client_from_url_unchecked(&addr_1);
-        let client_2 = client_from_url_unchecked(&addr_2);
-        let client_3 = client_from_url_unchecked(&addr_3);
-
-        let mut client_list = HashMap::new();
-
-        client_list.insert(addr_leader.clone(), leader);
-        client_list.insert(addr_1.clone(), client_1);
-        client_list.insert(addr_2.clone(), client_2);
-        client_list.insert(addr_3.clone(), client_3);
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
 
         let mut statistics = HashMap::new();
 
@@ -1095,22 +1076,7 @@ mod tests {
 
     #[test]
     fn choose_leader_latency_var_check() {
-        let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
-        let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
-        let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
-        let addr_3 = Url::parse("http://127.0.0.1:3043").unwrap();
-
-        let leader = client_from_url_unchecked(&addr_leader);
-        let client_1 = client_from_url_unchecked(&addr_1);
-        let client_2 = client_from_url_unchecked(&addr_2);
-        let client_3 = client_from_url_unchecked(&addr_3);
-
-        let mut client_list = HashMap::new();
-
-        client_list.insert(addr_leader.clone(), leader);
-        client_list.insert(addr_1.clone(), client_1);
-        client_list.insert(addr_2.clone(), client_2);
-        client_list.insert(addr_3.clone(), client_3);
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
 
         let mut statistics = HashMap::new();
 
@@ -1163,5 +1129,311 @@ mod tests {
         let (_, leader_url) = leaders.first().unwrap();
 
         assert_eq!(leader_url, &addr_leader);
+    }
+
+    #[test]
+    fn choose_multiple_leaders_latest_block() {
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
+
+        let mut statistics = HashMap::new();
+
+        statistics.insert(
+            addr_3,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 97,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_2,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 98,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_1.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_leader.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+
+        let mut url_set_origin = HashSet::new();
+        let mut url_set_res = HashSet::new();
+
+        let (_, leader_url_first) = leaders[0].clone();
+        let (_, leader_url_second) = leaders[1].clone();
+
+        url_set_origin.insert(addr_leader);
+        url_set_origin.insert(addr_1);
+
+        url_set_res.insert(leader_url_first);
+        url_set_res.insert(leader_url_second);
+
+        assert_eq!(url_set_origin, url_set_res);
+        assert_eq!(leaders.len(), 2);
+    }
+
+    #[test]
+    fn choose_multiple_leaders_latest_block_still_chooses_one_best() {
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
+
+        let mut statistics = HashMap::new();
+
+        statistics.insert(
+            addr_3,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 97,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_2,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 98,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_1,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 99,
+                errors: 5,
+            },
+        );
+
+        statistics.insert(
+            addr_leader.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 5,
+            },
+        );
+
+        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+
+        let (_, helm) = leaders.first().unwrap();
+
+        assert_eq!(&addr_leader, helm);
+        assert_eq!(leaders.len(), 1);
+    }
+
+    #[test]
+    fn choose_multiple_leaders_least_errors() {
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
+
+        let mut statistics = HashMap::new();
+
+        statistics.insert(
+            addr_3,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 6,
+            },
+        );
+
+        statistics.insert(
+            addr_2,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 6,
+            },
+        );
+
+        statistics.insert(
+            addr_1.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 3,
+            },
+        );
+
+        statistics.insert(
+            addr_leader.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 2,
+            },
+        );
+
+        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+
+        let (_, leader_url_first) = leaders[0].clone();
+        let (_, leader_url_second) = leaders[1].clone();
+
+        assert_eq!(addr_leader, leader_url_first);
+        assert_eq!(addr_1, leader_url_second);
+        assert_eq!(leaders.len(), 2);
+    }
+
+    #[test]
+    fn choose_multiple_leaders_simple_latency_check() {
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
+
+        let mut statistics = HashMap::new();
+
+        statistics.insert(
+            addr_3,
+            Statistics {
+                latency_avg: 103_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 6,
+            },
+        );
+
+        statistics.insert(
+            addr_2,
+            Statistics {
+                latency_avg: 102_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        statistics.insert(
+            addr_1.clone(),
+            Statistics {
+                latency_avg: 101_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        statistics.insert(
+            addr_leader.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+
+        let (_, leader_url_first) = leaders[0].clone();
+        let (_, leader_url_second) = leaders[1].clone();
+
+        assert_eq!(addr_leader, leader_url_first);
+        assert_eq!(addr_1, leader_url_second);
+        assert_eq!(leaders.len(), 2);
+    }
+
+    #[test]
+    fn choose_multiple_leaders_var_check() {
+        let (client_list, [addr_leader, addr_1, addr_2, addr_3]) = four_client_list();
+
+        let mut statistics = HashMap::new();
+
+        statistics.insert(
+            addr_3,
+            Statistics {
+                latency_avg: 103_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 6,
+            },
+        );
+
+        statistics.insert(
+            addr_2,
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 12_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        statistics.insert(
+            addr_1.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 11_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        statistics.insert(
+            addr_leader.clone(),
+            Statistics {
+                latency_avg: 100_f32,
+                latency_var: 10_f32,
+                sample_size: 10,
+                latest_block_id: 100,
+                errors: 4,
+            },
+        );
+
+        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+
+        let (_, leader_url_first) = leaders[0].clone();
+        let (_, leader_url_second) = leaders[1].clone();
+
+        assert_eq!(addr_leader, leader_url_first);
+        assert_eq!(addr_1, leader_url_second);
+        assert_eq!(leaders.len(), 2);
     }
 }

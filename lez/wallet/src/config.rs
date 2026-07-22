@@ -39,7 +39,8 @@ pub struct GasConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MultiSequencerClientConfig {
-    /// Maximum numbers of sequencers to send requests.
+    /// Maximum numbers of sequencers to send requests. Client can have AT MOST
+    /// `distribution_limit` active clients.
     pub distribution_limit: usize,
     /// Limit number of sequencer polls during callibration, should not be zero.
     pub calibration_limit: usize,
