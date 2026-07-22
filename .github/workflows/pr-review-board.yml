@@ -41,6 +41,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Skipping PR review board sync because PROJECT_PAT is not configured."
+            exit 0
+          fi
+
           DATA=$(gh pr view "$PR" --repo "$REPO" --json id,isDraft,mergedAt,state,latestReviews,labels)
           PR_NODE=$(echo "$DATA" | jq -r '.id')
           IS_DRAFT=$(echo "$DATA" | jq -r '.isDraft')
