@@ -1,7 +1,7 @@
 //! Two-tier chain state: a reorg-able `head` the sequencer builds on, plus an
 //! irreversible `final` tier.
 
-use common::{HashType, block::Block};
+use common::block::Block;
 use lee::V03State;
 use log::warn;
 use logos_blockchain_core::mantle::ops::channel::MsgId;
@@ -91,11 +91,14 @@ impl ChainState {
     }
 
     /// Position of a head entry, matched by `MsgId` or block hash (restored
-    /// entries carry sentinel `MsgId`s; re-inscriptions arrive under fresh ones).
-    fn head_position_of(&self, this_msg: MsgId, block_hash: HashType) -> Option<usize> {
-        self.head_blocks
-            .iter()
-            .position(|entry| entry.this_msg == this_msg || entry.block.header.hash == block_hash)
+    /// entries carry sentinel `MsgId`s; re-inscriptions arrive under fresh ones)
+    /// — always at the same claimed height: a hash or `MsgId` collision with a
+    /// different `block_id` is malformed and must fall through to validation.
+    fn head_position_of(&self, this_msg: MsgId, block: &Block) -> Option<usize> {
+        self.head_blocks.iter().position(|entry| {
+            entry.block.header.block_id == block.header.block_id
+                && (entry.this_msg == this_msg || entry.block.header.hash == block.header.hash)
+        })
     }
 
     /// Applies an adopted head block.
@@ -106,7 +109,7 @@ impl ChainState {
     ///
     /// On failure the head stays unchanged and no stall is recorded.
     pub fn apply_adopted(&mut self, this_msg: MsgId, block: &Block) -> AcceptOutcome {
-        if self.head_position_of(this_msg, block.header.hash).is_some() {
+        if self.head_position_of(this_msg, block).is_some() {
             return AcceptOutcome::AlreadyApplied;
         }
 
@@ -160,7 +163,7 @@ impl ChainState {
 
     /// Reverts an orphaned head block and everything after it, then re-derives head.
     pub fn revert_orphan(&mut self, this_msg: MsgId, block: &Block) {
-        if let Some(idx) = self.head_position_of(this_msg, block.header.hash) {
+        if let Some(idx) = self.head_position_of(this_msg, block) {
             self.head_blocks.truncate(idx);
             self.rederive_head();
         }
@@ -175,7 +178,7 @@ impl ChainState {
     ) -> Vec<AcceptOutcome> {
         let earliest = orphaned
             .iter()
-            .filter_map(|(msg, block)| self.head_position_of(*msg, block.header.hash))
+            .filter_map(|(msg, block)| self.head_position_of(*msg, block))
             .min();
         if let Some(idx) = earliest {
             self.head_blocks.truncate(idx);
@@ -210,7 +213,7 @@ impl ChainState {
         l1_slot: Slot,
     ) -> AcceptOutcome {
         // Match by `MsgId` or block hash (re-inscriptions, restored entries).
-        if let Some(idx) = self.head_position_of(this_msg, block.header.hash) {
+        if let Some(idx) = self.head_position_of(this_msg, block) {
             self.finalize_through(idx);
             return AcceptOutcome::Applied;
         }
@@ -718,6 +721,26 @@ mod tests {
         let mut chain = ChainState::new(initial_state());
         let skipped = produce_dummy_block(3, Some(HashType([9; 32])), vec![]);
         assert!(chain.restore_head_block(skipped).is_err());
+    }
+
+    #[test]
+    fn finalized_hash_alias_with_wrong_id_is_not_absorbed() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        // A malformed message reusing genesis's hash under a different claimed
+        // id must not match the held entry as a re-delivery; it falls through
+        // to validation and parks.
+        let mut alias = genesis.clone();
+        alias.header.block_id = 6;
+        assert!(matches!(
+            chain.apply_finalized(msg(66), &alias, slot(10)),
+            AcceptOutcome::Parked(_)
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 1);
+        assert!(chain.final_tip().is_none());
+        assert_head_matches_replay(&chain);
     }
 
     #[test]
