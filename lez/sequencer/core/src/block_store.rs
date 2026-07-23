@@ -218,6 +218,16 @@ impl SequencerStore {
     pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
         self.dbio.is_deposit_event_submitted(deposit_op_id)
     }
+
+    /// Marks the given deposit events submitted in `block_id`, in one write.
+    pub fn mark_deposit_events_submitted(
+        &self,
+        deposit_op_ids: &[HashType],
+        submitted_block_id: u64,
+    ) -> DbResult<()> {
+        self.dbio
+            .mark_deposit_events_submitted(deposit_op_ids, submitted_block_id)
+    }
 }
 
 pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64> {

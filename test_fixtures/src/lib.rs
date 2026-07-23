@@ -12,7 +12,7 @@ use lee_core::Commitment;
 use log::{debug, error};
 use sequencer_core::config::GenesisAction;
 use sequencer_service::SequencerHandle;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -340,9 +340,7 @@ impl TestContextBuilder {
                 setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
                     .await
                     .context("Failed to setup Indexer")?;
-            let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
-                .context("Failed to convert indexer addr to URL")?;
-            let indexer_client = IndexerClient::new(&indexer_url)
+            let indexer_client = setup::indexer_client(indexer_handle.addr())
                 .await
                 .context("Failed to create indexer client")?;
             Some(IndexerComponents {
@@ -404,10 +402,7 @@ impl TestContextBuilder {
                 .context("Failed to initialize private accounts in wallet")?;
         }
 
-        let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
-            .context("Failed to convert sequencer addr to URL")?;
-        let sequencer_client = SequencerClientBuilder::default()
-            .build(sequencer_url)
+        let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
             .context("Failed to create sequencer client")?;
 
         Ok(TestContext {

@@ -1,14 +1,14 @@
 use core::fmt;
 
 use anyhow::Result;
-use keycard_wallet::{KeycardWallet, python_path};
+use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     compute_digest_for_path,
-    encryption::ViewingPublicKey,
+    encryption::{ViewTag, ViewingPublicKey},
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -237,14 +237,7 @@ impl AccountManager {
                     if pin.is_none() {
                         pin = Some(
                             crate::helperfunctions::read_pin()
-                                .map_err(|e| {
-                                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                                        pyo3::exceptions::PyRuntimeError,
-                                        _,
-                                    >(
-                                        e.to_string()
-                                    ))
-                                })?
+                                .map_err(ExecutionFailureKind::SignError)?
                                 .as_str()
                                 .to_owned(),
                         );
@@ -411,6 +404,7 @@ impl AccountManager {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
                         vpk: pre.vpk.clone(),
                         random_seed: pre.random_seed,
+                        view_tag: random_view_tag(),
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
@@ -430,6 +424,7 @@ impl AccountManager {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
                             vpk: pre.vpk.clone(),
                             random_seed: pre.random_seed,
+                            view_tag: random_view_tag(),
                             nsk,
                             membership_proof,
                             identifier: pre.identifier,
@@ -498,17 +493,11 @@ impl AccountManager {
             .collect();
 
         if let Some(pin) = self.pin.clone() {
-            pyo3::Python::attach(|py| -> pyo3::PyResult<()> {
-                python_path::add_python_path(py)?;
-                let wallet = KeycardWallet::new(py)?;
-                wallet.connect(py, &pin)?;
-                for path in keycard_paths {
-                    sigs.push(wallet.sign_message_for_path(py, path, &message_hash)?);
-                }
-                let _res = wallet.close_session(py);
-                Ok(())
-            })
-            .map_err(anyhow::Error::from)?;
+            let mut wallet = KeycardWallet::new()?;
+            wallet.connect(&pin)?;
+            for path in keycard_paths {
+                sigs.push(wallet.sign_message_for_path(path, &message_hash)?);
+            }
         }
 
         Ok(sigs)
@@ -648,6 +637,13 @@ fn validate_proofs_against_root(
     }
 
     Ok(())
+}
+
+/// Generate random byte using OS randomness.
+fn random_view_tag() -> ViewTag {
+    let mut byte: [u8; 1] = [0; 1];
+    OsRng.fill_bytes(&mut byte);
+    byte[0]
 }
 
 #[cfg(test)]

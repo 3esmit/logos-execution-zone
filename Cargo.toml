@@ -16,6 +16,7 @@ members = [
 
   "lez",
   "lez/system_accounts",
+  "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
@@ -32,7 +33,6 @@ members = [
   "lez/wallet",
   "lez/wallet-ffi",
   "lez/common",
-  "lez/chain_consistency",
   "lez/programs",
   "lez/programs/amm",
   "lez/programs/associated_token_account",
@@ -73,7 +73,7 @@ members = [
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
-chain_consistency = { path = "lez/chain_consistency" }
+chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
@@ -180,11 +180,14 @@ logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/lo
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
+
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",
   "arithmetic",
@@ -201,7 +204,6 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 

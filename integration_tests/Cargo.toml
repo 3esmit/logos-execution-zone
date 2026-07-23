@@ -36,6 +36,7 @@ indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 programs.workspace = true
 test_programs.workspace = true
+testnet_initial_state.workspace = true
 
 logos-blockchain-http-api-common.workspace = true
 logos-blockchain-core.workspace = true

@@ -1,7 +1,9 @@
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use chain_consistency::{BlockIngestError, Tip};
+use chain_state::{
+    AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
+};
 use common::{
     block::{BedrockStatus, Block, BlockHeader},
     transaction::LeeTransaction,
@@ -13,23 +15,6 @@ use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
-
-use crate::status::StallReason;
-
-/// Outcome of feeding a parsed L2 block to the validated tip.
-pub enum AcceptOutcome {
-    /// Chained and applied; tip and L1 read cursor both advance.
-    Applied,
-    /// A duplicate re-delivery of the current tip. Just L2 advances.
-    AlreadyApplied,
-    /// Did not chain or failed to apply; tip stays frozen, stall recorded.
-    Parked(BlockIngestError),
-    /// Chained but failed to apply, possibly transiently
-    /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
-    /// untouched. The caller retries and parks via
-    /// [`IndexerStore::record_stall`] once it gives up.
-    RetryableFailure(BlockIngestError),
-}
 
 #[derive(Clone)]
 pub struct IndexerStore {
@@ -201,10 +186,7 @@ impl IndexerStore {
         let Some(block) = self.dbio.get_block(block_id)? else {
             return Ok(None);
         };
-        Ok(Some(Tip {
-            block_id,
-            hash: block.header.hash,
-        }))
+        Ok(Some(Tip::from(&block)))
     }
 
     /// Record the stall reason.
@@ -217,22 +199,10 @@ impl IndexerStore {
         l1_slot: Slot,
         error: BlockIngestError,
     ) -> Result<()> {
-        let stall = match self.get_stall_reason()? {
-            Some(mut existing) => {
-                existing.orphans_since = existing.orphans_since.saturating_add(1);
-                existing
-            }
-            None => StallReason {
-                // need to map out of `header` because they are not ser/de
-                block_id: header.map(|h| h.block_id),
-                block_hash: header.map(|h| h.hash),
-                prev_block_hash: header.map(|h| h.prev_block_hash),
-                first_seen: header.map(|h| h.timestamp),
-                l1_slot,
-                error,
-                orphans_since: 0,
-            },
-        };
+        let stall = self.get_stall_reason()?.map_or_else(
+            || StallReason::new(header, l1_slot, error),
+            StallReason::escalate,
+        );
         self.set_stall_reason(&Some(stall))
     }
 
@@ -252,14 +222,16 @@ impl IndexerStore {
             return Ok(AcceptOutcome::AlreadyApplied);
         }
 
-        if let Err(err) = chain_consistency::validate_against_tip(tip, block) {
+        // Validate before paying for the scratch clone; validation failures
+        // are never retryable, so parking immediately is exact.
+        if let Err(err) = validate_against_tip(tip.as_ref(), block) {
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
 
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
-        if let Err(err) = chain_consistency::apply_block(block, &mut scratch) {
+        if let Err(err) = apply_block_to_state(block, &mut scratch) {
             if err.is_retryable() {
                 return Ok(AcceptOutcome::RetryableFailure(err));
             }
@@ -434,7 +406,6 @@ mod tests {
 
 #[cfg(test)]
 mod accept_tests {
-    use chain_consistency::BlockIngestError;
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
 
     use super::*;

@@ -12,8 +12,8 @@ default = []
 testnet = []
 
 [dependencies]
+chain_state.workspace = true
 common.workspace = true
-chain_consistency.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
 lee_core.workspace = true
