@@ -1090,7 +1090,7 @@ fn replay_unfulfilled_deposit_events(
 
 /// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
 /// the only accounts seeded outside any transaction. Cross-zone config is seeded
-/// by genesis InitConfig transactions and reconstructed by replaying them.
+/// by genesis `InitConfig` transactions and reconstructed by replaying them.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
