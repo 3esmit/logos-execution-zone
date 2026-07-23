@@ -103,6 +103,10 @@ run-wallet +args:
     @echo "🔑 Running wallet"
     LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
 
+get-sequencer-metrics:
+    @echo "📊 Querying sequencer metrics"
+    curl http://localhost:9000/metrics
+
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"

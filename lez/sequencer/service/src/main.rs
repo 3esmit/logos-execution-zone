@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Parser;
 use log::{error, info};
 use tokio::signal::unix::{SignalKind, signal};
@@ -33,6 +33,11 @@ struct Args {
 )]
 async fn main() -> Result<()> {
     env_logger::init();
+
+    metrics_exporter_prometheus::PrometheusBuilder::new()
+        .with_recommended_naming(true)
+        .install()
+        .context("Failed to install Prometheus recorder")?;
 
     let Args {
         config_path,

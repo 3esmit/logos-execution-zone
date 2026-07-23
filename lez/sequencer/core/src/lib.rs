@@ -50,6 +50,7 @@ pub mod block_publisher;
 pub mod block_store;
 pub mod config;
 pub mod cross_zone_watcher;
+mod metrics;
 
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -72,7 +73,7 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
 /// The origin of a transaction.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, strum::IntoStaticStr)]
 pub enum TransactionOrigin {
     /// Basic transactions submitted by users via RPC.
     User,
@@ -298,6 +299,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             block_publisher,
             watchers,
         };
+
+        crate::metrics::set_block_count(sequencer_core.chain_height());
 
         (sequencer_core, mempool_handle)
     }
@@ -802,6 +805,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
+        crate::metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
         // is not the same as a `Sequencer` origin: it says the transaction has a
         // record behind it and so needs no requeue, where the origin only says
@@ -872,16 +876,25 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 break;
             }
 
-            if Self::apply_mempool_transaction(
+            let before_tx_apply = Instant::now();
+            let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
-            ) {
+            );
+            crate::metrics::record_mempool_transaction_application_time(
+                origin,
+                tx.kind(),
+                before_tx_apply.elapsed(),
+            );
+
+            if applied {
                 valid_transactions.push(tx);
             } else {
+                crate::metrics::increment_failed_transaction_count();
                 // A failed transaction is simply left out of the block, except a
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
@@ -897,6 +910,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
+        crate::metrics::set_block_transaction_count(valid_transactions.len());
 
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
@@ -914,6 +928,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hashable_data.transactions.len(),
             now.elapsed().as_secs()
         );
+
+        crate::metrics::record_block_creation_time(now.elapsed());
+        crate::metrics::increment_block_count();
 
         Ok(BlockWithMeta { block, withdrawals })
     }
