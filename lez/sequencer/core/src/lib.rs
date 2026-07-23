@@ -910,7 +910,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
-        crate::metrics::set_block_transaction_count(valid_transactions.len());
+        crate::metrics::record_transactions_per_block(valid_transactions.len());
 
         let hashable_data = HashableBlockData {
             block_id: new_block_height,

@@ -65,6 +65,13 @@ run-bedrock:
     @echo "⛓️ Running bedrock"
     docker compose up
 
+# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
+# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+[working-directory: 'monitoring']
+run-monitoring:
+    @echo "📊 Running Prometheus + Grafana"
+    docker compose up
+
 # Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 # Optional home/port let a second instance run off the same config, e.g.
 # `just run-sequencer "" "$TMPDIR/lez-sequencer2" 3041` for the multi-sequencer demo.
@@ -103,8 +110,9 @@ run-wallet +args:
     @echo "🔑 Running wallet"
     LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
 
+# Query sequencer metrics in raw format. Useful for quick debugging. For a more detailed view, use `just run-monitoring`.
 get-sequencer-metrics:
-    @echo "📊 Querying sequencer metrics"
+    @echo "📊 Querying sequencer's metrics"
     curl http://localhost:9000/metrics
 
 # Import test accounts supplied in sequencer configuration.
@@ -147,4 +155,5 @@ clean:
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
-    cd bedrock && docker compose down -v
+    cd bedrock && docker compose down -v && cd ..
+    cd monitoring && docker compose down -v && cd ..

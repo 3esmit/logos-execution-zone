@@ -18,7 +18,7 @@ mod names {
     pub const BLOCK_COUNT: &str = "block_count";
     pub const MEMPOOL_SIZE: &str = "mempool_size";
     pub const MEMPOOL_TRANSACTION_APPLICATION_TIME: &str = "mempool_transaction_application_time";
-    pub const BLOCK_TRANSACTION_COUNT: &str = "block_transaction_count";
+    pub const TRANSACTIONS_PER_BLOCK: &str = "transactions_per_block";
     pub const FAILED_TRANSACTION_COUNT: &str = "failed_transaction_count";
 }
 
@@ -71,11 +71,11 @@ pub fn record_mempool_transaction_application_time(
     .record(duration.as_secs_f64());
 }
 
-pub fn set_block_transaction_count(count: usize) {
+pub fn record_transactions_per_block(count: usize) {
     histogram!(
         description: "Number of transactions included in block",
         unit: Unit::Count,
-        names::BLOCK_TRANSACTION_COUNT
+        names::TRANSACTIONS_PER_BLOCK
     )
     .record(u64::try_from(count).expect("Block transaction count should fit into u64") as f64);
 }

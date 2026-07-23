@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: sequencer
+    metrics_path: /metrics
+    static_configs:
+      # `sequencer_service:9000` resolves when monitoring runs inside the
+      # all-in-one compose network. `host.docker.internal:9000` resolves when
+      # the sequencer runs natively on the host and only monitoring runs in Docker.
+      # Whichever is unreachable stays `down`.
+      - targets:
+          - sequencer_service:9000
+          - host.docker.internal:9000
