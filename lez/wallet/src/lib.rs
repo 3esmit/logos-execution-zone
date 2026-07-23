@@ -450,7 +450,7 @@ impl WalletCore {
         let mut index = NullifierIndex::default();
         index.track_initialization(account_id);
 
-        let poller = self.optimal_poller();
+        let poller = self.poller_helm();
         let mut blocks = std::pin::pin!(poller.poll_block_range(1..=cursor));
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
