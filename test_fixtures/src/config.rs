@@ -8,7 +8,7 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
 use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
-use wallet::config::WalletConfig;
+use wallet::config::{SequencerConnectionData, WalletConfig};
 
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
@@ -80,7 +80,26 @@ pub fn sequencer_config(
     home: PathBuf,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    cross_zone: Option<CrossZoneConfig>,
+) -> Result<SequencerConfig> {
+    sequencer_config_with_channel(
+        partial,
+        home,
+        bedrock_addr,
+        bedrock_channel_id(),
+        genesis_transactions,
+        cross_zone,
+    )
+}
+
+/// Like [`sequencer_config`] but with an explicit Bedrock `channel_id`, so tests
+/// can point a sequencer at a fresh/empty channel (e.g. to model a wiped Bedrock).
+pub fn sequencer_config_with_channel(
+    partial: SequencerPartialConfig,
+    home: PathBuf,
+    bedrock_addr: SocketAddr,
     channel_id: ChannelId,
+    genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -194,13 +213,16 @@ pub fn genesis_from_accounts(
 
 pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     Ok(WalletConfig {
-        sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
-            .context("Failed to convert sequencer addr to URL")?,
+        sequencers: vec![SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
+                .context("Failed to convert sequencer addr to URL")?,
+            basic_auth: None,
+        }],
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
-        basic_auth: None,
+        calibration_limit: 5,
     })
 }
 

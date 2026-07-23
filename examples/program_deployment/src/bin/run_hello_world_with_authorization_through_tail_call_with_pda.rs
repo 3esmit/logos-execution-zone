@@ -35,7 +35,7 @@ const PDA_SEED: PdaSeed = PdaSeed::new([37; 32]);
 #[tokio::main]
 async fn main() {
     // Initialize wallet
-    let wallet_core = WalletCore::from_env().unwrap();
+    let wallet_core = WalletCore::from_env().await.unwrap();
 
     // Parse arguments
     // First argument is the path to the program binary
@@ -57,7 +57,7 @@ async fn main() {
 
     // Submit the transaction
     let _response = wallet_core
-        .sequencer_client
+        .leader_owned()
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();

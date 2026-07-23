@@ -31,7 +31,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let account_id = new_account(&mut ctx, false, None).await?;
 
-    let nonces = ctx.wallet().get_accounts_nonces(vec![account_id]).await?;
+    let nonces = ctx.wallet_mut().get_accounts_nonces(&[account_id]).await?;
     let private_key = ctx
         .wallet()
         .get_account_public_signing_key(account_id)

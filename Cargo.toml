@@ -32,6 +32,7 @@ members = [
   "lez/wallet",
   "lez/wallet-ffi",
   "lez/common",
+  "lez/chain_consistency",
   "lez/programs",
   "lez/programs/amm",
   "lez/programs/associated_token_account",
@@ -72,6 +73,7 @@ members = [
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
+chain_consistency = { path = "lez/chain_consistency" }
 mempool = { path = "lez/mempool" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }

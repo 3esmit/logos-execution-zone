@@ -22,7 +22,7 @@ use crate::{
         LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell, LatestBlockMetaCellOwned,
         LatestBlockMetaCellRef, PendingDepositEventRecord, PendingDepositEventsCellOwned,
         PendingDepositEventsCellRef, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
-        ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -34,6 +34,10 @@ pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 /// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
 pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
+/// Key base for storing the last channel block read back and verified from
+/// Bedrock (its L1 slot + `id`/`hash`) — the anchor for the startup
+/// consistency check and the resume point for reconstruction.
+pub const DB_META_ZONE_CURSOR_KEY: &str = "zone_cursor";
 /// Key base for storing queued deposit events that were not yet
 /// fulfilled on L2.
 pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
@@ -340,8 +344,9 @@ impl RocksDBIO {
         self.put_batch(&LatestBlockMetaCellRef(block_meta), (), batch)
     }
 
-    pub fn latest_block_meta(&self) -> DbResult<BlockMeta> {
-        self.get::<LatestBlockMetaCellOwned>(()).map(|val| val.0)
+    pub fn latest_block_meta(&self) -> DbResult<Option<BlockMeta>> {
+        self.get_opt::<LatestBlockMetaCellOwned>(())
+            .map(|val| val.map(|cell| cell.0))
     }
 
     pub fn get_zone_sdk_checkpoint_bytes(&self) -> DbResult<Option<Vec<u8>>> {
@@ -357,6 +362,14 @@ impl RocksDBIO {
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
     pub fn delete_zone_sdk_checkpoint_bytes(&self) -> DbResult<()> {
         self.del::<ZoneSdkCheckpointCellOwned>(())
+    }
+
+    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
+        Ok(self.get_opt::<ZoneAnchorCell>(())?.map(|cell| cell.0))
+    }
+
+    pub fn put_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
+        self.put(&ZoneAnchorCell(*anchor), ())
     }
 
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
@@ -432,6 +445,14 @@ impl RocksDBIO {
         }
 
         Ok(removed)
+    }
+
+    /// Whether a bridge deposit for `deposit_op_id` is already recorded as
+    /// included in a block (its pending record is marked submitted).
+    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
+        Ok(self.get_pending_deposit_events()?.iter().any(|record| {
+            record.deposit_op_id == deposit_op_id && record.submitted_in_block_id.is_some()
+        }))
     }
 
     fn increment_unseen_withdraw_count(

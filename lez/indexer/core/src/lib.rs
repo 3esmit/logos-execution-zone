@@ -2,31 +2,29 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+pub use chain_consistency::BlockIngestError;
+use chain_consistency::{Anchor, ChainConsistency};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-pub use ingest_error::BlockIngestError;
 use log::{error, info, warn};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use retry::ApplyRetryGate;
-pub use stall_reason::StallReason;
+pub use status::StallReason;
 
 use crate::{
     block_store::{AcceptOutcome, IndexerStore},
-    chain_consistency::ChainConsistency,
     config::IndexerConfig,
     cross_zone_verifier::CrossZoneVerifier,
     status::{IndexerStatus, IndexerSyncStatus},
 };
+
 pub mod block_store;
-pub mod chain_consistency;
 pub mod config;
 pub mod cross_zone_verifier;
-pub mod ingest_error;
 mod retry;
-pub mod stall_reason;
 pub mod status;
 
 /// Consecutive failed apply attempts of the same block before parking.
@@ -109,12 +107,59 @@ impl IndexerCore {
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
-            store: IndexerStore::open_db(&home, Vec::new(), genesis_accounts)?,
+            store: IndexerStore::open_db(&home, genesis_accounts)?,
             node,
             config,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
             verifier,
         })
+    }
+
+    /// Verifies whether the channel still serves the same chain the store was built from.
+    /// This may change frequently during development where we reset the chain from time to
+    /// time in devnet/testnet, but we do not expect [`ChainConsistency::Inconsistent`] in
+    /// production.
+    ///
+    /// To compare the chains, we use an [`Anchor`] block that is either the parked L2 block
+    /// while stalled, or the tip L2 block at its own inscription L1 slot.
+    pub(crate) async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
+        let Some(anchor) = self.get_startup_anchor()? else {
+            // empty or cold store: nothing to compare
+            return Ok(ChainConsistency::Inconclusive);
+        };
+
+        chain_consistency::verify_chain_consistency(&self.node, self.config.channel_id, &anchor)
+            .await
+    }
+
+    /// Builds the anchor for the startup check.
+    ///
+    /// - If stalled, returns the recorded _parked_ block
+    /// - If not stalled, returns the validated tip at its _own_ inscription slot.
+    /// - If the store is empty, returns `None`.
+    fn get_startup_anchor(&self) -> Result<Option<Anchor>> {
+        if let Some(stall) = self.store.get_stall_reason()? {
+            return Ok(Some(Anchor::new(
+                stall.l1_slot,
+                stall.block_id.zip(stall.block_hash),
+            )));
+        }
+
+        // not stalled, so anchor on the tip at its own inscription slot
+        let Some(slot) = self
+            .store
+            .get_tip_slot()?
+            .map_or_else(|| self.store.get_zone_cursor(), |slot| Ok(Some(slot)))?
+        else {
+            return Ok(None);
+        };
+        let Some(tip_id) = self.store.get_last_block_id()? else {
+            return Ok(None);
+        };
+        let Some(tip) = self.store.get_block_at_id(tip_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(Anchor::new(slot, Some((tip_id, tip.header.hash)))))
     }
 
     /// Snapshot of the current ingestion status (sync state + indexed tip).
@@ -199,8 +244,8 @@ impl IndexerCore {
             let mut cursor = initial_cursor;
             let mut retry_gate = ApplyRetryGate::new();
 
-            if cursor.is_some() {
-                info!("Resuming indexer from cursor {cursor:?}");
+            if let Some(slot) = &cursor {
+                info!("Resuming indexer from cursor {slot:?}");
             } else {
                 info!("Starting indexer from beginning of channel");
             }
@@ -370,5 +415,129 @@ impl IndexerCore {
                 tokio::time::sleep(poll_interval).await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use common::{HashType, block::HashableBlockData};
+    use logos_blockchain_zone_sdk::Slot;
+
+    use super::*;
+    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
+
+    fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
+        let config = IndexerConfig {
+            consensus_info_polling_interval: Duration::from_secs(1),
+            bedrock_config: ClientConfig {
+                addr: "http://localhost:1".parse().expect("url"),
+                auth: None,
+            },
+            channel_id: ChannelId::from([1; 32]),
+            allow_chain_reset: false,
+            cross_zone: None,
+            bridge_lock_holdings: Vec::new(),
+        };
+        IndexerCore::open(config, dir).expect("open core")
+    }
+
+    fn test_block(block_id: u64, timestamp: u64) -> Block {
+        HashableBlockData {
+            block_id,
+            prev_block_hash: HashType([0; 32]),
+            timestamp,
+            transactions: vec![],
+        }
+        .into_pending_block(&lee::PrivateKey::try_new([7; 32]).expect("valid key"))
+    }
+
+    #[tokio::test]
+    async fn cold_store_is_inconclusive() {
+        // An empty store has no cursor, so there is nothing to compare: the check
+        // must be Inconclusive (not Consistent), and it returns before any L1 read.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        assert!(matches!(
+            core.verify_chain_consistency().await.expect("verify"),
+            ChainConsistency::Inconclusive
+        ));
+    }
+
+    #[tokio::test]
+    async fn parked_store_with_unreachable_node_is_inconclusive() {
+        // Network failure is not evidence of a reset: a parked store must stay
+        // parked (Inconclusive), not error out or trip the wipe path.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let parked = test_block(5, 42);
+        core.store
+            .record_stall(
+                Some(&parked.header),
+                Slot::from(1_000),
+                BlockIngestError::EmptyBlock,
+            )
+            .expect("record stall");
+        assert!(matches!(
+            core.verify_chain_consistency().await.expect("verify"),
+            ChainConsistency::Inconclusive
+        ));
+    }
+
+    #[tokio::test]
+    async fn caught_up_store_with_unreachable_node_is_inconclusive() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let genesis = common::test_utils::produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            core.store
+                .accept_block(&genesis, Slot::from(1_000))
+                .await
+                .expect("accept"),
+            AcceptOutcome::Applied
+        ));
+        core.store
+            .set_zone_cursor(&Slot::from(1_000))
+            .expect("set cursor");
+        assert!(matches!(
+            core.verify_chain_consistency().await.expect("verify"),
+            ChainConsistency::Inconclusive
+        ));
+    }
+
+    #[tokio::test]
+    async fn startup_anchor_prefers_tip_slot_over_lagging_cursor() {
+        // Cursor persist failures are warn-only, so the read cursor can lag the
+        // tip by several blocks. The anchor must pair the tip with its own
+        // inscription slot; pairing it with the stale cursor would make the scan
+        // misread the chain's intermediate blocks as re-inscriptions.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+
+        let genesis = common::test_utils::produce_dummy_block(1, None, vec![]);
+        core.store
+            .accept_block(&genesis, Slot::from(1_000))
+            .await
+            .expect("accept");
+        let block2 = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        core.store
+            .accept_block(&block2, Slot::from(1_005))
+            .await
+            .expect("accept");
+        let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        core.store
+            .accept_block(&block3, Slot::from(1_010))
+            .await
+            .expect("accept");
+
+        // Cursor last persisted at the genesis slot: two blocks behind the tip.
+        core.store
+            .set_zone_cursor(&Slot::from(1_000))
+            .expect("set cursor");
+
+        let anchor = core.get_startup_anchor().expect("anchor").expect("present");
+        let expected = Anchor::new(Slot::from(1_010), Some((3, block3.header.hash)));
+        assert_eq!(anchor, expected);
     }
 }

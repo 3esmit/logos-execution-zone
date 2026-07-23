@@ -18,7 +18,7 @@ use cross_zone_inbox_core::{
 };
 use integration_tests::{
     config::{self, SequencerPartialConfig},
-    setup::{setup_bedrock_node, setup_sequencer},
+    setup::{SequencerSetup, setup_bedrock_node},
 };
 use lee::{
     PublicTransaction,
@@ -34,7 +34,10 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .context("Failed to set up Bedrock node")?;
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
-    let (seq, _seq_home) = setup_sequencer(partial, bedrock_addr, vec![], channel, None)
+    let (seq, _seq_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up sequencer")?;
 

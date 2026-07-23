@@ -1,18 +1,18 @@
-//! Startup check that the local store still belongs to the chain the
-//! connected channel serves.
+//! Startup check that a local store still belongs to the chain the connected
+//! channel serves.
 
 use anyhow::Result;
 use common::{HashType, block::Block};
 use futures::StreamExt as _;
+use lee_core::BlockId;
 use log::warn;
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter::Node as _};
-
-use crate::IndexerCore;
+use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter, indexer::ZoneIndexer};
 
 /// Upper bound on the channel reads of the startup consistency check.
 const CHANNEL_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Result of comparing the indexer's stored chain against the channel.
+/// Result of comparing a caller's stored chain against the channel.
 pub enum ChainConsistency {
     /// Channel still serves our anchor block (the stored tip position, or the
     /// parked block while stalled).
@@ -24,7 +24,7 @@ pub enum ChainConsistency {
     /// - or the channel read was inconclusive (timeout / error / empty stream)
     ///
     /// NOTE: None of these prove a reset, so the caller proceeds.
-    /// A genuine divergence is still caught later when the ingest loop tries to apply and parks.
+    /// A genuine divergence is still caught later when applying the channel history.
     Inconclusive,
     /// Positive evidence that the channel is a different chain than the store.
     ///
@@ -36,13 +36,13 @@ pub enum ChainConsistency {
 pub enum ChainMismatch {
     /// The channel serves a different block at the anchor's id.
     Block {
-        ours: (u64, HashType),
-        channel: (u64, HashType),
+        ours: (BlockId, HashType),
+        channel: (BlockId, HashType),
     },
     /// The channel serves a block at/below the anchor's id past the anchor
     /// slot; on the same chain those ids live at earlier slots.
     ReinscribedBlock {
-        channel: (u64, HashType),
+        channel: (BlockId, HashType),
         slot: Slot,
         anchor_slot: Slot,
     },
@@ -97,18 +97,26 @@ impl std::fmt::Display for ChainMismatch {
 /// A block that must still be inscribed at `slot` if the channel is the chain
 /// the store was built from: the tip at the read cursor, or the recorded
 /// parked block while stalled.
-struct Anchor {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
     slot: Slot,
     /// The anchor block's `(id, hash)`.
     ///
-    /// `None` when parked on an undeserializable inscription (no header was recorded).
-    block: Option<(u64, HashType)>,
+    /// `None` when anchored on an undeserializable inscription (no header was recorded).
+    block: Option<(BlockId, HashType)>,
 }
 
 impl Anchor {
+    /// Builds an anchor at `slot` on the block `(id, hash)`, or a headerless
+    /// anchor (`None`) when only the slot is known.
+    #[must_use]
+    pub const fn new(slot: Slot, block: Option<(BlockId, HashType)>) -> Self {
+        Self { slot, block }
+    }
+
     /// Probes a channel message read at/after the anchor slot.
-    /// See [`IndexerCore::verify_chain_at_anchor`].
-    pub fn probe_anchor_slot(&self, msg: &ZoneMessage, slot: Slot) -> AnchorProbe {
+    /// See [`verify_chain_consistency`].
+    fn probe_anchor_slot(&self, msg: &ZoneMessage, slot: Slot) -> AnchorProbe {
         if slot < self.slot {
             return AnchorProbe::KeepLooking;
         }
@@ -157,6 +165,66 @@ impl Anchor {
     }
 }
 
+/// Classifies a stored chain against the channel one message at a time.
+///
+/// The shared driver behind both consistency consumers:
+/// [`verify_chain_consistency`] runs it over a channel it reads itself, while a
+/// caller that already streams the channel history (e.g. a reconstructing
+/// sequencer) feeds it the same messages it replays. Run [`Self::check_frontier`]
+/// once the channel tip is known, then feed messages in slot order via
+/// [`Self::observe`] until a verdict is reached.
+pub struct AnchorConsistencyCheck {
+    anchor: Anchor,
+    verdict: Option<ChainConsistency>,
+}
+
+impl AnchorConsistencyCheck {
+    /// New checker for `anchor` with an undetermined verdict.
+    #[must_use]
+    pub const fn new(anchor: Anchor) -> Self {
+        Self {
+            anchor,
+            verdict: None,
+        }
+    }
+
+    /// Applies the frontier check against a known channel tip. Skip it when the
+    /// tip could not be read, leaving the verdict to the message scan.
+    pub fn check_frontier(&mut self, channel_tip_slot: Option<Slot>) {
+        if self.verdict.is_none() {
+            self.verdict = frontier_verdict(self.anchor.slot, channel_tip_slot)
+                .map(ChainConsistency::Inconsistent);
+        }
+    }
+
+    /// Feeds the next channel message in slot order. Returns the verdict once it
+    /// is known so the caller can stop, or `None` while still undetermined.
+    pub fn observe(&mut self, msg: &ZoneMessage, slot: Slot) -> Option<&ChainConsistency> {
+        if self.verdict.is_none() {
+            self.verdict = match self.anchor.probe_anchor_slot(msg, slot) {
+                AnchorProbe::SameChain => Some(ChainConsistency::Consistent),
+                AnchorProbe::Mismatch(mismatch) => Some(ChainConsistency::Inconsistent(mismatch)),
+                AnchorProbe::Bail => Some(ChainConsistency::Inconclusive),
+                AnchorProbe::KeepLooking => None,
+            };
+        }
+        self.verdict.as_ref()
+    }
+
+    /// The verdict reached so far, or `None` while undetermined.
+    #[must_use]
+    pub const fn verdict(&self) -> Option<&ChainConsistency> {
+        self.verdict.as_ref()
+    }
+
+    /// Consumes the checker, defaulting an undetermined verdict (the anchor slot
+    /// was never observed) to [`ChainConsistency::Inconclusive`].
+    #[must_use]
+    pub fn finish(self) -> ChainConsistency {
+        self.verdict.unwrap_or(ChainConsistency::Inconclusive)
+    }
+}
+
 /// What a single channel message tells the anchored consistency check.
 enum AnchorProbe {
     /// The anchor is still in place: same chain.
@@ -168,114 +236,65 @@ enum AnchorProbe {
     KeepLooking,
 }
 
-#[expect(
-    clippy::multiple_inherent_impl,
-    reason = "split for clarity & isolation of relevant code"
-)]
-impl IndexerCore {
-    /// Verifies whether the channel still serves the same chain the store was built from.
-    /// This may change frequently during development where we reset the chain from time to
-    /// time in devnet/testnet, but we do not expect [`ChainConsistency::Inconsistent`] in
-    /// production.
-    ///
-    /// To compare the chains, we use an [`Anchor`] block that is either the parked L2 block
-    /// while stalled, or the tip L2 block at its own inscription L1 slot.
-    pub(crate) async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
-        let Some(anchor) = self.get_startup_anchor()? else {
-            // empty or cold store: nothing to compare
-            return Ok(ChainConsistency::Inconclusive);
-        };
-
-        self.verify_chain_at_anchor(&anchor).await
+/// Detects when a local store belongs to a different chain than the connected
+/// L1 (e.g. a wiped/restarted Bedrock) so startup can react instead of silently
+/// diverging.
+///
+/// Verifies the channel still carries the anchor block at its slot. The anchor
+/// was finalized at `anchor.slot`, so the same chain must still serve it there,
+/// while a reset chain re-inscribes its content only at later wall-clock slots.
+/// Only positive evidence of a different chain yields
+/// [`ChainConsistency::Inconsistent`]; absence of data stays
+/// [`ChainConsistency::Inconclusive`].
+///
+/// `node` need only implement the zone-sdk [`adapter::Node`] trait; a throwaway
+/// [`ZoneIndexer`] is built internally for the channel read.
+pub async fn verify_chain_consistency<N>(
+    node: &N,
+    channel_id: ChannelId,
+    anchor: &Anchor,
+) -> Result<ChainConsistency>
+where
+    N: adapter::Node + Clone + Sync,
+{
+    let mut check = AnchorConsistencyCheck::new(anchor.clone());
+    match node.channel_state(channel_id).await {
+        Ok(state) => check.check_frontier(state.map(|s| s.tip_slot)),
+        Err(err) => warn!("Failed to read channel state for the consistency check: {err:#}"),
+    }
+    if check.verdict().is_some() {
+        return Ok(check.finish());
     }
 
-    /// Builds the anchor for the startup check.
-    ///
-    /// - If stalled, returns the recorded _parked_ block
-    /// - If not stalled, returns the validated tip at its _own_ inscription slot.
-    /// - If the store is empty, returns `None`.
-    fn get_startup_anchor(&self) -> Result<Option<Anchor>> {
-        if let Some(stall) = self.store.get_stall_reason()? {
-            return Ok(Some(Anchor {
-                slot: stall.l1_slot,
-                block: stall.block_id.zip(stall.block_hash),
-            }));
-        }
+    // `next_messages` is exclusive, so `slot - 1` includes the anchor slot.
+    let Some(from_slot) = anchor.slot.into_inner().checked_sub(1) else {
+        return Ok(ChainConsistency::Inconclusive);
+    };
 
-        // not stalled, so anchor on the tip at its own inscription slot
-        let Some(slot) = self.store.get_tip_slot()?.or(self.store.get_zone_cursor()?) else {
-            return Ok(None);
-        };
-        let Some(tip_id) = self.store.get_last_block_id()? else {
-            return Ok(None);
-        };
-        let Some(tip) = self.store.get_block_at_id(tip_id)? else {
-            return Ok(None);
-        };
-        Ok(Some(Anchor {
-            slot,
-            block: Some((tip_id, tip.header.hash)),
-        }))
-    }
+    let zone_indexer = ZoneIndexer::new(channel_id, node.clone());
+    let scan = async {
+        let stream = zone_indexer
+            .next_messages(Some(Slot::from(from_slot)))
+            .await?;
+        let mut stream = std::pin::pin!(stream);
 
-    /// Verifies the channel still carries the anchor block at its slot.
-    ///
-    /// The anchor was finalized at `anchor.slot`, so the same chain must still
-    /// serve it there, while a reset chain re-inscribes its content only at
-    /// later wall-clock slots.
-    ///
-    /// Only positive evidence of a different chain yields `Inconsistent`.
-    /// Absence of data stays `Inconclusive`.
-    async fn verify_chain_at_anchor(&self, anchor: &Anchor) -> Result<ChainConsistency> {
-        match self.node.channel_state(self.config.channel_id).await {
-            Ok(state) => {
-                if let Some(mismatch) = frontier_verdict(anchor.slot, state.map(|s| s.tip_slot)) {
-                    return Ok(ChainConsistency::Inconsistent(mismatch));
-                }
-            }
-            Err(err) => {
-                warn!("Failed to read channel state for the consistency check: {err:#}");
+        while let Some((msg, slot)) = stream.next().await {
+            if check.observe(&msg, slot).is_some() {
+                break;
             }
         }
+        Ok::<_, anyhow::Error>(())
+    };
 
-        // `next_messages` is exclusive, so `slot - 1` includes the anchor slot.
-        let Some(from_slot) = anchor.slot.into_inner().checked_sub(1) else {
-            return Ok(ChainConsistency::Inconclusive);
-        };
-
-        let scan = async {
-            let stream = self
-                .zone_indexer
-                .next_messages(Some(Slot::from(from_slot)))
-                .await?;
-            let mut stream = std::pin::pin!(stream);
-
-            while let Some((msg, slot)) = stream.next().await {
-                match anchor.probe_anchor_slot(&msg, slot) {
-                    AnchorProbe::SameChain => return Ok(Some(ChainConsistency::Consistent)),
-                    AnchorProbe::Mismatch(mismatch) => {
-                        return Ok(Some(ChainConsistency::Inconsistent(mismatch)));
-                    }
-                    AnchorProbe::Bail => return Ok(Some(ChainConsistency::Inconclusive)),
-                    AnchorProbe::KeepLooking => { /* dont do anything */ }
-                }
-            }
-            Ok::<_, anyhow::Error>(None)
-        };
-
-        match tokio::time::timeout(CHANNEL_READ_TIMEOUT, scan).await {
-            Ok(Ok(Some(outcome))) => Ok(outcome),
-            Ok(Ok(None)) => Ok(ChainConsistency::Inconclusive),
-            Ok(Err(err)) => {
-                warn!(
-                    "Failed to read the anchor slot for the consistency check; proceeding: {err:#}"
-                );
-                Ok(ChainConsistency::Inconclusive)
-            }
-            Err(_elapsed) => {
-                warn!("Timed out reading the anchor slot for the consistency check; proceeding");
-                Ok(ChainConsistency::Inconclusive)
-            }
+    match tokio::time::timeout(CHANNEL_READ_TIMEOUT, scan).await {
+        Ok(Ok(())) => Ok(check.finish()),
+        Ok(Err(err)) => {
+            warn!("Failed to read the anchor slot for the consistency check; proceeding: {err:#}");
+            Ok(ChainConsistency::Inconclusive)
+        }
+        Err(_elapsed) => {
+            warn!("Timed out reading the anchor slot for the consistency check; proceeding");
+            Ok(ChainConsistency::Inconclusive)
         }
     }
 }
@@ -297,35 +316,13 @@ fn frontier_verdict(anchor_slot: Slot, channel_tip_slot: Option<Slot>) -> Option
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use common::block::HashableBlockData;
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
 
     use super::*;
-    use crate::{
-        BlockIngestError,
-        block_store::AcceptOutcome,
-        config::{ChannelId, ClientConfig, IndexerConfig},
-    };
 
-    fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
-        let config = IndexerConfig {
-            consensus_info_polling_interval: Duration::from_secs(1),
-            bedrock_config: ClientConfig {
-                addr: "http://localhost:1".parse().expect("url"),
-                auth: None,
-            },
-            channel_id: ChannelId::from([1; 32]),
-            allow_chain_reset: false,
-            cross_zone: None,
-            bridge_lock_holdings: Vec::new(),
-        };
-        IndexerCore::open(config, dir).expect("open core")
-    }
-
-    fn test_block(block_id: u64, timestamp: u64) -> Block {
+    fn test_block(block_id: BlockId, timestamp: u64) -> Block {
         HashableBlockData {
             block_id,
             prev_block_hash: HashType([0; 32]),
@@ -344,98 +341,7 @@ mod tests {
     }
 
     fn anchor_for(block: &Block, slot: Slot) -> Anchor {
-        Anchor {
-            slot,
-            block: Some((block.header.block_id, block.header.hash)),
-        }
-    }
-
-    #[tokio::test]
-    async fn cold_store_is_inconclusive() {
-        // An empty store has no cursor, so there is nothing to compare: the check
-        // must be Inconclusive (not Consistent), and it returns before any L1 read.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        assert!(matches!(
-            core.verify_chain_consistency().await.expect("verify"),
-            ChainConsistency::Inconclusive
-        ));
-    }
-
-    #[tokio::test]
-    async fn parked_store_with_unreachable_node_is_inconclusive() {
-        // Network failure is not evidence of a reset: a parked store must stay
-        // parked (Inconclusive), not error out or trip the wipe path.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let parked = test_block(5, 42);
-        core.store
-            .record_stall(
-                Some(&parked.header),
-                Slot::from(1_000),
-                BlockIngestError::EmptyBlock,
-            )
-            .expect("record stall");
-        assert!(matches!(
-            core.verify_chain_consistency().await.expect("verify"),
-            ChainConsistency::Inconclusive
-        ));
-    }
-
-    #[tokio::test]
-    async fn caught_up_store_with_unreachable_node_is_inconclusive() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let genesis = common::test_utils::produce_dummy_block(1, None, vec![]);
-        assert!(matches!(
-            core.store
-                .accept_block(&genesis, Slot::from(1_000))
-                .await
-                .expect("accept"),
-            AcceptOutcome::Applied
-        ));
-        core.store
-            .set_zone_cursor(&Slot::from(1_000))
-            .expect("set cursor");
-        assert!(matches!(
-            core.verify_chain_consistency().await.expect("verify"),
-            ChainConsistency::Inconclusive
-        ));
-    }
-
-    #[tokio::test]
-    async fn startup_anchor_prefers_tip_slot_over_lagging_cursor() {
-        // Cursor persist failures are warn-only, so the read cursor can lag the
-        // tip by several blocks. The anchor must pair the tip with its own
-        // inscription slot; pairing it with the stale cursor would make the scan
-        // misread the chain's intermediate blocks as re-inscriptions.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-
-        let genesis = common::test_utils::produce_dummy_block(1, None, vec![]);
-        core.store
-            .accept_block(&genesis, Slot::from(1_000))
-            .await
-            .expect("accept");
-        let block2 = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-        core.store
-            .accept_block(&block2, Slot::from(1_005))
-            .await
-            .expect("accept");
-        let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
-        core.store
-            .accept_block(&block3, Slot::from(1_010))
-            .await
-            .expect("accept");
-
-        // Cursor last persisted at the genesis slot: two blocks behind the tip.
-        core.store
-            .set_zone_cursor(&Slot::from(1_000))
-            .expect("set cursor");
-
-        let anchor = core.get_startup_anchor().expect("anchor").expect("present");
-        assert_eq!(anchor.slot, Slot::from(1_010));
-        assert_eq!(anchor.block, Some((3, block3.header.hash)));
+        Anchor::new(slot, Some((block.header.block_id, block.header.hash)))
     }
 
     #[test]
@@ -516,10 +422,7 @@ mod tests {
     fn probe_accepts_any_message_for_a_headerless_anchor() {
         // A deserialize park records no header: any message still present at
         // the anchor slot means the history is intact.
-        let anchor = Anchor {
-            slot: Slot::from(1_000),
-            block: None,
-        };
+        let anchor = Anchor::new(Slot::from(1_000), None);
         let garbage = ZoneMessage::Block(ZoneBlock {
             id: MsgId::from([0_u8; 32]),
             data: Inscription::try_from(&[1_u8, 2, 3][..]).expect("inscription"),

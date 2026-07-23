@@ -24,8 +24,8 @@ use wallet::{
 use crate::{
     indexer_client::IndexerClient,
     setup::{
-        setup_bedrock_node, setup_indexer, setup_private_accounts_with_initial_supply,
-        setup_public_accounts_with_initial_supply, setup_sequencer, setup_sequencer_from_prebuilt,
+        SequencerSetup, setup_bedrock_node, setup_indexer,
+        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
         setup_wallet, sync_wallet_from_prebuilt,
     },
 };
@@ -359,11 +359,8 @@ impl TestContextBuilder {
 
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
-        let (sequencer_handle, temp_sequencer_dir) = if use_prebuilt {
-            setup_sequencer_from_prebuilt(partial_config, bedrock_addr)
-                .await
-                .context("Failed to setup Sequencer from prebuilt database")?
-        } else {
+        let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
+        if !use_prebuilt {
             // Wallet genesis must always be present so that
             // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
             // When a test supplies custom genesis, merge rather than replace.
@@ -376,16 +373,12 @@ impl TestContextBuilder {
                 }
                 None => wallet_genesis,
             };
-            setup_sequencer(
-                partial_config,
-                bedrock_addr,
-                genesis,
-                config::bedrock_channel_id(),
-                None,
-            )
+            sequencer_setup = sequencer_setup.with_genesis(genesis);
+        }
+        let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
+            .setup()
             .await
-            .context("Failed to setup Sequencer")?
-        };
+            .context("Failed to setup Sequencer")?;
 
         let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
             sequencer_handle.addr(),
@@ -393,6 +386,7 @@ impl TestContextBuilder {
             &initial_private_accounts,
             wallet_config_overrides,
         )
+        .await
         .context("Failed to setup wallet")?;
 
         if use_prebuilt {
@@ -454,6 +448,10 @@ impl BlockingTestContext {
 
     pub const fn ctx(&self) -> &TestContext {
         self.ctx.as_ref().expect("TestContext is set")
+    }
+
+    pub const fn ctx_mut(&mut self) -> &mut TestContext {
+        self.ctx.as_mut().expect("TestContext is set")
     }
 
     pub const fn runtime(&self) -> &tokio::runtime::Runtime {

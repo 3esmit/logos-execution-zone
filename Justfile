@@ -11,12 +11,18 @@ ARTIFACTS := "artifacts"
 # Linux/CI, which is unaffected.
 DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
 
-# Build risc0 program artifacts.
+# Build risc0 program artifacts and test fixture.
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
     @just build-artifact lee/privacy_preserving_circuit
     @just build-artifact lez/programs programs
+
+    @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
+        echo "Skipping test fixture regeneration because CI doesn't need it"; \
+    else \
+        just regenerate-test-fixture; \
+    fi
 
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
@@ -42,7 +48,7 @@ test:
 
 # Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
 regenerate-test-fixture:
-    @echo "🧪 Regenerating test fixtures"
+    @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
@@ -131,5 +137,6 @@ clean:
     rm -rf lez/sequencer/service/rocksdb
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
+    rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
     cd bedrock && docker compose down -v

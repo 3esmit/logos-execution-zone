@@ -11,9 +11,9 @@ use sequencer_core::block_store::SequencerStore;
 use test_fixtures::{
     config,
     setup::{
-        prebuilt_sequencer_db_dump_path, setup_bedrock_node,
+        SequencerSetup, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
         setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_sequencer, setup_wallet,
+        setup_wallet,
     },
 };
 use wallet::config::WalletConfigOverrides;
@@ -49,15 +49,12 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let genesis =
         config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
 
-    let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-        config::SequencerPartialConfig::default(),
-        bedrock_addr,
-        genesis,
-        config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup Sequencer for fixture generation")?;
+    let (sequencer_handle, temp_sequencer_dir) =
+        SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
+            .with_genesis(genesis)
+            .setup()
+            .await
+            .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
         sequencer_handle.addr(),
@@ -65,6 +62,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         &initial_private_accounts,
         WalletConfigOverrides::default(),
     )
+    .await
     .context("Failed to setup wallet for fixture generation")?;
 
     setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)

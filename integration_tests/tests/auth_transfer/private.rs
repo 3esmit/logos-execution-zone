@@ -248,11 +248,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
     let acc_1_balance = account_balance(&ctx, from).await?;
 
     assert!(
-        verify_commitment_is_in_state(
-            tx.message.new_commitments[0].clone(),
-            ctx.sequencer_client()
-        )
-        .await
+        verify_commitment_is_in_state(tx.message.new_commitments[0], ctx.sequencer_client()).await
     );
 
     assert_eq!(acc_1_balance, 9900);

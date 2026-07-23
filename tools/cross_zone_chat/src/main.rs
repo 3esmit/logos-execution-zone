@@ -66,7 +66,7 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuil
 use serde::{Deserialize, Serialize};
 use test_fixtures::{
     config::{self, SequencerPartialConfig, UrlProtocol, bedrock_channel_id, bedrock_channel_id_b},
-    setup::{setup_bedrock_node, setup_sequencer},
+    setup::{SequencerSetup, setup_bedrock_node},
 };
 
 const HTTP_PORT: u16 = 8088;
@@ -289,14 +289,20 @@ async fn main() -> Result<()> {
     let cross_zone_b = watch_peer(zone_a, receiver_id);
 
     let partial = SequencerPartialConfig::default();
-    let (seq_a, _home_a) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_a, Some(cross_zone_a))
-            .await
-            .context("Failed to set up zone A sequencer")?;
-    let (seq_b, _home_b) =
-        setup_sequencer(partial, bedrock_addr, vec![], channel_b, Some(cross_zone_b))
-            .await
-            .context("Failed to set up zone B sequencer")?;
+    let (seq_a, _home_a) = SequencerSetup::new(partial, bedrock_addr)
+        .with_genesis(vec![])
+        .with_channel_id(channel_a)
+        .with_cross_zone(cross_zone_a)
+        .setup()
+        .await
+        .context("Failed to set up zone A sequencer")?;
+    let (seq_b, _home_b) = SequencerSetup::new(partial, bedrock_addr)
+        .with_genesis(vec![])
+        .with_channel_id(channel_b)
+        .with_cross_zone(cross_zone_b)
+        .setup()
+        .await
+        .context("Failed to set up zone B sequencer")?;
 
     let state = Arc::new(AppState {
         zone_a: ZoneRuntime {

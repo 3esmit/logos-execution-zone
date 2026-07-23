@@ -37,6 +37,8 @@ use crate::{
     mock::SequencerCoreWithMockClients,
 };
 
+mod reconstruction;
+
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
@@ -625,7 +627,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         sequencer.produce_new_block().await.unwrap();
 
         // Get the metadata of the last block produced
-        sequencer.store.latest_block_meta().unwrap()
+        sequencer.store.latest_block_meta().unwrap().unwrap()
     };
 
     // Step 2: Restart sequencer from the same storage
