@@ -1,10 +1,10 @@
 use common::HashType;
 use serde::{Deserialize, Serialize};
 
-/// Why the indexer could not apply an L2 block from the channel.
+/// Why an L2 block from the channel could not be applied.
 ///
-/// Persisted in `RocksDB`, so every variant must have the following
-/// traits: `Clone + Serialize + Deserialize`.
+/// Persisted in `RocksDB` (as part of [`crate::StallReason`]), so every variant
+/// must be `Clone + Serialize + Deserialize`.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum BlockIngestError {
     #[error("Failed to deserialize L2 block: {0}")]

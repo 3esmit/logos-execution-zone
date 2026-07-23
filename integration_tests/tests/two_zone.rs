@@ -13,7 +13,7 @@ use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{setup_bedrock_node, setup_indexer, setup_sequencer},
+    setup::{SequencerSetup, setup_bedrock_node, setup_indexer},
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 use tokio::test;
@@ -35,13 +35,19 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let channel_b = config::bedrock_channel_id_b();
 
     // Empty genesis is enough: the clock transaction drives block production.
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
+    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_a)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
     let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
         .await
         .context("Failed to set up zone A indexer")?;
-    let (seq_b, _seq_b_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_b, None)
+    let (seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_b)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, None)

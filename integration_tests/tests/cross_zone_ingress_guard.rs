@@ -9,8 +9,6 @@
 //! inbox guest's caller-is-none assertion passes for a top-level user tx, so the
 //! sequencer ingress guard is the only thing that stops this.
 
-use std::net::SocketAddr;
-
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use cross_zone_inbox_core::{
@@ -18,13 +16,13 @@ use cross_zone_inbox_core::{
 };
 use integration_tests::{
     config::{self, SequencerPartialConfig},
-    setup::{setup_bedrock_node, setup_sequencer},
+    setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
 use lee::{
     PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 #[test]
@@ -34,7 +32,10 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .context("Failed to set up Bedrock node")?;
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
-    let (seq, _seq_home) = setup_sequencer(partial, bedrock_addr, vec![], channel, None)
+    let (seq, _seq_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel)
+        .with_genesis(vec![])
+        .setup()
         .await
         .context("Failed to set up sequencer")?;
 
@@ -69,12 +70,4 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         "rejection should cite the sequencer-only guard, got: {err}"
     );
     Ok(())
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }

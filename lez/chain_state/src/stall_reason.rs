@@ -1,4 +1,4 @@
-use common::HashType;
+use common::{HashType, block::BlockHeader};
 use logos_blockchain_zone_sdk::Slot;
 use serde::{Deserialize, Serialize};
 
@@ -22,4 +22,29 @@ pub struct StallReason {
     /// TODO: We could store a different "branch" of blocks following this break, but for now we
     /// just count them.
     pub orphans_since: u64,
+}
+
+impl StallReason {
+    /// First stall for a break, built from the breaking block's header
+    /// (`None` for a deserialize break).
+    #[must_use]
+    pub fn new(header: Option<&BlockHeader>, l1_slot: Slot, error: BlockIngestError) -> Self {
+        Self {
+            block_id: header.map(|header| header.block_id),
+            block_hash: header.map(|header| header.hash),
+            prev_block_hash: header.map(|header| header.prev_block_hash),
+            first_seen: header.map(|header| header.timestamp),
+            l1_slot,
+            error,
+            orphans_since: 0,
+        }
+    }
+
+    /// A later stall on the same break: bumps `orphans_since`, preserving the
+    /// original cause.
+    #[must_use]
+    pub const fn escalate(mut self) -> Self {
+        self.orphans_since = self.orphans_since.saturating_add(1);
+        self
+    }
 }
