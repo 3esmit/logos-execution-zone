@@ -1369,7 +1369,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "chain_consistency"
+name = "chain_state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -1383,6 +1383,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "serde",
  "serde_json",
+ "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -3958,7 +3959,7 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "borsh",
- "chain_consistency",
+ "chain_state",
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
@@ -4157,6 +4158,7 @@ dependencies = [
  "tempfile",
  "test_fixtures",
  "test_programs",
+ "testnet_initial_state",
  "token_core",
  "tokio",
  "vault_core",
@@ -9042,7 +9044,7 @@ dependencies = [
  "borsh",
  "bridge_core",
  "bytesize",
- "chain_consistency",
+ "chain_state",
  "chrono",
  "common",
  "cross_zone",
@@ -9073,6 +9075,7 @@ dependencies = [
  "testnet_initial_state",
  "token_core",
  "tokio",
+ "tokio-util",
  "url",
  "vault_core",
 ]
@@ -9088,6 +9091,7 @@ dependencies = [
  "common",
  "env_logger",
  "futures",
+ "hex",
  "jsonrpsee",
  "lee",
  "log",

@@ -11,10 +11,11 @@ use mempool::MemPoolHandle;
 use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
-use sequencer_core::TransactionOrigin;
 pub use sequencer_core::config::*;
+use sequencer_core::{TransactionOrigin, block_publisher::BlockPublisherTrait as _};
 use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 
 pub mod service;
 
@@ -28,6 +29,9 @@ pub struct SequencerHandle {
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<ServerHandle>,
     main_loop_handle: JoinHandle<Result<Never>>,
+    /// Cancelled when the publisher's drive task terminates (e.g. a panicked
+    /// persist sink); no channel events are processed past that point.
+    driver_cancellation: CancellationToken,
 }
 
 impl SequencerHandle {
@@ -35,11 +39,13 @@ impl SequencerHandle {
         addr: SocketAddr,
         server_handle: ServerHandle,
         main_loop_handle: JoinHandle<Result<Never>>,
+        driver_cancellation: CancellationToken,
     ) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
             main_loop_handle,
+            driver_cancellation,
         }
     }
 
@@ -53,6 +59,7 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            driver_cancellation,
         } = &mut self;
 
         let server_handle = server_handle.take().expect("Server handle is set");
@@ -64,6 +71,9 @@ impl SequencerHandle {
                 res
                     .context("Main loop task panicked")?
                     .context("Main loop exited unexpectedly")
+            }
+            () = driver_cancellation.cancelled() => {
+                Err(anyhow!("Publisher drive task terminated"))
             }
         }
     }
@@ -78,10 +88,12 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            driver_cancellation,
         } = self;
 
         let stopped = server_handle.as_ref().is_none_or(ServerHandle::is_stopped)
-            || main_loop_handle.is_finished();
+            || main_loop_handle.is_finished()
+            || driver_cancellation.is_cancelled();
         !stopped
     }
 
@@ -97,6 +109,7 @@ impl Drop for SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
+            driver_cancellation: _,
         } = self;
 
         main_loop_handle.abort();
@@ -111,21 +124,23 @@ impl Drop for SequencerHandle {
     }
 }
 
-pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> {
+pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
-    let (sequencer_core, mempool_handle) = SequencerCore::start_from_config(config).await;
+    let (sequencer_core, mempool_handle): (SequencerCore, _) =
+        SequencerCore::start_from_config(config).await;
 
     info!("Sequencer core set up");
 
+    let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
     let seq_core_wrapped = Arc::new(Mutex::new(sequencer_core));
     let mempool_handle_for_server = mempool_handle.clone();
 
     let (server_handle, addr) = run_server(
         Arc::clone(&seq_core_wrapped),
         mempool_handle_for_server,
-        port,
+        listen_addr,
         max_block_size.as_u64(),
     )
     .await?;
@@ -136,13 +151,18 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
 
     let _ = mempool_handle;
 
-    Ok(SequencerHandle::new(addr, server_handle, main_loop_handle))
+    Ok(SequencerHandle::new(
+        addr,
+        server_handle,
+        main_loop_handle,
+        driver_cancellation,
+    ))
 }
 
 async fn run_server(
     sequencer: Arc<Mutex<SequencerCore>>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    port: u16,
+    listen_addr: SocketAddr,
     max_block_size: u64,
 ) -> Result<(ServerHandle, SocketAddr)> {
     let server = jsonrpsee::server::ServerBuilder::with_config(
@@ -153,7 +173,7 @@ async fn run_server(
             )
             .build(),
     )
-    .build(SocketAddr::from(([0, 0, 0, 0], port)))
+    .build(listen_addr)
     .await
     .context("Failed to build RPC server")?;
 
@@ -172,16 +192,15 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
     loop {
         tokio::time::sleep(block_timeout).await;
 
-        info!("Collecting transactions from mempool, block creation");
+        let mut state = seq_core.lock().await;
 
-        let id = {
-            let mut state = seq_core.lock().await;
+        // Only produce on our turn.
+        if !state.is_our_turn() {
+            continue;
+        }
 
-            state.produce_new_block().await?
-        };
-
+        info!("Our turn: collecting transactions from mempool, creating block");
+        let id = state.produce_new_block().await?;
         info!("Block with id {id} created");
-
-        info!("Waiting for new transactions");
     }
 }

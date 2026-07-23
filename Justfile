@@ -64,15 +64,17 @@ run-bedrock:
     docker compose up
 
 # Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
+# Optional home/port let a second instance run off the same config, e.g.
+# `just run-sequencer "" "$TMPDIR/lez-sequencer2" 3041` for the multi-sequencer demo.
 [working-directory: 'lez/sequencer/service']
-run-sequencer standalone="":
+run-sequencer standalone="" home="" port="3040":
     @echo "🧠 Running sequencer"
     @if [ "{{standalone}}" = "standalone" ]; then \
         echo "🧪 Running in standalone mode"; \
-        RUST_LOG=info cargo run --features standalone --release -p sequencer_service configs/debug/sequencer_config.json; \
+        RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
     else \
         echo "🚀 Running in normal mode"; \
-        RUST_LOG=info cargo run --release -p sequencer_service configs/debug/sequencer_config.json; \
+        RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
     fi
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
