@@ -293,6 +293,17 @@ impl ValidatedStateDiff {
             );
         }
 
+        // Every account the caller declared as part of the transaction must appear in the final
+        // diff.
+        for account_id in &message.account_ids {
+            ensure!(
+                state_diff.contains_key(account_id),
+                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput {
+                    account_id: *account_id
+                }
+            );
+        }
+
         Ok(Self(StateDiff {
             signer_account_ids,
             public_diff: state_diff,
