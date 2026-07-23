@@ -126,7 +126,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();
@@ -138,7 +138,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::PrivateForeignInit {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 npk: account_keys.npk(),
@@ -191,7 +191,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();
@@ -203,7 +203,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::PrivateForeignInit {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 npk: account_keys.npk(),

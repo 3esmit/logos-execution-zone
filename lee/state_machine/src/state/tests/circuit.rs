@@ -49,7 +49,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     );
     let private_account_2 = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -69,7 +69,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -103,7 +103,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
             balance: 1,
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -119,7 +119,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -153,7 +153,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
             program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -169,7 +169,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -203,7 +203,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
             data: b"hola mundo".to_vec().try_into().unwrap(),
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -219,7 +219,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -253,6 +253,54 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
             nonce: Nonce(0xdead_beef),
             ..Account::default()
         },
+        true,
+        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+    );
+
+    let result = execute_and_prove(
+        vec![private_account_1, private_account_2],
+        Program::serialize_instruction(10_u128).unwrap(),
+        vec![
+            InputAccountIdentity::PrivateAuthorizedUpdate {
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
+                view_tag: 0,
+                nsk: sender_keys.nsk,
+                membership_proof: (0, vec![]),
+                identifier: 0,
+            },
+            InputAccountIdentity::PrivateForeignInit {
+                vpk: recipient_keys.vpk(),
+                random_seed: [0; 32],
+                npk: recipient_keys.npk(),
+                identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        ],
+        &program.into(),
+    );
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+#[test]
+fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_unauthorized()
+ {
+    let program = crate::test_methods::simple_balance_transfer();
+    let sender_keys = test_private_account_keys_1();
+    let recipient_keys = test_private_account_keys_2();
+    let private_account_1 = AccountWithMetadata::new(
+        Account {
+            program_owner: program.id(),
+            balance: 100,
+            ..Account::default()
+        },
+        true,
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+    );
+    let private_account_2 = AccountWithMetadata::new(
+        Account::default(),
+        // This should be set to true in normal circumstances
         false,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
@@ -269,55 +317,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                npk: recipient_keys.npk(),
-                identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        ],
-        &program.into(),
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-#[test]
-fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
- {
-    let program = crate::test_methods::simple_balance_transfer();
-    let sender_keys = test_private_account_keys_1();
-    let recipient_keys = test_private_account_keys_2();
-    let private_account_1 = AccountWithMetadata::new(
-        Account {
-            program_owner: program.id(),
-            balance: 100,
-            ..Account::default()
-        },
-        true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
-    );
-    let private_account_2 = AccountWithMetadata::new(
-        Account::default(),
-        // This should be set to false in normal circumstances
-        true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
-    );
-
-    let result = execute_and_prove(
-        vec![private_account_1, private_account_2],
-        Program::serialize_instruction(10_u128).unwrap(),
-        vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.nsk,
-                membership_proof: (0, vec![]),
-                identifier: 0,
-            },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -781,7 +781,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     // remains allowed.
     let unauthorized_account = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&private_keys.npk(), &private_keys.vpk(), 0),
     );
 
@@ -790,7 +790,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     let (output, proof) = execute_and_prove(
         vec![unauthorized_account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             npk: private_keys.npk(),
