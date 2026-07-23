@@ -1,4 +1,4 @@
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
@@ -47,26 +47,15 @@ use crate::config::BedrockConfig;
 /// backpressure if the drive task stalls (reconnect, long backfill).
 const PUBLISH_INBOX_CAPACITY: usize = 32;
 
-/// Sink for `Event::Published` checkpoints emitted by the drive task.
-/// Caller is responsible for persistence (e.g. writing to rocksdb).
-pub type CheckpointSink = Box<dyn Fn(SequencerCheckpoint) + Send + 'static>;
-
-/// Sink for finalized L2 block ids derived from `Event::TxsFinalized` and
-/// `Event::FinalizedInscriptions`. Caller is responsible for cleanup
-/// (e.g. marking pending blocks as finalized in storage).
-pub type FinalizedBlockSink = Box<dyn Fn(u64) + Send + 'static>;
-
-/// Sink for finalized Bedrock deposit events.
-pub type OnDepositEventSink =
-    Box<dyn Fn(DepositInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
-
-/// Sink for finalized Bedrock withdraw events.
-pub type OnWithdrawEventSink =
-    Box<dyn Fn(WithdrawInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
-
-/// The channel delta the follow path consumes from one `Event::BlocksProcessed`,
-/// with inscription payloads decoded into `(MsgId, Block)` pairs.
+/// Everything one `Event::BlocksProcessed` carries, with inscription payloads
+/// decoded into `(MsgId, Block)` pairs.
+///
+/// One struct rather than a sink per effect, because the `checkpoint` and
+/// everything it covers must reach the store in a single write.
 pub struct FollowUpdate {
+    /// Resume cursor for this event. Persist only together with the effects
+    /// below, never ahead of them.
+    pub checkpoint: SequencerCheckpoint,
     /// Inscriptions newly on the followed L1 branch, in channel order: they
     /// extend (or, after a reorg, replace part of) the `head` tier.
     pub adopted: Vec<(MsgId, Block)>,
@@ -76,19 +65,24 @@ pub struct FollowUpdate {
     /// Inscriptions whose containing L1 block reached finality: their blocks
     /// move into the irreversible `final` tier.
     pub finalized: Vec<(MsgId, Block)>,
+    /// Finalized Bedrock deposit events, to record and mint on L2.
+    pub deposits: Vec<DepositInfo>,
+    /// Finalized Bedrock withdraw events, to reconcile against local intents.
+    pub withdrawals: Vec<WithdrawInfo>,
 }
 
-/// Sink for the follow path: apply adopted/finalized blocks to chain state and
-/// revert orphaned ones.
+/// Sink for the follow path: apply the channel delta to chain state and
+/// persist the whole event in one write.
 pub type OnFollowSink = Box<dyn Fn(FollowUpdate) + Send + 'static>;
 
 /// Commands the drive task executes with `&mut sequencer`.
 enum Command {
-    /// Publish an inscription (+ atomic withdrawals); responds with the assigned `MsgId`.
+    /// Publish an inscription (+ atomic withdrawals); responds with the assigned
+    /// `MsgId` and the checkpoint that now includes it as pending.
     Publish {
         inscription: Inscription,
         withdrawals: Vec<WithdrawArg>,
-        resp: oneshot::Sender<Result<MsgId>>,
+        resp: oneshot::Sender<Result<(MsgId, SequencerCheckpoint)>>,
     },
 }
 
@@ -96,25 +90,25 @@ type CommandSender = mpsc::Sender<Command>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Sized {
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Looks better than bundling all those callbacks into a struct"
-    )]
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
         initial_checkpoint: Option<SequencerCheckpoint>,
-        on_checkpoint: CheckpointSink,
-        on_finalized_block: FinalizedBlockSink,
-        on_deposit_event: OnDepositEventSink,
-        on_withdraw_event: OnWithdrawEventSink,
         on_follow: OnFollowSink,
     ) -> Result<Self>;
 
-    /// Publish a block and return the `MsgId` zone-sdk assigned its inscription.
-    /// Zone-sdk drives the actual submission and retries internally.
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId>;
+    /// Publish a block and return the `MsgId` zone-sdk assigned its inscription
+    /// together with the checkpoint that now holds it as pending. Zone-sdk
+    /// drives the actual submission and retries internally.
+    ///
+    /// The checkpoint must be persisted with the block — restoring an older one
+    /// drops the inscription from the pending set, and it is never resubmitted.
+    async fn publish_block(
+        &self,
+        block: &Block,
+        withdrawals: Vec<WithdrawArg>,
+    ) -> Result<(MsgId, SequencerCheckpoint)>;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -168,10 +162,6 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
         initial_checkpoint: Option<SequencerCheckpoint>,
-        on_checkpoint: CheckpointSink,
-        on_finalized_block: FinalizedBlockSink,
-        on_deposit_event: OnDepositEventSink,
-        on_withdraw_event: OnWithdrawEventSink,
         on_follow: OnFollowSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
@@ -229,7 +219,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 };
 
                                 let msg_result = published
-                                    .map(|(result, _checkpoint)| result.tx.inscription().this_msg);
+                                    .map(|(result, checkpoint)| (result.tx.inscription().this_msg, checkpoint));
                                 match &msg_result {
                                     Ok(_) if withdraw_count == 0 => {
                                         info!("Published block with the size of {data_byte_size} bytes");
@@ -254,8 +244,6 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     channel_update,
                                     finalized,
                                 } => {
-                                    on_checkpoint(checkpoint);
-
                                     let adopted = channel_update
                                         .adopted
                                         .iter()
@@ -269,29 +257,35 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         .collect();
 
                                     let mut finalized_blocks = Vec::new();
+                                    let mut deposits = Vec::new();
+                                    let mut withdrawals = Vec::new();
                                     for op in finalized.into_iter().flat_map(|item| item.ops) {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                if let Some((msg, block)) =
+                                                if let Some(entry) =
                                                     block_from_inscription(&inscription)
                                                 {
-                                                    on_finalized_block(block.header.block_id);
-                                                    finalized_blocks.push((msg, block));
+                                                    finalized_blocks.push(entry);
                                                 }
                                             }
-                                            FinalizedOp::Deposit(deposit) => {
-                                                on_deposit_event(deposit).await;
-                                            }
+                                            FinalizedOp::Deposit(deposit) => deposits.push(deposit),
                                             FinalizedOp::Withdraw(withdraw) => {
-                                                on_withdraw_event(withdraw).await;
+                                                withdrawals.push(withdraw);
                                             }
                                         }
                                     }
 
+                                    // Nothing is awaited here: an await in this
+                                    // arm blocks the same task `publish_block`
+                                    // needs, and a non-turn sequencer never
+                                    // drains what it would be waiting on.
                                     on_follow(FollowUpdate {
+                                        checkpoint,
                                         adopted,
                                         orphaned,
                                         finalized: finalized_blocks,
+                                        deposits,
+                                        withdrawals,
                                     });
                                 }
                                 Event::Ready => {}
@@ -328,7 +322,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId> {
+    async fn publish_block(
+        &self,
+        block: &Block,
+        withdrawals: Vec<WithdrawArg>,
+    ) -> Result<(MsgId, SequencerCheckpoint)> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded: Inscription = data
             .try_into()

@@ -22,7 +22,12 @@ use lee_core::{
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
-use logos_blockchain_core::mantle::ops::channel::{ChannelId, MsgId};
+use logos_blockchain_core::mantle::{
+    ledger::Inputs,
+    ops::channel::{ChannelId, MsgId, deposit::Metadata},
+    tx::TxHash,
+};
+use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
 use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
 use tempfile::tempdir;
@@ -33,11 +38,24 @@ use crate::{
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_genesis_state,
-    config::{BedrockConfig, SequencerConfig},
+    config::{BedrockConfig, GenesisAction, SequencerConfig},
     is_sequencer_only_program,
-    mock::SequencerCoreWithMockClients,
+    mock::{SequencerCoreWithMockClients, mock_checkpoint},
     resubmittable_txs,
 };
+
+/// A follow update carrying nothing, to fill in the fields a test does not
+/// exercise via `..empty_follow_update()`.
+fn empty_follow_update() -> FollowUpdate {
+    FollowUpdate {
+        checkpoint: mock_checkpoint(),
+        adopted: Vec::new(),
+        orphaned: Vec::new(),
+        finalized: Vec::new(),
+        deposits: Vec::new(),
+        withdrawals: Vec::new(),
+    }
+}
 
 mod reconstruction;
 
@@ -211,8 +229,10 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
 }
 
 #[tokio::test]
-async fn start_from_config_replays_unfulfilled_deposit_events_from_db() {
-    let config = setup_sequencer_config();
+async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
+    let mut config = setup_sequencer_config();
+    // The mint moves funds out of the bridge account, so it has to hold some.
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
     let deposit_op_id = [13_u8; 32];
     let expected_amount = 1_u64;
     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -241,36 +261,86 @@ async fn start_from_config_replays_unfulfilled_deposit_events_from_db() {
         assert!(inserted);
     }
 
+    // The mint never goes through the mempool: the record is the queue, and
+    // production drains it. That is what makes a restart — or a follow event
+    // arriving while a full mempool would have dropped the push — lossless.
     let (mut sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config).await;
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "deposit mints are drained from the store, never queued in the mempool"
+    );
 
-    let (origin, tx) = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some((origin, tx)) = sequencer.mempool.pop() {
-                return (origin, tx);
-            }
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .expect("Timed out waiting for pending deposit event to be replayed into mempool");
-
-    match origin {
-        TransactionOrigin::Sequencer => {}
-        TransactionOrigin::User => {
-            panic!("Unexpected user transaction in empty mempool replay test")
-        }
-    }
-
-    assert!(tx_is_bridge_deposit(&tx, deposit_op_id, expected_amount));
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(block_id)
+        .unwrap()
+        .expect("produced block is stored");
+    assert!(
+        block
+            .body
+            .transactions
+            .iter()
+            .any(|tx| tx_is_bridge_deposit(tx, deposit_op_id, expected_amount)),
+        "the drained deposit mint should be included in the produced block"
+    );
 
     let pending_events = sequencer.store.get_unfulfilled_deposit_events().unwrap();
-    let replayed_event = pending_events
+    let drained_event = pending_events
         .into_iter()
         .find(|event| event.deposit_op_id == HashType(deposit_op_id))
-        .expect("Pending deposit event should remain in DB until included in a block");
-    assert!(replayed_event.submitted_in_block_id.is_none());
+        .expect("Pending deposit event should remain in DB until finalized");
+    assert_eq!(
+        drained_event.submitted_in_block_id,
+        Some(block_id),
+        "inclusion marks the record submitted, so the next turn does not mint it again"
+    );
+}
+
+#[tokio::test]
+async fn a_drained_deposit_is_not_minted_twice_across_turns() {
+    let mut config = setup_sequencer_config();
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let deposit_op_id = [17_u8; 32];
+    let recipient_id = initial_public_user_accounts()[0].account_id;
+
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_deposit_event(PendingDepositEventRecord {
+            deposit_op_id: HashType(deposit_op_id),
+            source_tx_hash: HashType([7_u8; 32]),
+            amount: 1,
+            metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+            submitted_in_block_id: None,
+        })
+        .unwrap();
+
+    let first = sequencer.produce_new_block().await.unwrap();
+    let second = sequencer.produce_new_block().await.unwrap();
+
+    let minted_in = |block_id: u64| {
+        sequencer
+            .store
+            .get_block_at_id(block_id)
+            .unwrap()
+            .expect("produced block is stored")
+            .body
+            .transactions
+            .iter()
+            .filter(|tx| tx_is_bridge_deposit(tx, deposit_op_id, 1))
+            .count()
+    };
+
+    assert_eq!(minted_in(first), 1);
+    assert_eq!(
+        minted_in(second),
+        0,
+        "the submitted marker must keep the next turn from re-draining the record"
+    );
 }
 
 #[test]
@@ -1336,6 +1406,71 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
 }
 
 #[tokio::test]
+async fn follow_update_persists_the_checkpoint_with_its_effects() {
+    let config = setup_sequencer_config();
+    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let genesis_meta = sequencer
+        .store
+        .latest_block_meta()
+        .unwrap()
+        .expect("genesis meta is set");
+
+    let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            adopted: vec![(MsgId::from([1; 32]), peer_block)],
+            ..empty_follow_update()
+        },
+    );
+
+    // The checkpoint is the sdk resume cursor; landing it without the block
+    // would let a restart stream past a block the store never got.
+    assert!(
+        sequencer.store.get_zone_checkpoint().unwrap().is_some(),
+        "the event's checkpoint must be persisted alongside the block it covers"
+    );
+    assert!(sequencer.store.get_block_at_id(2).unwrap().is_some());
+}
+
+#[tokio::test]
+async fn follow_update_records_deposits_for_the_production_drain() {
+    let config = setup_sequencer_config();
+    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let recipient_id = initial_public_user_accounts()[0].account_id;
+    let metadata = borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap();
+    let deposit = DepositInfo {
+        op_id: [21; 32],
+        tx_hash: TxHash::from([9; 32]),
+        channel_id: ChannelId::from([0; 32]),
+        inputs: Inputs::empty(),
+        amount: 5,
+        metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+    };
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            deposits: vec![deposit],
+            ..empty_follow_update()
+        },
+    );
+
+    let pending = sequencer.store.get_unfulfilled_deposit_events().unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
+    assert!(
+        pending[0].submitted_in_block_id.is_none(),
+        "an observed deposit is owed until a block includes its mint"
+    );
+}
+
+#[tokio::test]
 async fn follow_adopted_peer_block_applies_and_persists() {
     let config = setup_sequencer_config();
     let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
@@ -1362,8 +1497,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
         &mempool_handle,
         FollowUpdate {
             adopted: vec![(MsgId::from([1; 32]), peer_block.clone())],
-            orphaned: vec![],
-            finalized: vec![],
+            ..empty_follow_update()
         },
     );
 
@@ -1410,8 +1544,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
         &mempool_handle,
         FollowUpdate {
             adopted: vec![(MsgId::from(block2.header.hash.0), block2)],
-            orphaned: vec![],
-            finalized: vec![],
+            ..empty_follow_update()
         },
     );
 
@@ -1452,7 +1585,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
         FollowUpdate {
             adopted: vec![],
             orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
-            finalized: vec![],
+            ..empty_follow_update()
         },
     );
 
@@ -1496,6 +1629,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
             adopted: vec![],
             orphaned: vec![],
             finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
+            ..empty_follow_update()
         },
     );
 
@@ -1533,6 +1667,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
             adopted: vec![],
             orphaned: vec![],
             finalized: vec![(MsgId::from([2; 32]), peer_block.clone())],
+            ..empty_follow_update()
         },
     );
 
@@ -1593,7 +1728,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
         FollowUpdate {
             adopted: vec![(MsgId::from([21; 32]), block2_prime.clone())],
             orphaned: vec![(MsgId::from([20; 32]), block2)],
-            finalized: vec![],
+            ..empty_follow_update()
         },
     );
 
@@ -1646,6 +1781,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
                 adopted: vec![],
                 orphaned: vec![],
                 finalized: vec![(MsgId::from(block2.header.hash.0), block2)],
+                ..empty_follow_update()
             },
         );
     }
@@ -1696,6 +1832,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
             &our_block,
             &[],
             vec![],
+            &mock_checkpoint(),
         )
         .unwrap();
 
@@ -1719,7 +1856,13 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
     // The head reorged under us: our block's parent is no longer the tip.
     let stale = common::test_utils::produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
     sequencer
-        .record_produced_block(MsgId::from(stale.header.hash.0), &stale, &[], vec![])
+        .record_produced_block(
+            MsgId::from(stale.header.hash.0),
+            &stale,
+            &[],
+            vec![],
+            &mock_checkpoint(),
+        )
         .unwrap();
 
     assert!(sequencer.store.get_block_at_id(2).unwrap().is_none());
@@ -1760,6 +1903,7 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
             ],
             orphaned: vec![],
             finalized: vec![(MsgId::from([2; 32]), block2)],
+            ..empty_follow_update()
         },
     );
 

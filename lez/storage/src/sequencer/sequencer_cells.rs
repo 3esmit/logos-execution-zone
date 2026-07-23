@@ -275,7 +275,7 @@ impl SimpleWritableCell for PendingDepositEventsCellRef<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WithdrawalReconciliationKey {
     pub amount: u64,
     pub bedrock_account_pk: [u8; 32],

@@ -1,4 +1,8 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
@@ -13,10 +17,7 @@ use rocksdb::{
 
 use crate::{
     CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
-    cells::{
-        SimpleStorableCell,
-        shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
-    },
+    cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
@@ -95,6 +96,78 @@ impl DbDump {
             DbError::compression_error(err, Some("Failed to deserialize DbDump".to_owned()))
         })
     }
+}
+
+/// Everything one sequencer event writes, staged into a single [`WriteBatch`]
+/// by [`RocksDBIO::store_update`].
+///
+/// The point of the struct is the `checkpoint`: it is the zone-sdk's resume
+/// cursor, so it must land in the *same* write as the effects it covers.
+/// Persisted ahead of them, a crash in between resumes the stream past blocks
+/// that never reached the store — a gap the node cannot backfill.
+pub struct StoreUpdate<'a> {
+    /// Serialized zone-sdk checkpoint for this event.
+    pub checkpoint: Option<&'a [u8]>,
+
+    /// `(block, finalized)` payloads to write.
+    pub blocks: &'a [(&'a Block, bool)],
+
+    /// Head tip to pin the stored chain to; `None` only for an empty chain.
+    pub head_tip: Option<&'a BlockMeta>,
+    /// State after the last applied block.
+    pub head_state: &'a V03State,
+
+    /// `(state, meta)` of the final tier, when it advanced.
+    pub final_snapshot: Option<(&'a V03State, &'a BlockMeta)>,
+    /// Highest block id this event made irreversible: stored blocks at or below
+    /// it become [`BedrockStatus::Finalized`], and pending deposit records
+    /// submitted there are dropped.
+    pub finalized_up_to: Option<u64>,
+
+    /// Deposit events observed on L1, recorded unless already pending.
+    pub new_deposit_events: &'a [PendingDepositEventRecord],
+    /// Deposit op ids included in `block_id`, marked submitted.
+    pub mark_deposits_submitted: Option<(&'a [HashType], u64)>,
+    /// L1 withdraw events to reconcile against the local unseen counters.
+    pub consumed_withdrawals: &'a [WithdrawalReconciliationKey],
+    /// L2 withdraw intents this update raises, awaiting their L1 event.
+    pub new_withdraw_intents: &'a [WithdrawalReconciliationKey],
+
+    /// Advance the channel-read anchor.
+    pub zone_anchor: Option<&'a ZoneAnchorRecord>,
+}
+
+impl<'a> StoreUpdate<'a> {
+    /// An update that writes nothing but the caller's head `state`, to be
+    /// filled in with `..StoreUpdate::new(state)`.
+    #[must_use]
+    pub const fn new(head_state: &'a V03State) -> Self {
+        Self {
+            checkpoint: None,
+            blocks: &[],
+            head_tip: None,
+            head_state,
+            final_snapshot: None,
+            finalized_up_to: None,
+            new_deposit_events: &[],
+            mark_deposits_submitted: None,
+            consumed_withdrawals: &[],
+            new_withdraw_intents: &[],
+            zone_anchor: None,
+        }
+    }
+}
+
+/// What [`RocksDBIO::store_update`] observed while staging, for the caller to
+/// act on *after* the write committed.
+#[derive(Debug, Default)]
+pub struct StoreUpdateOutcome {
+    /// How many deposit events were newly recorded; the rest were already
+    /// pending, and so already owed.
+    pub accepted_deposits: usize,
+    /// Withdraw events with no matching local unseen counter, one entry per
+    /// unmatched occurrence.
+    pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
 }
 
 pub struct RocksDBIO {
@@ -384,10 +457,6 @@ impl RocksDBIO {
             .map_or_else(Vec::new, |cell| cell.0))
     }
 
-    fn put_pending_deposit_events(&self, records: &[PendingDepositEventRecord]) -> DbResult<()> {
-        self.put(&PendingDepositEventsCellRef(records), ())
-    }
-
     fn put_pending_deposit_events_batch(
         &self,
         records: &[PendingDepositEventRecord],
@@ -396,80 +465,159 @@ impl RocksDBIO {
         self.put_batch(&PendingDepositEventsCellRef(records), (), batch)
     }
 
+    /// Records a single deposit event, returning whether it was new.
+    /// One-shot form of [`RocksDBIO::store_update`]'s `new_deposit_events`.
     pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
-        let mut records = self.get_pending_deposit_events()?;
-        if records
-            .iter()
-            .any(|record| record.deposit_op_id == event.deposit_op_id)
-        {
-            return Ok(false);
-        }
-        records.push(event);
-        self.put_pending_deposit_events(&records)?;
-        Ok(true)
-    }
-
-    /// Marks the given deposit events submitted in `block_id`, in one write.
-    pub fn mark_deposit_events_submitted(
-        &self,
-        deposit_op_ids: &[HashType],
-        submitted_block_id: u64,
-    ) -> DbResult<()> {
-        if deposit_op_ids.is_empty() {
-            return Ok(());
-        }
         let mut batch = WriteBatch::default();
-        self.mark_pending_deposit_events_submitted(deposit_op_ids, submitted_block_id, &mut batch)?;
+        let accepted = self.stage_pending_deposit_events(&[event], None, None, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
-                Some("Failed to mark deposit events submitted".to_owned()),
+                Some("Failed to add pending deposit event".to_owned()),
             )
-        })
+        })?;
+        Ok(accepted > 0)
     }
 
-    fn mark_pending_deposit_events_submitted(
+    /// Stages every mutation of the pending-deposit records into `batch`,
+    /// returning how many were newly appended.
+    ///
+    /// The records live in a *single* whole-vector cell, so each mutation kind
+    /// cannot re-read it from disk and stage its own `put`: a later read would
+    /// not see the earlier staged write and would silently drop it. Everything
+    /// is folded in memory here instead, and written exactly once.
+    fn stage_pending_deposit_events(
         &self,
-        deposit_op_ids: &[HashType],
-        submitted_block_id: u64,
+        new_events: &[PendingDepositEventRecord],
+        mark_submitted: Option<(&[HashType], u64)>,
+        finalized_up_to: Option<u64>,
         batch: &mut WriteBatch,
     ) -> DbResult<usize> {
-        let mut records = self.get_pending_deposit_events()?;
-        let mut updated: usize = 0;
-
-        for record in records
-            .iter_mut()
-            .filter(|record| deposit_op_ids.contains(&record.deposit_op_id))
-        {
-            record.submitted_in_block_id = Some(submitted_block_id);
-            updated = updated.saturating_add(1);
+        let marks_nothing = mark_submitted.is_none_or(|(ids, _)| ids.is_empty());
+        if new_events.is_empty() && marks_nothing && finalized_up_to.is_none() {
+            return Ok(0);
         }
 
-        if updated > 0 {
-            self.put_pending_deposit_events_batch(&records, batch)?;
-        }
-
-        Ok(updated)
-    }
-
-    pub fn remove_fulfilled_pending_deposit_events_up_to_block(
-        &self,
-        finalized_block_id: u64,
-    ) -> DbResult<usize> {
         let mut records = self.get_pending_deposit_events()?;
         let before = records.len();
-        records.retain(|record| {
-            record
-                .submitted_in_block_id
-                .is_none_or(|submitted_id| submitted_id > finalized_block_id)
-        });
+        let mut changed = false;
 
-        let removed = before.saturating_sub(records.len());
-        if removed > 0 {
-            self.put_pending_deposit_events(&records)?;
+        for event in new_events {
+            if records
+                .iter()
+                .any(|record| record.deposit_op_id == event.deposit_op_id)
+            {
+                continue;
+            }
+            records.push(event.clone());
+        }
+        let accepted = records.len().saturating_sub(before);
+
+        if let Some((deposit_op_ids, submitted_block_id)) = mark_submitted {
+            for record in records
+                .iter_mut()
+                .filter(|record| record.submitted_in_block_id != Some(submitted_block_id))
+                .filter(|record| deposit_op_ids.contains(&record.deposit_op_id))
+            {
+                record.submitted_in_block_id = Some(submitted_block_id);
+                changed = true;
+            }
         }
 
-        Ok(removed)
+        // Everything at or below a finalized block is irreversible, so records
+        // submitted there have served their purpose.
+        if let Some(finalized_block_id) = finalized_up_to {
+            records.retain(|record| {
+                record
+                    .submitted_in_block_id
+                    .is_none_or(|submitted_id| submitted_id > finalized_block_id)
+            });
+        }
+
+        // The common event finalizes something but touches no record; without
+        // this the cell is rewritten on every one of them.
+        if changed || records.len() != before {
+            self.put_pending_deposit_events_batch(&records, batch)?;
+        }
+        Ok(accepted)
+    }
+
+    /// Stages the unseen-withdraw decrements for one update into `batch`,
+    /// returning one entry per occurrence that matched no local counter.
+    ///
+    /// Occurrences are folded per key for the same reason as the deposit
+    /// records: two withdrawals in one update can share a reconciliation key,
+    /// and a per-occurrence disk read would miss the staged decrement.
+    fn stage_consumed_withdrawals(
+        &self,
+        withdrawals: &[WithdrawalReconciliationKey],
+        batch: &mut WriteBatch,
+    ) -> DbResult<Vec<WithdrawalReconciliationKey>> {
+        let mut unmatched = Vec::new();
+        if withdrawals.is_empty() {
+            return Ok(unmatched);
+        }
+
+        let mut occurrences: HashMap<WithdrawalReconciliationKey, u64> = HashMap::new();
+        for withdrawal in withdrawals {
+            *occurrences.entry(*withdrawal).or_default() += 1;
+        }
+
+        for (withdrawal, times) in occurrences {
+            let stored = self
+                .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
+                .map(|cell| cell.0);
+
+            // A stored `count` satisfies `count + 1` occurrences: the last one
+            // consumes the key by deleting it. Matches the one-shot
+            // [`Self::consume_unseen_withdraw_count`].
+            let matched = times.min(stored.map_or(0, |count| count.saturating_add(1)));
+            unmatched.extend(std::iter::repeat_n(
+                withdrawal,
+                usize::try_from(times.saturating_sub(matched)).unwrap_or(usize::MAX),
+            ));
+
+            match stored.and_then(|count| count.checked_sub(times)) {
+                Some(count) => {
+                    self.put_batch(&UnseenWithdrawCountCell(count), withdrawal, batch)?
+                }
+                // Only stage a delete for a key that was actually there, so a
+                // fully unmatched update leaves the batch empty.
+                None if stored.is_some() => {
+                    self.del_batch::<UnseenWithdrawCountCell>(withdrawal, batch)?
+                }
+                None => {}
+            }
+        }
+
+        Ok(unmatched)
+    }
+
+    /// Collects the [`BedrockStatus::Finalized`] flip for every stored pending
+    /// block at or below `last_finalized` into `to_write`.
+    ///
+    /// Reads from disk, so blocks the caller is writing itself are already in
+    /// `to_write` and keep their own version — one `put` per block id, no
+    /// reliance on the order writes are staged in.
+    fn collect_finalized_up_to(
+        &self,
+        last_finalized: u64,
+        to_write: &mut BTreeMap<u64, Block>,
+    ) -> DbResult<()> {
+        let newly_finalized: Vec<Block> = self
+            .get_all_blocks()
+            .filter_map(Result::ok)
+            .filter(|block| {
+                matches!(block.bedrock_status, BedrockStatus::Pending)
+                    && block.header.block_id <= last_finalized
+            })
+            .collect();
+
+        for mut block in newly_finalized {
+            block.bedrock_status = BedrockStatus::Finalized;
+            to_write.entry(block.header.block_id).or_insert(block);
+        }
+        Ok(())
     }
 
     /// Whether a bridge deposit for `deposit_op_id` is already recorded as
@@ -498,33 +646,22 @@ impl RocksDBIO {
         Ok(next)
     }
 
+    /// Reconciles a single L1 withdraw event, returning whether it matched a
+    /// local intent. One-shot form of [`RocksDBIO::store_update`]'s
+    /// `consumed_withdrawals`.
     pub fn consume_unseen_withdraw_count(
         &self,
         withdrawal: WithdrawalReconciliationKey,
     ) -> DbResult<bool> {
-        let Some(current) = self
-            .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
-            .map(|cell| cell.0)
-        else {
-            return Ok(false);
-        };
-
-        if let Some(next) = current.checked_sub(1) {
-            self.put(&UnseenWithdrawCountCell(next), withdrawal)?;
-        } else {
-            let cf_meta = self.meta_column();
-            let db_key =
-                <UnseenWithdrawCountCell as SimpleStorableCell>::key_constructor(withdrawal)?;
-
-            self.db.delete_cf(&cf_meta, db_key).map_err(|rerr| {
-                DbError::rocksdb_cast_message(
-                    rerr,
-                    Some("Failed to delete unseen withdraw count".to_owned()),
-                )
-            })?;
-        }
-
-        Ok(true)
+        let mut batch = WriteBatch::default();
+        let unmatched = self.stage_consumed_withdrawals(&[withdrawal], &mut batch)?;
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to consume unseen withdraw count".to_owned()),
+            )
+        })?;
+        Ok(unmatched.is_empty())
     }
 
     pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
@@ -623,20 +760,23 @@ impl RocksDBIO {
         Ok(())
     }
 
-    /// Mark every pending block with `block_id <= last_finalized` as finalized.
-    /// Idempotent — already-finalized blocks are skipped.
+    /// Mark every pending block with `block_id <= last_finalized` as finalized,
+    /// in one atomic write. Idempotent — already-finalized blocks are skipped.
+    /// One-shot form of [`RocksDBIO::store_update`]'s `finalized_up_to`.
     pub fn clean_pending_blocks_up_to(&self, last_finalized: u64) -> DbResult<()> {
-        let pending_ids: Vec<u64> = self
-            .get_all_blocks()
-            .filter_map(Result::ok)
-            .filter(|b| matches!(b.bedrock_status, BedrockStatus::Pending))
-            .map(|b| b.header.block_id)
-            .filter(|id| *id <= last_finalized)
-            .collect();
-        for id in pending_ids {
-            self.mark_block_as_finalized(id)?;
+        let mut to_write = BTreeMap::new();
+        self.collect_finalized_up_to(last_finalized, &mut to_write)?;
+
+        let mut batch = WriteBatch::default();
+        for block in to_write.values() {
+            self.put_block_payload(block, &mut batch)?;
         }
-        Ok(())
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to mark pending blocks finalized".to_owned()),
+            )
+        })
     }
 
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
@@ -691,8 +831,8 @@ impl RocksDBIO {
         Ok(())
     }
 
-    /// One-block form of [`Self::store_followed_blocks`], with the block as the
-    /// head tip and no final snapshot. Production always uses the batch form.
+    /// One-block form of [`Self::store_update`], with the block as the head tip
+    /// and no final snapshot. Production always uses the batch form.
     #[cfg(test)]
     fn store_followed_block(
         &self,
@@ -700,16 +840,17 @@ impl RocksDBIO {
         state: &V03State,
         finalized: bool,
     ) -> DbResult<()> {
-        self.store_followed_blocks(
-            &[(block, finalized)],
-            Some(&BlockMeta::from(block)),
-            state,
-            None,
-        )
+        self.store_update(&StoreUpdate {
+            blocks: &[(block, finalized)],
+            head_tip: Some(&BlockMeta::from(block)),
+            ..StoreUpdate::new(state)
+        })
+        .map(|_outcome| ())
     }
 
-    /// Persists a batch of followed blocks, the caller's head-tip `state`, and
-    /// the optional final-tier snapshot in one atomic write.
+    /// Persists everything one sequencer event produced — checkpoint, blocks,
+    /// tip meta, head state, final snapshot, deposit and withdraw bookkeeping
+    /// and the channel anchor — in one atomic write.
     ///
     /// The tip meta is pinned to `head_tip`, and blocks stored above it (left
     /// behind by a net-shortening reorg) are deleted in the same write, so
@@ -717,69 +858,112 @@ impl RocksDBIO {
     ///
     /// Per block: skips the payload write when the store already holds it (by
     /// id and hash), unless `finalized` is set, which rewrites it with the
-    /// finalized status. A no-op update (nothing to write, tip unchanged)
-    /// writes nothing.
+    /// finalized status.
     ///
-    /// TODO: the zone-sdk checkpoint is persisted by `on_checkpoint` *before*
-    /// this write. Full `BlocksProcessed` atomicity (checkpoint, blocks, state
-    /// and orphan reverts in one batch) is a follow-up.
-    pub fn store_followed_blocks(
-        &self,
-        blocks: &[(&Block, bool)],
-        head_tip: Option<&BlockMeta>,
-        state: &V03State,
-        final_snapshot: Option<(&V03State, &BlockMeta)>,
-    ) -> DbResult<()> {
+    /// The head state and tip meta are only rewritten when the chain actually
+    /// moved. A checkpoint alone (the common case — every follow event carries
+    /// one, most carry nothing else) must not drag a full state serialization
+    /// with it.
+    pub fn store_update(&self, update: &StoreUpdate<'_>) -> DbResult<StoreUpdateOutcome> {
+        let StoreUpdate {
+            checkpoint,
+            blocks,
+            head_tip,
+            head_state,
+            final_snapshot,
+            finalized_up_to,
+            new_deposit_events,
+            mark_deposits_submitted,
+            consumed_withdrawals,
+            new_withdraw_intents,
+            zone_anchor,
+        } = *update;
+
         let last_block_in_db = self.get_meta_last_block_in_db()?;
         let mut batch = WriteBatch::default();
+
+        if let Some(bytes) = checkpoint {
+            self.put_batch(&ZoneSdkCheckpointCellRef(bytes), (), &mut batch)?;
+        }
+        if let Some(anchor) = zone_anchor {
+            self.put_batch(&ZoneAnchorCell(*anchor), (), &mut batch)?;
+        }
+
+        // Every block payload this update writes, keyed by id so a block that
+        // is both explicitly written and swept by `finalized_up_to` is written
+        // once, with the caller's version.
+        let mut to_write: BTreeMap<u64, Block> = BTreeMap::new();
+
+        // Whether the stored chain moved, and with it the head state. A
+        // shrink-only update (orphans without adopted replacements) writes no
+        // payloads but still rewinds the tip, or the stored state tears
+        // against the stale disk head on the next produce.
+        let mut chain_changed =
+            final_snapshot.is_some() || head_tip.is_some_and(|tip| tip.id != last_block_in_db);
 
         for (block, finalized) in blocks {
             let already_stored = self
                 .get_block(block.header.block_id)?
                 .filter(|stored| stored.header.hash == block.header.hash);
 
-            let mut to_write = match already_stored {
+            let mut block_to_write = match already_stored {
                 Some(_) if !finalized => continue,
                 Some(stored) => stored,
                 None => (*block).clone(),
             };
             if *finalized {
-                to_write.bedrock_status = BedrockStatus::Finalized;
+                block_to_write.bedrock_status = BedrockStatus::Finalized;
             }
-            self.put_block_payload(&to_write, &mut batch)?;
+            to_write.insert(block_to_write.header.block_id, block_to_write);
+            chain_changed = true;
+        }
+
+        if let Some(last_finalized) = finalized_up_to {
+            self.collect_finalized_up_to(last_finalized, &mut to_write)?;
+        }
+        for block in to_write.values() {
+            self.put_block_payload(block, &mut batch)?;
+        }
+
+        let accepted_deposits = self.stage_pending_deposit_events(
+            new_deposit_events,
+            mark_deposits_submitted,
+            finalized_up_to,
+            &mut batch,
+        )?;
+        let unmatched_withdrawals =
+            self.stage_consumed_withdrawals(consumed_withdrawals, &mut batch)?;
+        for withdrawal in new_withdraw_intents {
+            self.increment_unseen_withdraw_count(*withdrawal, &mut batch)?;
         }
 
         // `head_tip` is `None` only for a chain holding no blocks at all, which
-        // implies nothing was applied — and the store, created with genesis,
-        // cannot represent it. No tip to pin, nothing to persist.
-        let Some(tip) = head_tip else {
-            debug_assert!(batch.is_empty() && final_snapshot.is_none());
-            return Ok(());
+        // the store — created with genesis — cannot represent. Nothing to pin.
+        if chain_changed && let Some(tip) = head_tip {
+            for stale_id in tip.id.saturating_add(1)..=last_block_in_db {
+                self.delete_block_payload(stale_id, &mut batch)?;
+            }
+            self.put_meta_last_block_in_db_batch(tip.id, &mut batch)?;
+            self.put_meta_latest_block_meta_batch(tip, &mut batch)?;
+            self.put_lee_state_in_db_batch(head_state, &mut batch)?;
+            if let Some((final_state, final_meta)) = final_snapshot {
+                self.put_final_snapshot_batch(final_state, final_meta, &mut batch)?;
+            }
+        }
+
+        let outcome = StoreUpdateOutcome {
+            accepted_deposits,
+            unmatched_withdrawals,
         };
 
-        // A shrink-only update (orphans without adopted replacements) has no
-        // payloads to write but must still rewind the tip meta, or the stored
-        // state tears against the stale disk head on the next produce.
-        if batch.is_empty() && final_snapshot.is_none() && tip.id == last_block_in_db {
-            return Ok(());
-        }
-
-        for stale_id in tip.id.saturating_add(1)..=last_block_in_db {
-            self.delete_block_payload(stale_id, &mut batch)?;
-        }
-        self.put_meta_last_block_in_db_batch(tip.id, &mut batch)?;
-        self.put_meta_latest_block_meta_batch(tip, &mut batch)?;
-        self.put_lee_state_in_db_batch(state, &mut batch)?;
-        if let Some((final_state, final_meta)) = final_snapshot {
-            self.put_final_snapshot_batch(final_state, final_meta, &mut batch)?;
+        if batch.is_empty() {
+            return Ok(outcome);
         }
 
         self.db.write(batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(
-                rerr,
-                Some("Failed to write followed blocks batch".to_owned()),
-            )
-        })
+            DbError::rocksdb_cast_message(rerr, Some("Failed to write store update".to_owned()))
+        })?;
+        Ok(outcome)
     }
 
     pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
@@ -803,32 +987,32 @@ impl RocksDBIO {
             })
     }
 
+    /// Persists a block we produced, its deposit/withdraw bookkeeping, the
+    /// resulting state and the publish `checkpoint` in one atomic write.
+    ///
+    /// The produce path is [`Self::store_update`] with a single block that is
+    /// the new tip; the checkpoint belongs in the same write for the same
+    /// reason it does there — it carries the sdk's `pending_txs`, so a
+    /// checkpoint persisted without this block would restore a pending set
+    /// that no longer contains the inscription we just published, and the sdk
+    /// would never resubmit it.
     pub fn atomic_update(
         &self,
         block: &Block,
         deposit_op_ids: &[HashType],
         withdrawals: Vec<WithdrawalReconciliationKey>,
         state: &V03State,
+        checkpoint: Option<&[u8]>,
     ) -> DbResult<()> {
-        let block_id = block.header.block_id;
-        let mut batch = WriteBatch::default();
-
-        self.put_block(block, false, &mut batch)?;
-
-        self.mark_pending_deposit_events_submitted(deposit_op_ids, block_id, &mut batch)?;
-
-        for withdrawal in withdrawals {
-            self.increment_unseen_withdraw_count(withdrawal, &mut batch)?;
-        }
-
-        self.put_lee_state_in_db_batch(state, &mut batch)?;
-
-        self.db.write(batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(
-                rerr,
-                Some(format!("Failed to udpate db with block {block_id}")),
-            )
+        self.store_update(&StoreUpdate {
+            checkpoint,
+            blocks: &[(block, false)],
+            head_tip: Some(&BlockMeta::from(block)),
+            mark_deposits_submitted: Some((deposit_op_ids, block.header.block_id)),
+            new_withdraw_intents: &withdrawals,
+            ..StoreUpdate::new(state)
         })
+        .map(|_outcome| ())
     }
 }
 
