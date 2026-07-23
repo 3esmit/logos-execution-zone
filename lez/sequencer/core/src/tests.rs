@@ -1680,7 +1680,15 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
         .apply_adopted(MsgId::from([9; 32]), &peer_block);
 
     // Our competing block at the same height: same parent, different content.
-    let tx = common::test_utils::produce_dummy_empty_transaction();
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
     let our_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
     sequencer
         .record_produced_block(

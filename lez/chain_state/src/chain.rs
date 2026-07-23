@@ -161,6 +161,22 @@ impl ChainState {
         }
     }
 
+    /// Applies a block we produced ourselves.
+    ///
+    /// Unlike [`Self::apply_adopted`] this never reorgs: our block is not on
+    /// the channel yet, so it may only *extend* the head. A head already at
+    /// (or past) this height means a peer's block won the race on the
+    /// channel — ours is stale and the caller drops it.
+    pub fn apply_produced(&mut self, this_msg: MsgId, block: &Block) -> AcceptOutcome {
+        if self
+            .head_tip()
+            .is_some_and(|tip| block.header.block_id <= tip.block_id)
+        {
+            return AcceptOutcome::AlreadyApplied;
+        }
+        self.apply_adopted(this_msg, block)
+    }
+
     /// Reverts an orphaned head block and everything after it, then re-derives head.
     pub fn revert_orphan(&mut self, this_msg: MsgId, block: &Block) {
         if let Some(idx) = self.head_position_of(this_msg, block) {
@@ -629,6 +645,49 @@ mod tests {
         assert_eq!(tip.block_id, 2);
         assert_eq!(tip.hash, block2_prime.header.hash);
         assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn produced_block_losing_a_race_does_not_reorg_the_head() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        // A peer's block wins height 2 on the channel.
+        let peer = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        chain.apply_adopted(msg(2), &peer);
+
+        // Our own block at that height is not on the channel, so — unlike an
+        // adopted competitor — it must not reorg the head onto itself.
+        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            chain.apply_produced(msg(12), &ours),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").hash, peer.header.hash);
+        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn produced_block_extending_the_head_applies() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        let ours = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            chain.apply_produced(msg(2), &ours),
+            AcceptOutcome::Applied
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").hash, ours.header.hash);
         assert_head_matches_replay(&chain);
     }
 

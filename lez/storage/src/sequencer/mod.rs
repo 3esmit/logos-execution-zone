@@ -749,21 +749,26 @@ impl RocksDBIO {
             self.put_block_payload(&to_write, &mut batch)?;
         }
 
+        // `head_tip` is `None` only for a chain holding no blocks at all, which
+        // implies nothing was applied — and the store, created with genesis,
+        // cannot represent it. No tip to pin, nothing to persist.
+        let Some(tip) = head_tip else {
+            debug_assert!(batch.is_empty() && final_snapshot.is_none());
+            return Ok(());
+        };
+
         // A shrink-only update (orphans without adopted replacements) has no
         // payloads to write but must still rewind the tip meta, or the stored
         // state tears against the stale disk head on the next produce.
-        let tip_rewound = head_tip.is_some_and(|tip| tip.id < last_block_in_db);
-        if batch.is_empty() && final_snapshot.is_none() && !tip_rewound {
+        if batch.is_empty() && final_snapshot.is_none() && tip.id == last_block_in_db {
             return Ok(());
         }
 
-        if let Some(tip) = head_tip {
-            for stale_id in tip.id.saturating_add(1)..=last_block_in_db {
-                self.delete_block_payload(stale_id, &mut batch)?;
-            }
-            self.put_meta_last_block_in_db_batch(tip.id, &mut batch)?;
-            self.put_meta_latest_block_meta_batch(tip, &mut batch)?;
+        for stale_id in tip.id.saturating_add(1)..=last_block_in_db {
+            self.delete_block_payload(stale_id, &mut batch)?;
         }
+        self.put_meta_last_block_in_db_batch(tip.id, &mut batch)?;
+        self.put_meta_latest_block_meta_batch(tip, &mut batch)?;
         self.put_lee_state_in_db_batch(state, &mut batch)?;
         if let Some((final_state, final_meta)) = final_snapshot {
             self.put_final_snapshot_batch(final_state, final_meta, &mut batch)?;

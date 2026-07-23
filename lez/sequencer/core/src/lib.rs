@@ -668,7 +668,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
     ) -> Result<()> {
         let mut chain = self.chain.lock().expect("chain state mutex poisoned");
-        match chain.apply_adopted(this_msg, block) {
+        match chain.apply_produced(this_msg, block) {
             AcceptOutcome::Applied => {
                 // Persisted under the lock so disk writes land in apply order
                 // with the follow path.
