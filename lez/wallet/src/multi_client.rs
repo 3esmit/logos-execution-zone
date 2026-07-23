@@ -229,7 +229,7 @@ impl MultiSequencerClient {
 
     /// Metered call for main leader(helm), to get data, necessary for send call.
     ///
-    /// If current leader errors, we ask next one in list.
+    /// If current leader errors, we ask next one in list up to a `self.config.distribution_limit`.
     pub async fn metered_get<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
         &self,
         call: I,
@@ -247,22 +247,12 @@ impl MultiSequencerClient {
 
         // Not the cleanest approach, but I am not sure how to have it both clean and async.
         if resp.is_err() {
-            statistic_map
-                .entry(helm_url.clone())
-                .or_default()
-                .push(StatisticsUpdate::Failure);
-
             for (leader, leader_url) in self.leaders().iter().skip(1) {
                 resp = self
                     .metered_get_helper(&call, leader, leader_url, &mut statistic_map)
                     .await;
 
-                if resp.is_err() {
-                    statistic_map
-                        .entry(leader_url.clone())
-                        .or_default()
-                        .push(StatisticsUpdate::Failure);
-                } else {
+                if resp.is_ok() {
                     break;
                 }
             }
@@ -271,7 +261,16 @@ impl MultiSequencerClient {
         {
             let mut statistic_updates_guard = self.statistic_updates.write().await;
 
-            statistic_updates_guard.extend(statistic_map.into_iter());
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "Ordering of map updates is not important"
+            )]
+            for (url, updates) in statistic_map {
+                statistic_updates_guard
+                    .entry(url)
+                    .or_insert_with(Vec::new)
+                    .extend(updates);
+            }
         }
 
         resp
@@ -307,7 +306,16 @@ impl MultiSequencerClient {
         {
             let mut statistic_updates_guard = self.statistic_updates.write().await;
 
-            statistic_updates_guard.extend(statistic_map.into_iter());
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "Ordering of map updates is not important"
+            )]
+            for (url, updates) in statistic_map {
+                statistic_updates_guard
+                    .entry(url)
+                    .or_insert_with(Vec::new)
+                    .extend(updates);
+            }
         }
 
         results
@@ -557,10 +565,12 @@ pub fn choose_leaders(
         // [-right_std < right_lat < left_lat < +left_std < +right_std]
         //
         // is still better, but it is up to discussion
-        if (left_lat <= right_lat) && ((left_lat + left_std) < (right_lat + right_std)) {
-            std::cmp::Ordering::Less
-        } else {
-            std::cmp::Ordering::Greater
+        let first_ordering = left_lat.total_cmp(&right_lat);
+        match first_ordering {
+            std::cmp::Ordering::Greater => first_ordering,
+            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
+                (left_lat + left_std).total_cmp(&(right_lat + right_std))
+            }
         }
     });
 
