@@ -860,7 +860,6 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
 
     // Bridge-lock holdings belong to the source side, seeded regardless of receiving config.
     let holdings: Vec<_> = bridge_lock_holdings(&config.genesis)
-        .into_iter()
         .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount))
         .collect();
     let mut state = base.with_public_accounts(holdings);
@@ -915,14 +914,13 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
 }
 
 /// Bridge-lock holder balances configured for this zone's genesis.
-fn bridge_lock_holdings(genesis: &[GenesisAction]) -> Vec<(lee::AccountId, lee::Balance)> {
-    genesis
-        .iter()
-        .filter_map(|action| match action {
-            GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
-        })
-        .collect()
+fn bridge_lock_holdings(
+    genesis: &[GenesisAction],
+) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
+    genesis.iter().filter_map(|action| match action {
+        GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
+        GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
+    })
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.

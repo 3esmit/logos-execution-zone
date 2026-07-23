@@ -297,10 +297,18 @@ impl V03State {
     pub fn genesis_fingerprint(&self) -> [u8; 32] {
         use sha2::{Digest as _, Sha256};
 
-        let mut accounts: Vec<(&AccountId, &Account)> = self.public_state.iter().collect();
+        // Destructure so adding a `V03State` field forces a decision here about
+        // whether it belongs in the genesis fingerprint.
+        let Self {
+            public_state,
+            private_state,
+            programs,
+        } = self;
+
+        let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
 
-        let mut program_ids: Vec<ProgramId> = self.programs.keys().copied().collect();
+        let mut program_ids: Vec<ProgramId> = programs.keys().copied().collect();
         program_ids.sort_unstable();
 
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
@@ -321,7 +329,7 @@ impl V03State {
                 hasher.update(word.to_le_bytes());
             }
         }
-        hasher.update(self.commitment_set_digest());
+        hasher.update(private_state.0.digest());
 
         let mut out = [0_u8; 32];
         out.copy_from_slice(&hasher.finalize());
