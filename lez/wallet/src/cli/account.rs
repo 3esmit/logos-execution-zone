@@ -111,8 +111,9 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long, requires = "pda")]
-        /// Identifier that diversifies this PDA within the (`program_id`, seed, npk) family.
+        #[arg(long)]
+        /// Identifier selecting the shared account.
+        /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
         identifier: Option<u128>,
     },
@@ -197,7 +198,7 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    fn handle_private_gms(
+    async fn handle_private_gms(
         group: &Label,
         label: Option<Label>,
         pda: bool,
@@ -229,14 +230,22 @@ impl NewSubcommand {
                 pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
             }
 
-            wallet_core.create_shared_pda_account(
-                group.clone(),
-                pda_seed,
-                pid,
-                identifier.unwrap_or_else(rand::random),
-            )?
+            wallet_core
+                .create_shared_pda_account(
+                    group.clone(),
+                    pda_seed,
+                    pid,
+                    identifier.unwrap_or_else(rand::random),
+                )
+                .await?
+        } else if let Some(id) = identifier {
+            wallet_core
+                .create_shared_regular_account_with_identifier(group.clone(), id)
+                .await?
         } else {
-            wallet_core.create_shared_regular_account(group.clone())?
+            wallet_core
+                .create_shared_regular_account(group.clone())
+                .await?
         };
 
         if let Some(label) = label {
@@ -295,15 +304,18 @@ impl WalletSubcommand for NewSubcommand {
                 seed,
                 program_id,
                 identifier,
-            } => Self::handle_private_gms(
-                &group,
-                label,
-                pda,
-                seed,
-                program_id,
-                identifier,
-                wallet_core,
-            ),
+            } => {
+                Self::handle_private_gms(
+                    &group,
+                    label,
+                    pda,
+                    seed,
+                    program_id,
+                    identifier,
+                    wallet_core,
+                )
+                .await
+            }
             Self::PrivateAccountsKey { cci } => Self::handle_private_accounts_key(cci, wallet_core),
         }
     }
