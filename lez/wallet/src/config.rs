@@ -37,7 +37,7 @@ pub struct GasConfig {
 }
 
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WalletConfig {
     /// Connection data of all known sequencers.
     pub sequencers: Vec<SequencerConnectionData>,
@@ -53,6 +53,84 @@ pub struct WalletConfig {
     /// Limit number of sequencer polls during calibration, should not be zero
     #[serde(default = "default_calibration_limit")]
     pub calibration_limit: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletConfigFile {
+    #[serde(default)]
+    sequencers: Option<Vec<SequencerConnectionData>>,
+    #[serde(default)]
+    sequencer_addr: Option<Url>,
+    #[serde(default)]
+    basic_auth: Option<BasicAuth>,
+    #[serde(with = "humantime_serde")]
+    seq_poll_timeout: Duration,
+    seq_tx_poll_max_blocks: usize,
+    seq_poll_max_retries: u64,
+    seq_block_poll_max_amount: u64,
+    #[serde(default = "default_calibration_limit")]
+    calibration_limit: usize,
+}
+
+impl<'de> Deserialize<'de> for WalletConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let file = WalletConfigFile::deserialize(deserializer)?;
+        Self::try_from(file).map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<WalletConfigFile> for WalletConfig {
+    type Error = &'static str;
+
+    fn try_from(file: WalletConfigFile) -> std::result::Result<Self, Self::Error> {
+        let WalletConfigFile {
+            sequencers,
+            sequencer_addr,
+            basic_auth,
+            seq_poll_timeout,
+            seq_tx_poll_max_blocks,
+            seq_poll_max_retries,
+            seq_block_poll_max_amount,
+            calibration_limit,
+        } = file;
+
+        let sequencers = match (sequencers, sequencer_addr) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "wallet config cannot contain both `sequencers` and legacy `sequencer_addr`",
+                );
+            }
+            (Some(sequencers), None) => {
+                if basic_auth.is_some() {
+                    return Err(
+                        "top-level legacy `basic_auth` cannot be combined with `sequencers`",
+                    );
+                }
+                sequencers
+            }
+            (None, Some(sequencer_addr)) => {
+                vec![SequencerConnectionData {
+                    sequencer_addr,
+                    basic_auth,
+                }]
+            }
+            (None, None) => {
+                return Err("wallet config must contain `sequencers` or legacy `sequencer_addr`");
+            }
+        };
+
+        Ok(Self {
+            sequencers,
+            seq_poll_timeout,
+            seq_tx_poll_max_blocks,
+            seq_poll_max_retries,
+            seq_block_poll_max_amount,
+            calibration_limit,
+        })
+    }
 }
 
 impl Default for WalletConfig {
@@ -157,4 +235,157 @@ impl WalletConfig {
 
 const fn default_calibration_limit() -> usize {
     DEFAULT_CALLIBRATION_LIMIT
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use serde_json::json;
+
+    use super::{DEFAULT_CALLIBRATION_LIMIT, WalletConfig};
+
+    fn polling_fields() -> serde_json::Value {
+        json!({
+            "seq_poll_timeout": "7s",
+            "seq_tx_poll_max_blocks": 11,
+            "seq_poll_max_retries": 13,
+            "seq_block_poll_max_amount": 17
+        })
+    }
+
+    #[test]
+    fn loads_legacy_single_sequencer_configuration_from_path() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let config_path = temp_dir.path().join("wallet_config.json");
+        let mut value = polling_fields();
+        value["sequencer_addr"] = json!("https://legacy.example.test");
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&value).expect("legacy configuration should serialize"),
+        )
+        .expect("legacy configuration should be written");
+
+        let config = WalletConfig::from_path_or_initialize_default(&config_path)
+            .expect("legacy configuration should load");
+
+        assert_eq!(config.sequencers.len(), 1);
+        assert_eq!(
+            config.sequencers[0].sequencer_addr.as_str(),
+            "https://legacy.example.test/"
+        );
+        assert!(config.sequencers[0].basic_auth.is_none());
+        assert_eq!(config.seq_poll_timeout, Duration::from_secs(7));
+        assert_eq!(config.seq_tx_poll_max_blocks, 11);
+        assert_eq!(config.seq_poll_max_retries, 13);
+        assert_eq!(config.seq_block_poll_max_amount, 17);
+        assert_eq!(config.calibration_limit, DEFAULT_CALLIBRATION_LIMIT);
+    }
+
+    #[test]
+    fn current_multi_sequencer_configuration_is_unchanged() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!([
+            {"sequencer_addr": "https://first.example.test"},
+            {
+                "sequencer_addr": "https://second.example.test",
+                "basic_auth": {"username": "operator", "password": "test-only"}
+            }
+        ]);
+        value["calibration_limit"] = json!(19);
+
+        let config: WalletConfig =
+            serde_json::from_value(value).expect("current configuration should load");
+
+        assert_eq!(config.sequencers.len(), 2);
+        assert_eq!(
+            config.sequencers[0].sequencer_addr.as_str(),
+            "https://first.example.test/"
+        );
+        assert_eq!(
+            config.sequencers[1].sequencer_addr.as_str(),
+            "https://second.example.test/"
+        );
+        let auth = config.sequencers[1]
+            .basic_auth
+            .as_ref()
+            .expect("basic authentication should be preserved");
+        assert_eq!(auth.username, "operator");
+        assert_eq!(auth.password.as_deref(), Some("test-only"));
+        assert_eq!(config.calibration_limit, 19);
+    }
+
+    #[test]
+    fn legacy_configuration_serializes_as_current_schema() {
+        let mut value = polling_fields();
+        value["sequencer_addr"] = json!("https://legacy.example.test");
+        let config: WalletConfig =
+            serde_json::from_value(value).expect("legacy configuration should load");
+
+        let serialized =
+            serde_json::to_value(config).expect("migrated configuration should serialize");
+
+        assert!(serialized.get("sequencer_addr").is_none());
+        assert_eq!(
+            serialized["sequencers"][0]["sequencer_addr"],
+            "https://legacy.example.test/"
+        );
+    }
+
+    #[test]
+    fn preserves_legacy_basic_authentication() {
+        let mut value = polling_fields();
+        value["sequencer_addr"] = json!("https://legacy.example.test");
+        value["basic_auth"] = json!({"username": "operator", "password": "test-only"});
+
+        let config: WalletConfig =
+            serde_json::from_value(value).expect("authenticated legacy configuration should load");
+        let auth = config.sequencers[0]
+            .basic_auth
+            .as_ref()
+            .expect("legacy basic authentication should be preserved");
+
+        assert_eq!(auth.username, "operator");
+        assert_eq!(auth.password.as_deref(), Some("test-only"));
+    }
+
+    #[test]
+    fn rejects_conflicting_current_and_legacy_sequencer_fields() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!([{"sequencer_addr": "https://current.example.test"}]);
+        value["sequencer_addr"] = json!("https://legacy.example.test");
+
+        let error = serde_json::from_value::<WalletConfig>(value)
+            .expect_err("conflicting configuration should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cannot contain both `sequencers` and legacy `sequencer_addr`")
+        );
+    }
+
+    #[test]
+    fn reports_missing_sequencer_configuration() {
+        let error = serde_json::from_value::<WalletConfig>(polling_fields())
+            .expect_err("missing sequencer configuration should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must contain `sequencers` or legacy `sequencer_addr`")
+        );
+    }
+
+    #[test]
+    fn reports_invalid_current_sequencer_field_type() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!("https://not-an-array.example.test");
+
+        let error = serde_json::from_value::<WalletConfig>(value)
+            .expect_err("malformed current configuration should be rejected");
+
+        assert!(error.to_string().contains("invalid type"));
+        assert!(error.to_string().contains("a sequence"));
+    }
 }
