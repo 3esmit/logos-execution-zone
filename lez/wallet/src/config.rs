@@ -57,10 +57,8 @@ pub struct WalletConfig {
 
 #[derive(Debug, Deserialize)]
 struct WalletConfigFile {
-    #[serde(default)]
+    #[serde(default, alias = "sequencers_conn_data")]
     sequencers: Option<Vec<SequencerConnectionData>>,
-    #[serde(default)]
-    sequencers_conn_data: Option<Vec<SequencerConnectionData>>,
     #[serde(default)]
     sequencer_addr: Option<Url>,
     #[serde(default)]
@@ -70,7 +68,7 @@ struct WalletConfigFile {
     seq_tx_poll_max_blocks: usize,
     seq_poll_max_retries: u64,
     seq_block_poll_max_amount: u64,
-    #[serde(default = "default_calibration_limit")]
+    #[serde(default = "default_calibration_limit", alias = "callibration_limit")]
     calibration_limit: usize,
 }
 
@@ -90,7 +88,6 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
     fn try_from(file: WalletConfigFile) -> std::result::Result<Self, Self::Error> {
         let WalletConfigFile {
             sequencers,
-            sequencers_conn_data,
             sequencer_addr,
             basic_auth,
             seq_poll_timeout,
@@ -100,8 +97,13 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
             calibration_limit,
         } = file;
 
-        let sequencers = match (sequencers, sequencers_conn_data, sequencer_addr) {
-            (Some(sequencers), None, None) => {
+        let sequencers = match (sequencers, sequencer_addr) {
+            (Some(_), Some(_)) => {
+                return Err(
+                    "wallet config cannot contain both `sequencers` and legacy `sequencer_addr`",
+                );
+            }
+            (Some(sequencers), None) => {
                 if basic_auth.is_some() {
                     return Err(
                         "top-level legacy `basic_auth` cannot be combined with `sequencers`",
@@ -109,28 +111,14 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
                 }
                 sequencers
             }
-            (None, Some(sequencers), None) => {
-                if basic_auth.is_some() {
-                    return Err("top-level legacy `basic_auth` cannot be combined with \
-                         `sequencers_conn_data`");
-                }
-                sequencers
-            }
-            (None, None, Some(sequencer_addr)) => {
+            (None, Some(sequencer_addr)) => {
                 vec![SequencerConnectionData {
                     sequencer_addr,
                     basic_auth,
                 }]
             }
-            (None, None, None) => {
-                return Err("wallet config must contain `sequencers`, transitional \
-                     `sequencers_conn_data`, or legacy `sequencer_addr`");
-            }
-            _ => {
-                return Err(
-                    "wallet config must contain only one of `sequencers`, transitional \
-                     `sequencers_conn_data`, or legacy `sequencer_addr`",
-                );
+            (None, None) => {
+                return Err("wallet config must contain `sequencers` or legacy `sequencer_addr`");
             }
         };
 
@@ -334,6 +322,7 @@ mod tests {
             {"sequencer_addr": "https://first.example.test"},
             {"sequencer_addr": "https://second.example.test"}
         ]);
+        value["callibration_limit"] = json!(23);
 
         let config: WalletConfig =
             serde_json::from_value(value).expect("transitional configuration should load");
@@ -347,12 +336,15 @@ mod tests {
             config.sequencers[1].sequencer_addr.as_str(),
             "https://second.example.test/"
         );
+        assert_eq!(config.calibration_limit, 23);
 
         let serialized =
             serde_json::to_value(config).expect("migrated configuration should serialize");
         assert!(serialized.get("sequencers_conn_data").is_none());
         assert!(serialized.get("sequencer_addr").is_none());
+        assert!(serialized.get("callibration_limit").is_none());
         assert!(serialized.get("sequencers").is_some());
+        assert_eq!(serialized["calibration_limit"], 23);
     }
 
     #[test]
@@ -401,7 +393,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must contain only one of `sequencers`")
+                .contains("cannot contain both `sequencers` and legacy `sequencer_addr`")
         );
     }
 
@@ -415,11 +407,7 @@ mod tests {
         let error = serde_json::from_value::<WalletConfig>(value)
             .expect_err("conflicting configuration should be rejected");
 
-        assert!(
-            error
-                .to_string()
-                .contains("must contain only one of `sequencers`")
-        );
+        assert!(error.to_string().contains("duplicate field `sequencers`"));
     }
 
     #[test]
@@ -435,7 +423,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must contain only one of `sequencers`")
+                .contains("cannot contain both `sequencers` and legacy `sequencer_addr`")
         );
     }
 
@@ -447,7 +435,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must contain `sequencers`, transitional `sequencers_conn_data`")
+                .contains("must contain `sequencers` or legacy `sequencer_addr`")
         );
     }
 
@@ -461,5 +449,22 @@ mod tests {
 
         assert!(error.to_string().contains("invalid type"));
         assert!(error.to_string().contains("a sequence"));
+    }
+
+    #[test]
+    fn rejects_conflicting_current_and_transitional_calibration_fields() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!([{"sequencer_addr": "https://current.example.test"}]);
+        value["calibration_limit"] = json!(19);
+        value["callibration_limit"] = json!(23);
+
+        let error = serde_json::from_value::<WalletConfig>(value)
+            .expect_err("duplicate calibration fields should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate field `calibration_limit`")
+        );
     }
 }
