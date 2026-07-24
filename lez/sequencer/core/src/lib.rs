@@ -217,15 +217,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // Before producing, verify our local state still belongs to the chain
         // the channel serves and replay any channel blocks we are missing
         // (e.g. from other sequencers).
-        let channel_was_empty =
+        let channel_absent =
             Self::verify_and_reconstruct(&block_publisher, &store, &chain, is_fresh_start)
                 .await
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
-        // Publish our blocks only when bootstrapping an empty channel. If the
-        // channel already has blocks (another sequencer bootstrapped it), we
-        // adopted them during reconstruction instead.
-        if is_fresh_start && channel_was_empty {
+        // Publish our blocks only when we are bootstrapping a channel that does
+        // not exist yet (no channel tip). If the channel already exists (another
+        // sequencer created it), we adopted its blocks during reconstruction
+        // instead; republishing then would fork the channel with our own copies.
+        if is_fresh_start && channel_absent {
             let mut pending_blocks = store
                 .get_all_blocks()
                 .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
@@ -269,7 +270,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// `state`/`store`, recording each block's L1 inscription slot as the new
     /// anchor. Fails (never parks) on any divergence.
     ///
-    /// Returns whatever channel was empty or not.
+    /// Returns whether the channel does not exist yet (has no tip), i.e. whether
+    /// this sequencer is the one that must bootstrap-publish its own blocks.
     async fn verify_and_reconstruct(
         publisher: &BP,
         store: &SequencerStore,
@@ -351,7 +353,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .await
             .context("Failed to read channel history for reconstruction")?;
         let mut messages = std::pin::pin!(messages);
-        let mut channel_is_empty = true;
         while let Some((message, slot)) = messages.next().await {
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
@@ -369,7 +370,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     slot.into_inner()
                 )
             })?;
-            channel_is_empty = false;
             // Locked per message (not across the stream `await`): concurrent
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
@@ -377,7 +377,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::apply_reconstructed_block(store, &mut chain, &block, slot)?;
         }
 
-        Ok(channel_is_empty)
+        // The channel exists once it has a tip; only when it has none is this
+        // sequencer the one bootstrapping it. This is deliberately not the
+        // reconstruction scan's view above, which reads only finalized history
+        // (up to LIB) and so reports "empty" while finality lags even though the
+        // channel already holds unfinalized blocks from another sequencer.
+        Ok(channel_tip_slot.is_none())
     }
 
     /// Applies a single channel block during reconstruction: idempotent for
