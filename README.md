@@ -76,7 +76,12 @@ This design keeps public transactions as fast as any RISC-V–based VM and makes
 # Versioning
 
 We release versions as git tags (e.g. `v0.1.0`). If no critical issues with version is found you can expect it to be immutable. All further features and fixes will be a part of the next tag. As the project is in active development we don't provide backward compatibility yet.
-For each tag we publish docker images of our services.
+For each tag this repository publishes Docker images plus native operator
+bundles for Linux AMD64 and Apple silicon macOS. Bundles include the wallet,
+sequencer, indexer, explorer, FFI libraries, checksums, and a source manifest.
+See [native and container releases](docs/native-releases.md) for artifact
+contents, runtime requirements, verification, and maintainer steps.
+
 If you depend on this project you can pin your rust dependency to a git tag like this:
 
 ```toml
@@ -234,4 +239,3 @@ With that you can send transactions from local wallet to the Sequencer running i
 ## Caution for local image builds
 
 If you're going to build sequencer image locally you should better adjust default docker settings and set `defaultKeepStorage` at least `25GB` so that it can keep layers properly cached.
-

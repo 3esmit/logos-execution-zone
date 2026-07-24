@@ -1,0 +1,9 @@
+#!/usr/bin/env sh
+set -eu
+
+bundle_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+: "${LEPTOS_SITE_ROOT:=$bundle_root/share/explorer/site}"
+export LEPTOS_SITE_ROOT
+
+cd "$bundle_root/share/explorer"
+exec "$bundle_root/libexec/explorer_service" "$@"
