@@ -295,7 +295,6 @@ fn deposit_event_record(
             recipient_id: recipient,
         })
         .unwrap(),
-        submitted_in_block_id: None,
     }
 }
 
@@ -525,7 +524,6 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .await
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
-    let deposit_block_id = seq_a.block_store().latest_block_meta().unwrap().unwrap().id;
 
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -561,18 +559,19 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         "already-finished deposit must be applied exactly once"
     );
 
-    // The pending event is now marked submitted in the reconstructed block, so the
-    // startup replay would not re-queue it — no double mint on restart.
-    let record = store_b
-        .get_unfulfilled_deposit_events()
-        .unwrap()
-        .into_iter()
-        .find(|event| event.deposit_op_id == HashType(deposit_op_id))
-        .expect("pending deposit event should still be recorded");
-    assert_eq!(
-        record.submitted_in_block_id,
-        Some(deposit_block_id),
-        "reconstruction must reconcile the already-finished deposit against its channel block"
+    // The mint's receipt PDA is in the reconstructed state, and reconstruction
+    // dropped the pending record backfill had re-delivered — so the production
+    // drain sees the deposit as minted and never re-emits it.
+    assert!(
+        crate::deposit_already_minted(
+            chain_b.lock().unwrap().head_state(),
+            HashType(deposit_op_id)
+        ),
+        "the reconstructed deposit's receipt marks it minted"
+    );
+    assert!(
+        store_b.get_pending_deposit_events().unwrap().is_empty(),
+        "reconstruction drops the finalized deposit's pending record"
     );
 }
 

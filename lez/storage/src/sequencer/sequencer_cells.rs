@@ -232,14 +232,17 @@ impl SimpleWritableCell for ZoneAnchorCell {
     }
 }
 
+/// An L1 deposit event observed but not yet seen finalized.
+///
+/// Purely a liveness queue: whether to actually emit a mint is decided against
+/// chain state (the deposit-receipt PDA), and the record is dropped once its
+/// mint finalizes.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PendingDepositEventRecord {
     pub deposit_op_id: HashType,
     pub source_tx_hash: HashType,
     pub amount: u64,
     pub metadata: Vec<u8>,
-    /// Set when block containing the deposit event is submitted, but not necessarily finalized.
-    pub submitted_in_block_id: Option<u64>,
 }
 
 #[derive(BorshDeserialize)]

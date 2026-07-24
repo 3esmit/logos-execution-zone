@@ -455,12 +455,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        // Mark the deposits' pending records submitted so the production drain
-        // skips mints this block already carries. Withdraw intents are
-        // deliberately not counted: backfill already re-delivered and dropped
-        // their finalized L1 events, so an increment here would never be
-        // consumed and would leave a phantom count.
-        let deposit_event_ids: Vec<_> = block
+        // A reconstructed block is finalized, so any deposit it mints is
+        // permanently reflected in state (its receipt PDA); drop the pending
+        // record backfill may have re-delivered, so the drain stops re-minting.
+        let finalized_deposit_ids: Vec<_> = block
             .body
             .transactions
             .iter()
@@ -478,7 +476,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 blocks: &[(block, true)],
                 head_tip: head_tip.as_ref(),
                 final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
-                mark_deposits_submitted: Some((&deposit_event_ids, block_id)),
+                remove_deposit_records: &finalized_deposit_ids,
                 zone_anchor: Some(&record),
                 ..StoreUpdate::new(chain.head_state())
             })
@@ -500,18 +498,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Produces a new block from mempool transactions and publishes it via zone-sdk.
     pub async fn produce_new_block(&mut self) -> Result<u64> {
-        let BlockWithMeta {
-            block,
-            deposit_event_ids,
-            withdrawals,
-        } = self
+        let BlockWithMeta { block, withdrawals } = self
             .build_block_from_mempool()
             .context("Failed to build block from mempool transactions")?;
 
-        let withdrawal_reconciliation_keys = withdrawals
+        let withdrawal_reconciliation_keys: Vec<_> = withdrawals
             .iter()
             .map(|withdraw| withdraw_event_reconciliation_key(&withdraw.outputs))
-            .collect::<Result<_>>()
+            .collect::<Result<Vec<_>>>()
             .context("Failed to build reconciliation keys for block withdrawals")?;
 
         let (this_msg, checkpoint) = self
@@ -523,8 +517,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         self.record_produced_block(
             this_msg,
             &block,
-            &deposit_event_ids,
-            withdrawal_reconciliation_keys,
+            &withdrawal_reconciliation_keys,
             &checkpoint,
         )?;
 
@@ -544,8 +537,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &mut self,
         this_msg: MsgId,
         block: &Block,
-        deposit_event_ids: &[HashType],
-        withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
+        withdrawal_reconciliation_keys: &[WithdrawalReconciliationKey],
         checkpoint: &block_publisher::SequencerCheckpoint,
     ) -> Result<()> {
         let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
@@ -557,7 +549,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // with the follow path.
                 self.store.update(
                     block,
-                    deposit_event_ids,
                     withdrawal_reconciliation_keys,
                     chain.head_state(),
                     Some(&checkpoint_bytes),
@@ -586,18 +577,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "splitting the produce-path accumulators into a struct buys nothing"
-    )]
     fn apply_mempool_transaction(
-        store: &SequencerStore,
         state: &mut lee::V03State,
         origin: TransactionOrigin,
         tx: &LeeTransaction,
         block_height: u64,
         timestamp: u64,
-        deposit_event_ids: &mut Vec<HashType>,
         withdrawals: &mut Vec<WithdrawArg>,
     ) -> Result<bool> {
         let tx_hash = tx.hash();
@@ -624,17 +609,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     panic!("Sequencer may only generate Public transactions, found {tx:#?}");
                 };
 
-                if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
-                    if store
-                        .is_deposit_event_submitted(deposit_op_id)
-                        .context("Failed to check whether deposit was already submitted")?
-                    {
-                        info!("Skipping already-submitted bridge deposit {deposit_op_id}");
-                        return Ok(false);
-                    }
-                    deposit_event_ids.push(deposit_op_id);
-                }
-
+                // Bridge deposits are deduped by their receipt PDA in chain
+                // state (drained only when unminted, no-op on replay), so no
+                // node-local guard is needed here.
                 state
                     .transition_from_public_transaction(public_tx, block_height, timestamp)
                     .context("Failed to execute sequencer-generated transaction")?;
@@ -662,22 +639,24 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
 
         let mut valid_transactions = Vec::new();
-        let mut deposit_event_ids = Vec::new();
         let mut withdrawals = Vec::new();
 
-        // Bridge deposit mints are drained from the store, not the mempool.
-        // The follow path records the event durably but cannot enqueue the
-        // mint itself (it runs on the publisher's drive task, where an await
-        // stalls the very task production needs), and a mempool copy would
-        // race this drain into minting the same deposit twice in one block.
+        // Bridge deposit mints are drained from the store, not the mempool: the
+        // follow path records the event durably but cannot enqueue the mint
+        // itself (it runs on the publisher's drive task, where an await stalls
+        // the very task production needs). Draining here also subsumes the old
+        // startup replay.
         //
-        // Draining here also subsumes the old startup replay.
+        // Skip any deposit whose receipt PDA already exists in the state we
+        // build on — it was minted by us or by a peer whose block we adopted.
+        // An orphan reverts the receipt with the block, so the next turn
+        // re-mints without any bookkeeping of our own.
         let mut pending_deposits: VecDeque<LeeTransaction> = self
             .store
-            .get_unfulfilled_deposit_events()
-            .context("Failed to load unfulfilled deposit events")?
+            .get_pending_deposit_events()
+            .context("Failed to load pending deposit events")?
             .into_iter()
-            .filter(|record| record.submitted_in_block_id.is_none())
+            .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
             .filter_map(|record| {
                 build_bridge_deposit_tx_from_event(&record)
                     .inspect_err(|err| {
@@ -740,13 +719,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
 
             if Self::apply_mempool_transaction(
-                &self.store,
                 &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
                 new_block_timestamp,
-                &mut deposit_event_ids,
                 &mut withdrawals,
             )? {
                 valid_transactions.push(tx);
@@ -779,11 +756,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             now.elapsed().as_secs()
         );
 
-        Ok(BlockWithMeta {
-            block,
-            deposit_event_ids,
-            withdrawals,
-        })
+        Ok(BlockWithMeta { block, withdrawals })
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -859,8 +832,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
 struct BlockWithMeta {
     block: Block,
-    deposit_event_ids: Vec<HashType>,
     withdrawals: Vec<WithdrawArg>,
+}
+
+/// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
+/// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
+fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
+    let receipt_id =
+        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+    state
+        .get_public_account(receipt_id)
+        .is_some_and(|receipt| *receipt != lee::Account::default())
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:
@@ -954,13 +936,23 @@ fn apply_follow_update(
         });
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
 
-        // Every block at or below the highest finalized one is irreversible,
-        // so pending records submitted there can go and stored blocks can be
-        // marked finalized.
+        // Every block at or below the highest finalized one is irreversible, so
+        // stored blocks there can be marked finalized.
         let last_finalized = finalized
             .iter()
             .map(|(_, block)| block.header.block_id)
             .max();
+
+        // A deposit observed in a finalized block is permanently minted (its
+        // receipt is now in the irreversible tier), so its pending record can be
+        // dropped. Keyed by op id, not block id: a record only goes once its own
+        // deposit finalizes, never because some other block finalized at its
+        // height.
+        let finalized_deposit_ids: Vec<HashType> = finalized
+            .iter()
+            .flat_map(|(_, block)| block.body.transactions.iter())
+            .filter_map(extract_bridge_deposit_id)
+            .collect();
 
         // A persist failure is fatal: the in-memory chain has already advanced,
         // and continuing would leave a permanent gap in the store. The `panic!`
@@ -973,6 +965,7 @@ fn apply_follow_update(
                 final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
                 finalized_up_to: last_finalized,
                 new_deposit_events: &deposit_records,
+                remove_deposit_records: &finalized_deposit_ids,
                 consumed_withdrawals: &consumed_withdrawals,
                 ..StoreUpdate::new(chain.head_state())
             })
@@ -1152,7 +1145,6 @@ fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRec
         source_tx_hash: HashType(deposit.tx_hash.0),
         amount: deposit.amount,
         metadata: deposit.metadata.clone().into(),
-        submitted_in_block_id: None,
     }
 }
 
@@ -1164,10 +1156,18 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let vault_program_id = programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
+    // The receipt PDA carries the exactly-once check: the program reads it to
+    // detect a replay, so it must be in the tx's account list.
+    let receipt_id =
+        bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
         bridge_program_id,
-        vec![system_accounts::bridge_account_id(), recipient_vault_id],
+        vec![
+            system_accounts::bridge_account_id(),
+            recipient_vault_id,
+            receipt_id,
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,

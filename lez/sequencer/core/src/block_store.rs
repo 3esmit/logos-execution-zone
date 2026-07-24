@@ -155,14 +155,13 @@ impl SequencerStore {
     pub(crate) fn update(
         &mut self,
         block: &Block,
-        deposit_event_ids: &[HashType],
-        withdrawals: Vec<WithdrawalReconciliationKey>,
+        withdrawals: &[WithdrawalReconciliationKey],
         state: &V03State,
         checkpoint: Option<&[u8]>,
     ) -> DbResult<()> {
         let new_transactions_map = block_to_transactions_map(block);
         self.dbio
-            .atomic_update(block, deposit_event_ids, withdrawals, state, checkpoint)?;
+            .atomic_update(block, withdrawals, state, checkpoint)?;
         self.tx_hash_to_block_map.extend(new_transactions_map);
         Ok(())
     }
@@ -214,12 +213,8 @@ impl SequencerStore {
         self.dbio.put_zone_anchor(anchor)
     }
 
-    pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
+    pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
         self.dbio.get_pending_deposit_events()
-    }
-
-    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
-        self.dbio.is_deposit_event_submitted(deposit_op_id)
     }
 }
 
@@ -277,9 +272,7 @@ mod tests {
         assert_eq!(None, retrieved_tx);
         // Add the block with the transaction
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state, None)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
         // Try again
         let output = node_store.get_transaction_by_hash(tx.hash());
         assert_eq!(Some((tx, 1)), output);
@@ -344,9 +337,7 @@ mod tests {
         let block_hash = block.header.hash;
 
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state, None)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
         let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
@@ -382,9 +373,7 @@ mod tests {
         let block_id = block.header.block_id;
 
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state, None)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
 
         // Verify initial status is Pending
         let retrieved_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
@@ -433,7 +422,7 @@ mod tests {
             // Add a new block
             let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
             node_store
-                .update(&block, &[], vec![], &V03State::new(), None)
+                .update(&block, &[], &V03State::new(), None)
                 .unwrap();
         }
 

@@ -18,18 +18,6 @@ use crate::{
 
 pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
 
-/// A zeroed checkpoint. Tests only assert *that* a checkpoint was persisted
-/// alongside its effects, never what is in it.
-#[must_use]
-pub fn mock_checkpoint() -> SequencerCheckpoint {
-    SequencerCheckpoint {
-        last_msg_id: MsgId::from([0; 32]),
-        pending_txs: Vec::new(),
-        lib: HeaderId::from([0; 32]),
-        lib_slot: Slot::from(0),
-    }
-}
-
 #[derive(Clone)]
 pub struct MockBlockPublisher {
     channel_id: ChannelId,
@@ -117,5 +105,18 @@ impl BlockPublisherTrait for MockBlockPublisher {
             .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
             .cloned();
         Ok(futures::stream::iter(messages))
+    }
+}
+
+/// A zeroed checkpoint, for [`MockBlockPublisher::publish_block`] and for tests
+/// building a [`crate::block_publisher::FollowUpdate`]. Tests only assert *that*
+/// a checkpoint was persisted alongside its effects, never what is in it.
+#[must_use]
+pub(crate) fn mock_checkpoint() -> SequencerCheckpoint {
+    SequencerCheckpoint {
+        last_msg_id: MsgId::from([0; 32]),
+        pending_txs: Vec::new(),
+        lib: HeaderId::from([0; 32]),
+        lib_slot: Slot::from(0),
     }
 }

@@ -34,7 +34,6 @@ fn deposit_record(seed: u8) -> PendingDepositEventRecord {
         source_tx_hash: HashType([seed; 32]),
         amount: u64::from(seed),
         metadata: vec![seed],
-        submitted_in_block_id: None,
     }
 }
 
@@ -357,7 +356,7 @@ fn redelivered_deposit_is_not_accepted_twice() {
 
     let record = deposit_record(1);
     dbio.store_update(&StoreUpdate {
-        new_deposit_events: &[record.clone()],
+        new_deposit_events: std::slice::from_ref(&record),
         ..StoreUpdate::new(&state_with_balance(100))
     })
     .unwrap();
@@ -377,6 +376,30 @@ fn redelivered_deposit_is_not_accepted_twice() {
 }
 
 #[test]
+fn finalized_deposit_records_are_removed_by_op_id() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let first = deposit_record(1);
+    let second = deposit_record(2);
+    dbio.store_update(&StoreUpdate {
+        new_deposit_events: &[first.clone(), second.clone()],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    // Only the finalized op id is dropped; the other record stays.
+    dbio.store_update(&StoreUpdate {
+        remove_deposit_records: &[first.deposit_op_id],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    let stored = dbio.get_pending_deposit_events().unwrap();
+    assert_eq!(stored, vec![second]);
+}
+
+#[test]
 fn repeated_withdrawal_key_in_one_update_decrements_once_per_occurrence() {
     let temp_dir = tempdir().unwrap();
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
@@ -386,12 +409,12 @@ fn repeated_withdrawal_key_in_one_update_decrements_once_per_occurrence() {
         bedrock_account_pk: [3; 32],
     };
     // Two local intents for the same key.
-    let mut batch = WriteBatch::default();
-    dbio.increment_unseen_withdraw_count(key, &mut batch).unwrap();
-    dbio.db.write(batch).unwrap();
-    let mut batch = WriteBatch::default();
-    dbio.increment_unseen_withdraw_count(key, &mut batch).unwrap();
-    dbio.db.write(batch).unwrap();
+    for _ in 0..2 {
+        let mut batch = WriteBatch::default();
+        dbio.increment_unseen_withdraw_count(key, &mut batch)
+            .unwrap();
+        dbio.db.write(batch).unwrap();
+    }
 
     // Both L1 events arrive in one update; a per-occurrence disk read would
     // miss the staged decrement and consume only one.
@@ -432,7 +455,9 @@ fn unmatched_withdrawal_is_reported_and_writes_nothing() {
 
     assert_eq!(outcome.unmatched_withdrawals.len(), 1);
     assert!(
-        dbio.get_opt::<UnseenWithdrawCountCell>(key).unwrap().is_none(),
+        dbio.get_opt::<UnseenWithdrawCountCell>(key)
+            .unwrap()
+            .is_none(),
         "an unmatched withdraw must not leave a counter behind"
     );
 }
@@ -443,14 +468,8 @@ fn produced_block_persists_its_publish_checkpoint() {
     let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
 
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(
-        &block2,
-        &[],
-        vec![],
-        &state_with_balance(200),
-        Some(b"cp-produced"),
-    )
-    .unwrap();
+    dbio.atomic_update(&block2, &[], &state_with_balance(200), Some(b"cp-produced"))
+        .unwrap();
 
     // Storing the block without the checkpoint would let a restart restore a
     // pending set that no longer holds the inscription we just published.
@@ -458,7 +477,10 @@ fn produced_block_persists_its_publish_checkpoint() {
         dbio.get_zone_sdk_checkpoint_bytes().unwrap().as_deref(),
         Some(b"cp-produced".as_slice())
     );
-    assert_eq!(dbio.get_block(2).unwrap().unwrap().header.hash, block2.header.hash);
+    assert_eq!(
+        dbio.get_block(2).unwrap().unwrap().header.hash,
+        block2.header.hash
+    );
 }
 
 #[test]
@@ -477,7 +499,7 @@ fn produced_block_below_disk_head_pins_meta_and_prunes() {
     // pins the tip meta to the produced block and drops the stale suffix in
     // the same write, mirroring the follow path.
     let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2b, &[], vec![], &state_with_balance(400), None)
+    dbio.atomic_update(&block2b, &[], &state_with_balance(400), None)
         .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");

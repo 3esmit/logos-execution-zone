@@ -1,6 +1,7 @@
 use bridge_core::Instruction;
-use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::Account,
+    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn unchanged_post_states(
@@ -29,18 +30,17 @@ fn main() {
     );
 
     let pre_states_clone = pre_states.clone();
-    let post_states = unchanged_post_states(&pre_states_clone);
 
-    let chained_calls = match instruction {
+    let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
-            l1_deposit_op_id: _,
+            l1_deposit_op_id,
             vault_program_id,
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault] = pre_states
+            let [bridge, recipient_vault, receipt] = pre_states
                 .try_into()
-                .expect("Deposit requires exactly 2 accounts");
+                .expect("Deposit requires exactly 3 accounts");
 
             assert_eq!(
                 bridge.account_id,
@@ -54,20 +54,47 @@ fn main() {
                 "Second account must be recipient vault PDA"
             );
 
-            let mut bridge_for_vault = bridge;
-            bridge_for_vault.is_authorized = true;
+            assert_eq!(
+                receipt.account_id,
+                bridge_core::deposit_receipt_account_id(self_program_id, l1_deposit_op_id),
+                "Third account must be the deposit-receipt PDA"
+            );
 
-            vec![
-                ChainedCall::new(
-                    vault_program_id,
-                    vec![bridge_for_vault, recipient_vault],
-                    &vault_core::Instruction::Transfer {
-                        recipient_id,
-                        amount: u128::from(amount),
-                    },
-                )
-                .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
-            ]
+            // Replay protection: the receipt PDA exists iff this op id was
+            // already minted. On replay it is non-default and the whole
+            // instruction is a no-op.
+            if receipt.account != Account::default() {
+                (unchanged_post_states(&pre_states_clone), vec![])
+            } else {
+                // First mint: claim the receipt — its existence is the record,
+                // the account's contents are never read — and chain the vault
+                // transfer.
+                let receipt_post = AccountPostState::new_claimed_if_default(
+                    receipt.account,
+                    Claim::Pda(bridge_core::deposit_receipt_seed(l1_deposit_op_id)),
+                );
+
+                let post_states = vec![
+                    AccountPostState::new(bridge.account.clone()),
+                    AccountPostState::new(recipient_vault.account.clone()),
+                    receipt_post,
+                ];
+
+                let mut bridge_for_vault = bridge;
+                bridge_for_vault.is_authorized = true;
+                let chained_calls = vec![
+                    ChainedCall::new(
+                        vault_program_id,
+                        vec![bridge_for_vault, recipient_vault],
+                        &vault_core::Instruction::Transfer {
+                            recipient_id,
+                            amount: u128::from(amount),
+                        },
+                    )
+                    .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
+                ];
+                (post_states, chained_calls)
+            }
         }
         Instruction::Withdraw {
             amount,
@@ -89,13 +116,14 @@ fn main() {
                 "Sender account must be owned by the authenticated transfer program"
             );
 
-            vec![ChainedCall::new(
+            let chained_calls = vec![ChainedCall::new(
                 auth_transfer_program_id,
                 vec![sender, bridge],
                 &authenticated_transfer_core::Instruction::Transfer {
                     amount: u128::from(amount),
                 },
-            )]
+            )];
+            (unchanged_post_states(&pre_states_clone), chained_calls)
         }
     };
 

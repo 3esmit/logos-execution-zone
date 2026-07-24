@@ -39,10 +39,17 @@ use crate::{
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_genesis_state,
     config::{BedrockConfig, GenesisAction, SequencerConfig},
-    is_sequencer_only_program,
+    deposit_already_minted, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, mock_checkpoint},
     resubmittable_txs,
 };
+
+mod reconstruction;
+
+#[derive(borsh::BorshSerialize)]
+struct DepositMetadataForEncoding {
+    recipient_id: lee::AccountId,
+}
 
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_follow_update()`.
@@ -55,13 +62,6 @@ fn empty_follow_update() -> FollowUpdate {
         deposits: Vec::new(),
         withdrawals: Vec::new(),
     }
-}
-
-mod reconstruction;
-
-#[derive(borsh::BorshSerialize)]
-struct DepositMetadataForEncoding {
-    recipient_id: lee::AccountId,
 }
 
 fn setup_sequencer_config() -> SequencerConfig {
@@ -247,7 +247,6 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
         source_tx_hash: HashType([7_u8; 32]),
         amount: expected_amount,
         metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
-        submitted_in_block_id: None,
     };
 
     {
@@ -286,15 +285,20 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
         "the drained deposit mint should be included in the produced block"
     );
 
-    let pending_events = sequencer.store.get_unfulfilled_deposit_events().unwrap();
-    let drained_event = pending_events
-        .into_iter()
-        .find(|event| event.deposit_op_id == HashType(deposit_op_id))
-        .expect("Pending deposit event should remain in DB until finalized");
-    assert_eq!(
-        drained_event.submitted_in_block_id,
-        Some(block_id),
-        "inclusion marks the record submitted, so the next turn does not mint it again"
+    // The record stays until its deposit finalizes; exactly-once is enforced by
+    // the receipt PDA now in head state, not by any marker on the record.
+    assert!(
+        sequencer
+            .store
+            .get_pending_deposit_events()
+            .unwrap()
+            .iter()
+            .any(|event| event.deposit_op_id == HashType(deposit_op_id)),
+        "the record remains until the deposit finalizes"
+    );
+    assert!(
+        sequencer.with_state(|state| deposit_already_minted(state, HashType(deposit_op_id))),
+        "the deposit's receipt PDA marks it minted in head state"
     );
 }
 
@@ -315,7 +319,6 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
             source_tx_hash: HashType([7_u8; 32]),
             amount: 1,
             metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
-            submitted_in_block_id: None,
         })
         .unwrap();
 
@@ -339,7 +342,7 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
     assert_eq!(
         minted_in(second),
         0,
-        "the submitted marker must keep the next turn from re-draining the record"
+        "the receipt PDA from the first mint must keep the drain from re-minting"
     );
 }
 
@@ -1358,7 +1361,6 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
             recipient_id: initial_public_user_accounts()[0].account_id,
         })
         .unwrap(),
-        submitted_in_block_id: None,
     })
     .unwrap();
     let withdraw_tx = {
@@ -1461,13 +1463,9 @@ async fn follow_update_records_deposits_for_the_production_drain() {
         },
     );
 
-    let pending = sequencer.store.get_unfulfilled_deposit_events().unwrap();
+    let pending = sequencer.store.get_pending_deposit_events().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
-    assert!(
-        pending[0].submitted_in_block_id.is_none(),
-        "an observed deposit is owed until a block includes its mint"
-    );
 }
 
 #[tokio::test]
@@ -1831,7 +1829,6 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
             MsgId::from(our_block.header.hash.0),
             &our_block,
             &[],
-            vec![],
             &mock_checkpoint(),
         )
         .unwrap();
@@ -1860,7 +1857,6 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
             MsgId::from(stale.header.hash.0),
             &stale,
             &[],
-            vec![],
             &mock_checkpoint(),
         )
         .unwrap();

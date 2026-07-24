@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
@@ -105,43 +101,42 @@ impl DbDump {
 /// cursor, so it must land in the *same* write as the effects it covers.
 /// Persisted ahead of them, a crash in between resumes the stream past blocks
 /// that never reached the store — a gap the node cannot backfill.
-pub struct StoreUpdate<'a> {
+pub struct StoreUpdate<'update> {
     /// Serialized zone-sdk checkpoint for this event.
-    pub checkpoint: Option<&'a [u8]>,
+    pub checkpoint: Option<&'update [u8]>,
 
     /// `(block, finalized)` payloads to write.
-    pub blocks: &'a [(&'a Block, bool)],
+    pub blocks: &'update [(&'update Block, bool)],
 
     /// Head tip to pin the stored chain to; `None` only for an empty chain.
-    pub head_tip: Option<&'a BlockMeta>,
+    pub head_tip: Option<&'update BlockMeta>,
     /// State after the last applied block.
-    pub head_state: &'a V03State,
+    pub head_state: &'update V03State,
 
     /// `(state, meta)` of the final tier, when it advanced.
-    pub final_snapshot: Option<(&'a V03State, &'a BlockMeta)>,
+    pub final_snapshot: Option<(&'update V03State, &'update BlockMeta)>,
     /// Highest block id this event made irreversible: stored blocks at or below
-    /// it become [`BedrockStatus::Finalized`], and pending deposit records
-    /// submitted there are dropped.
+    /// it become [`BedrockStatus::Finalized`].
     pub finalized_up_to: Option<u64>,
 
     /// Deposit events observed on L1, recorded unless already pending.
-    pub new_deposit_events: &'a [PendingDepositEventRecord],
-    /// Deposit op ids included in `block_id`, marked submitted.
-    pub mark_deposits_submitted: Option<(&'a [HashType], u64)>,
+    pub new_deposit_events: &'update [PendingDepositEventRecord],
+    /// Deposit op ids whose mint finalized: their pending records are dropped.
+    pub remove_deposit_records: &'update [HashType],
     /// L1 withdraw events to reconcile against the local unseen counters.
-    pub consumed_withdrawals: &'a [WithdrawalReconciliationKey],
+    pub consumed_withdrawals: &'update [WithdrawalReconciliationKey],
     /// L2 withdraw intents this update raises, awaiting their L1 event.
-    pub new_withdraw_intents: &'a [WithdrawalReconciliationKey],
+    pub new_withdraw_intents: &'update [WithdrawalReconciliationKey],
 
     /// Advance the channel-read anchor.
-    pub zone_anchor: Option<&'a ZoneAnchorRecord>,
+    pub zone_anchor: Option<&'update ZoneAnchorRecord>,
 }
 
-impl<'a> StoreUpdate<'a> {
+impl<'update> StoreUpdate<'update> {
     /// An update that writes nothing but the caller's head `state`, to be
     /// filled in with `..StoreUpdate::new(state)`.
     #[must_use]
-    pub const fn new(head_state: &'a V03State) -> Self {
+    pub const fn new(head_state: &'update V03State) -> Self {
         Self {
             checkpoint: None,
             blocks: &[],
@@ -150,7 +145,7 @@ impl<'a> StoreUpdate<'a> {
             final_snapshot: None,
             finalized_up_to: None,
             new_deposit_events: &[],
-            mark_deposits_submitted: None,
+            remove_deposit_records: &[],
             consumed_withdrawals: &[],
             new_withdraw_intents: &[],
             zone_anchor: None,
@@ -469,7 +464,7 @@ impl RocksDBIO {
     /// One-shot form of [`RocksDBIO::store_update`]'s `new_deposit_events`.
     pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
         let mut batch = WriteBatch::default();
-        let accepted = self.stage_pending_deposit_events(&[event], None, None, &mut batch)?;
+        let accepted = self.stage_pending_deposit_events(&[event], &[], &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
@@ -489,18 +484,15 @@ impl RocksDBIO {
     fn stage_pending_deposit_events(
         &self,
         new_events: &[PendingDepositEventRecord],
-        mark_submitted: Option<(&[HashType], u64)>,
-        finalized_up_to: Option<u64>,
+        remove_op_ids: &[HashType],
         batch: &mut WriteBatch,
     ) -> DbResult<usize> {
-        let marks_nothing = mark_submitted.is_none_or(|(ids, _)| ids.is_empty());
-        if new_events.is_empty() && marks_nothing && finalized_up_to.is_none() {
+        if new_events.is_empty() && remove_op_ids.is_empty() {
             return Ok(0);
         }
 
         let mut records = self.get_pending_deposit_events()?;
         let before = records.len();
-        let mut changed = false;
 
         for event in new_events {
             if records
@@ -513,30 +505,19 @@ impl RocksDBIO {
         }
         let accepted = records.len().saturating_sub(before);
 
-        if let Some((deposit_op_ids, submitted_block_id)) = mark_submitted {
-            for record in records
-                .iter_mut()
-                .filter(|record| record.submitted_in_block_id != Some(submitted_block_id))
-                .filter(|record| deposit_op_ids.contains(&record.deposit_op_id))
-            {
-                record.submitted_in_block_id = Some(submitted_block_id);
-                changed = true;
-            }
-        }
+        let removed = if remove_op_ids.is_empty() {
+            0
+        } else {
+            let after_append = records.len();
+            records.retain(|record| !remove_op_ids.contains(&record.deposit_op_id));
+            after_append.saturating_sub(records.len())
+        };
 
-        // Everything at or below a finalized block is irreversible, so records
-        // submitted there have served their purpose.
-        if let Some(finalized_block_id) = finalized_up_to {
-            records.retain(|record| {
-                record
-                    .submitted_in_block_id
-                    .is_none_or(|submitted_id| submitted_id > finalized_block_id)
-            });
-        }
-
-        // The common event finalizes something but touches no record; without
-        // this the cell is rewritten on every one of them.
-        if changed || records.len() != before {
+        // Tracked separately rather than inferred from the length: one event can
+        // both observe a deposit and finalize another, which nets to the same
+        // count while the contents changed. The common finalizing event owns no
+        // pending record at all, and must not rewrite the cell.
+        if accepted > 0 || removed > 0 {
             self.put_pending_deposit_events_batch(&records, batch)?;
         }
         Ok(accepted)
@@ -558,9 +539,14 @@ impl RocksDBIO {
             return Ok(unmatched);
         }
 
-        let mut occurrences: HashMap<WithdrawalReconciliationKey, u64> = HashMap::new();
+        // A `Vec` rather than a map: the per-update count is tiny, and it keeps
+        // the staging order deterministic.
+        let mut occurrences: Vec<(WithdrawalReconciliationKey, u64)> = Vec::new();
         for withdrawal in withdrawals {
-            *occurrences.entry(*withdrawal).or_default() += 1;
+            match occurrences.iter_mut().find(|(key, _)| key == withdrawal) {
+                Some((_, times)) => *times = times.saturating_add(1),
+                None => occurrences.push((*withdrawal, 1)),
+            }
         }
 
         for (withdrawal, times) in occurrences {
@@ -579,12 +565,12 @@ impl RocksDBIO {
 
             match stored.and_then(|count| count.checked_sub(times)) {
                 Some(count) => {
-                    self.put_batch(&UnseenWithdrawCountCell(count), withdrawal, batch)?
+                    self.put_batch(&UnseenWithdrawCountCell(count), withdrawal, batch)?;
                 }
                 // Only stage a delete for a key that was actually there, so a
                 // fully unmatched update leaves the batch empty.
                 None if stored.is_some() => {
-                    self.del_batch::<UnseenWithdrawCountCell>(withdrawal, batch)?
+                    self.del_batch::<UnseenWithdrawCountCell>(withdrawal, batch)?;
                 }
                 None => {}
             }
@@ -599,11 +585,7 @@ impl RocksDBIO {
     /// Reads from disk, so blocks the caller is writing itself are already in
     /// `to_write` and keep their own version — one `put` per block id, no
     /// reliance on the order writes are staged in.
-    fn collect_finalized_up_to(
-        &self,
-        last_finalized: u64,
-        to_write: &mut BTreeMap<u64, Block>,
-    ) -> DbResult<()> {
+    fn collect_finalized_up_to(&self, last_finalized: u64, to_write: &mut BTreeMap<u64, Block>) {
         let newly_finalized: Vec<Block> = self
             .get_all_blocks()
             .filter_map(Result::ok)
@@ -617,15 +599,6 @@ impl RocksDBIO {
             block.bedrock_status = BedrockStatus::Finalized;
             to_write.entry(block.header.block_id).or_insert(block);
         }
-        Ok(())
-    }
-
-    /// Whether a bridge deposit for `deposit_op_id` is already recorded as
-    /// included in a block (its pending record is marked submitted).
-    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
-        Ok(self.get_pending_deposit_events()?.iter().any(|record| {
-            record.deposit_op_id == deposit_op_id && record.submitted_in_block_id.is_some()
-        }))
     }
 
     fn increment_unseen_withdraw_count(
@@ -765,7 +738,7 @@ impl RocksDBIO {
     /// One-shot form of [`RocksDBIO::store_update`]'s `finalized_up_to`.
     pub fn clean_pending_blocks_up_to(&self, last_finalized: u64) -> DbResult<()> {
         let mut to_write = BTreeMap::new();
-        self.collect_finalized_up_to(last_finalized, &mut to_write)?;
+        self.collect_finalized_up_to(last_finalized, &mut to_write);
 
         let mut batch = WriteBatch::default();
         for block in to_write.values() {
@@ -873,7 +846,7 @@ impl RocksDBIO {
             final_snapshot,
             finalized_up_to,
             new_deposit_events,
-            mark_deposits_submitted,
+            remove_deposit_records,
             consumed_withdrawals,
             new_withdraw_intents,
             zone_anchor,
@@ -919,7 +892,7 @@ impl RocksDBIO {
         }
 
         if let Some(last_finalized) = finalized_up_to {
-            self.collect_finalized_up_to(last_finalized, &mut to_write)?;
+            self.collect_finalized_up_to(last_finalized, &mut to_write);
         }
         for block in to_write.values() {
             self.put_block_payload(block, &mut batch)?;
@@ -927,8 +900,7 @@ impl RocksDBIO {
 
         let accepted_deposits = self.stage_pending_deposit_events(
             new_deposit_events,
-            mark_deposits_submitted,
-            finalized_up_to,
+            remove_deposit_records,
             &mut batch,
         )?;
         let unmatched_withdrawals =
@@ -987,8 +959,8 @@ impl RocksDBIO {
             })
     }
 
-    /// Persists a block we produced, its deposit/withdraw bookkeeping, the
-    /// resulting state and the publish `checkpoint` in one atomic write.
+    /// Persists a block we produced, its withdraw intents, the resulting state
+    /// and the publish `checkpoint` in one atomic write.
     ///
     /// The produce path is [`Self::store_update`] with a single block that is
     /// the new tip; the checkpoint belongs in the same write for the same
@@ -999,8 +971,7 @@ impl RocksDBIO {
     pub fn atomic_update(
         &self,
         block: &Block,
-        deposit_op_ids: &[HashType],
-        withdrawals: Vec<WithdrawalReconciliationKey>,
+        withdrawals: &[WithdrawalReconciliationKey],
         state: &V03State,
         checkpoint: Option<&[u8]>,
     ) -> DbResult<()> {
@@ -1008,8 +979,7 @@ impl RocksDBIO {
             checkpoint,
             blocks: &[(block, false)],
             head_tip: Some(&BlockMeta::from(block)),
-            mark_deposits_submitted: Some((deposit_op_ids, block.header.block_id)),
-            new_withdraw_intents: &withdrawals,
+            new_withdraw_intents: withdrawals,
             ..StoreUpdate::new(state)
         })
         .map(|_outcome| ())

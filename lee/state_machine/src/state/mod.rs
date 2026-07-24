@@ -270,6 +270,13 @@ impl V03State {
             .unwrap_or_else(Account::default)
     }
 
+    /// Borrowing counterpart of [`Self::get_account_by_id`], for callers that
+    /// only inspect the account and would otherwise clone it to drop it.
+    #[must_use]
+    pub fn get_public_account(&self, account_id: AccountId) -> Option<&Account> {
+        self.public_state.get(&account_id)
+    }
+
     #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
