@@ -10,3 +10,8 @@ All notable changes to this fork are recorded here.
 - Native bundle manifests, checksums, deterministic packaging, and native smoke
   tests.
 - Fork-owned GHCR publication for sequencer, indexer, and explorer images.
+
+### Fixed
+
+- Existing single-sequencer wallet configurations now load through the
+  multi-sequencer wallet.
