@@ -53,6 +53,13 @@ regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
 
+# Regenerate the committed Grafana dashboards from the Rust generator
+# (tools/dashboard_gen) and commit the result. CI checks these are up to date.
+regenerate-dashboards:
+    @echo "📊 Regenerating Grafana dashboards"
+    @cargo build -q -p dashboard_gen
+    @cargo run -q -p dashboard_gen > monitoring/grafana/dashboards/sequencer.json
+
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
     @echo "📊 Running criterion benches"

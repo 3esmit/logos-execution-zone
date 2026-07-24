@@ -67,6 +67,7 @@ members = [
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
   "tools/cross_zone_chat",
+  "tools/dashboard_gen",
 ]
 
 [workspace.dependencies]
