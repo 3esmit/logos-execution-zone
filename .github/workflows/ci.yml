@@ -315,11 +315,41 @@ jobs:
           shared-key: ci-rust-cache
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev' }}
 
+      - name: Reclaim disk for valid-proof build
+        run: |
+          set -euo pipefail
+          minimum_available_kib=$((20 * 1024 * 1024))
+          cleanup_paths=(
+            /usr/local/lib/android
+            /usr/share/dotnet
+            /opt/ghc
+            /usr/local/.ghcup
+          )
+
+          echo "Disk before cleanup:"
+          df -h /
+          for path in "${cleanup_paths[@]}"; do
+            if [[ -e "$path" ]]; then
+              sudo rm -rf -- "$path"
+            fi
+          done
+          sudo apt-get clean
+
+          available_kib="$(df -Pk / | awk 'NR == 2 { print $4 }')"
+          echo "Disk after cleanup:"
+          df -h /
+          if ((available_kib < minimum_available_kib)); then
+            echo "::error::less than 20 GiB available for valid-proof build"
+            exit 1
+          fi
+
       - name: Test valid proof
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
-          env: RUST_LOG=info
+          env: |
+            CARGO_INCREMENTAL=0
+            RUST_LOG=info
           run: cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account
 
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
