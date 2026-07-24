@@ -168,14 +168,23 @@ fn init_config(
         inbox_config_account_id(self_program_id),
         "account must be the inbox config PDA"
     );
-    // Init-once: a default pre-state cannot be re-run to overwrite the allowlists,
-    // and `new_claimed_if_default` alone would not stop the owning program from
+    // Init-once, idempotent under genesis replay: a `default` config is a first
+    // init; an already-owned config must already hold exactly these allowlists (the
+    // genesis block is replayed onto seeded state during multi-sequencer
+    // reconstruction), otherwise reject a post-genesis attempt to change them.
+    // `new_claimed_if_default` alone would not stop the owning program from
     // rewriting its own config data on a later call.
-    assert_eq!(
-        config_meta.account,
-        Account::default(),
-        "inbox config already initialized"
-    );
+    if config_meta.account != Account::default() {
+        assert_eq!(
+            config_meta.account.program_owner, self_program_id,
+            "inbox config PDA is owned by another program"
+        );
+        assert_eq!(
+            config_meta.account.data.clone().into_inner(),
+            config.to_bytes(),
+            "inbox config already initialized with different allowlists"
+        );
+    }
 
     let mut config_account = config_meta.account.clone();
     config_account.data = config

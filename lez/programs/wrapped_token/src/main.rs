@@ -115,14 +115,23 @@ fn init_config(
         config_account_id(self_program_id),
         "account must be the wrapped-token config PDA"
     );
-    // Init-once: a default pre-state cannot be re-run to overwrite the minter, and
-    // `new_claimed_if_default` alone would not stop the owning program from
+    // Init-once, idempotent under genesis replay: a `default` config is a first
+    // init; an already-owned config must already hold exactly this minter (the
+    // genesis block is replayed onto seeded state during multi-sequencer
+    // reconstruction), otherwise reject a post-genesis attempt to set a different
+    // minter. `new_claimed_if_default` alone would not stop the owning program from
     // rewriting its own config data on a later call.
-    assert_eq!(
-        config.account,
-        Account::default(),
-        "wrapped-token config already initialized"
-    );
+    if config.account != Account::default() {
+        assert_eq!(
+            config.account.program_owner, self_program_id,
+            "wrapped-token config PDA is owned by another program"
+        );
+        assert_eq!(
+            config.account.data.clone().into_inner(),
+            minter_bytes(minter).to_vec(),
+            "wrapped-token config already initialized with a different minter"
+        );
+    }
 
     let mut config_account = config.account.clone();
     config_account.data = minter_bytes(minter)
