@@ -39,7 +39,7 @@ use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
     multi_client::{MultiSequencerClient, Statistics, extract_statistics_from_path},
-    poller::TxPoller,
+    poller::{TxPoller, multi_poll},
     storage::key_chain::{NullifierIndex, SharedAccountEntry},
 };
 
@@ -85,6 +85,8 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
+    #[error("Sending transaction failed for each client")]
+    MultiSequencerTransactionSendError,
 }
 
 pub struct WalletCore {
@@ -173,7 +175,7 @@ impl WalletCore {
         let multi_sequencer_client = MultiSequencerClient::new(
             &config.sequencers,
             &mut statistics,
-            config.calibration_limit,
+            config.multi_sequencer_client_config.clone(),
         )
         .await?;
 
@@ -200,18 +202,32 @@ impl WalletCore {
     }
 
     #[must_use]
-    pub fn optimal_poller(&self) -> TxPoller {
-        TxPoller::new(self.config(), self.leader_owned())
+    pub fn poller_vec(&self) -> Vec<TxPoller> {
+        self.leaders()
+            .iter()
+            .take(self.multi_sequencer_client.config().distribution_limit)
+            .map(|(leader, _)| TxPoller::new(self.config(), leader.clone()))
+            .collect()
     }
 
     #[must_use]
-    pub fn leader_owned(&self) -> SequencerClient {
-        self.multi_sequencer_client.leader().clone()
+    pub fn poller_helm(&self) -> TxPoller {
+        TxPoller::new(self.config(), self.helm_owned())
     }
 
     #[must_use]
-    pub fn leader_url(&self) -> Url {
-        self.multi_sequencer_client.leader_url().clone()
+    pub fn helm_owned(&self) -> SequencerClient {
+        self.multi_sequencer_client.helm().0.clone()
+    }
+
+    #[must_use]
+    pub fn helm_url(&self) -> Url {
+        self.multi_sequencer_client.helm().1.clone()
+    }
+
+    #[must_use]
+    pub fn leaders(&self) -> &[(SequencerClient, Url)] {
+        self.multi_sequencer_client.leaders()
     }
 
     /// Get storage.
@@ -252,20 +268,15 @@ impl WalletCore {
 
     /// Rotates multi-client and stores metrics.
     pub async fn client_rotation(&mut self) -> Result<()> {
-        let leader_statistic = self
-            .statistics
-            .get_mut(self.multi_sequencer_client.leader_url())
-            .ok_or_else(|| anyhow::anyhow!("Leader URL is not present in statistics"))?;
-
         self.multi_sequencer_client
-            .update_statistics(leader_statistic)
-            .await;
+            .update_statistics(&mut self.statistics)
+            .await?;
 
         self.multi_sequencer_client
             .rotate(
                 &self.config.sequencers,
                 &mut self.statistics,
-                self.config.calibration_limit,
+                &self.config.multi_sequencer_client_config,
             )
             .await?;
 
@@ -436,7 +447,7 @@ impl WalletCore {
         let mut index = NullifierIndex::default();
         index.track_initialization(account_id);
 
-        let poller = self.optimal_poller();
+        let poller = self.poller_helm();
         let mut blocks = std::pin::pin!(poller.poll_block_range(1..=cursor));
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
@@ -544,7 +555,7 @@ impl WalletCore {
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_account_balance(acc).await)
+            .metered_get(async |client: &SequencerClient| client.get_account_balance(acc).await)
             .await?)
     }
 
@@ -552,7 +563,7 @@ impl WalletCore {
     pub async fn get_accounts_nonces(&self, accs: &[AccountId]) -> Result<Vec<Nonce>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_get(async |client: &SequencerClient| {
                 client.get_accounts_nonces(accs.to_vec()).await
             })
             .await?)
@@ -574,14 +585,14 @@ impl WalletCore {
     pub async fn get_last_block_id(&self) -> Result<u64> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_last_block_id().await)
+            .metered_get(async |client: &SequencerClient| client.get_last_block_id().await)
             .await?)
     }
 
     pub async fn get_block(&self, block_id: u64) -> Result<Option<Block>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_block(block_id).await)
+            .metered_get(async |client: &SequencerClient| client.get_block(block_id).await)
             .await?)
     }
 
@@ -591,7 +602,7 @@ impl WalletCore {
     ) -> Result<Option<(LeeTransaction, BlockId)>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_transaction(hash).await)
+            .metered_get(async |client: &SequencerClient| client.get_transaction(hash).await)
             .await?)
     }
 
@@ -599,7 +610,7 @@ impl WalletCore {
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_account(account_id).await)
+            .metered_get(async |client: &SequencerClient| client.get_account(account_id).await)
             .await?)
     }
 
@@ -638,26 +649,23 @@ impl WalletCore {
     pub async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| client.get_program_ids().await)
+            .metered_get(async |client: &SequencerClient| client.get_program_ids().await)
             .await?)
     }
 
     /// Poll transactions.
-    pub async fn poll_native_token_transfer(
-        &self,
-        hash: HashType,
-    ) -> Result<(LeeTransaction, BlockId)> {
-        self.optimal_poller().poll_tx(hash).await
+    pub async fn poll_transaction(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
+        multi_poll(self.poller_vec(), tx_hash).await
     }
 
     pub async fn get_proofs_and_root(
         &self,
-        commitments: Vec<Commitment>,
+        commitments: &[Commitment],
     ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest)> {
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
-                client.get_proofs_and_root(commitments.clone()).await
+            .metered_get(async |client: &SequencerClient| {
+                client.get_proofs_and_root(commitments.to_vec()).await
             })
             .await?)
     }
@@ -708,7 +716,7 @@ impl WalletCore {
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
+        let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
         println!("Transaction data is {tx:?}");
         self.store_persistent_data()?;
@@ -722,7 +730,7 @@ impl WalletCore {
         acc_decode_data: &[AccDecodeData],
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
+        let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
         println!("Transaction data is {tx:?}");
         if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
@@ -800,12 +808,15 @@ impl WalletCore {
 
         let call_res = self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
                     .await
             })
-            .await;
+            .await
+            .into_iter()
+            .find(std::result::Result::is_ok)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)?;
 
         Ok((call_res?, shared_secrets))
     }
@@ -868,12 +879,15 @@ impl WalletCore {
 
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::Public(tx.clone()))
                     .await
             })
-            .await?)
+            .await
+            .into_iter()
+            .find(std::result::Result::is_ok)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
@@ -882,12 +896,15 @@ impl WalletCore {
 
         Ok(self
             .multi_sequencer_client
-            .metered_call(async |client: &SequencerClient| {
+            .metered_send(async |client: &SequencerClient| {
                 client
                     .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
                     .await
             })
-            .await?)
+            .await
+            .into_iter()
+            .find(std::result::Result::is_ok)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
@@ -913,7 +930,7 @@ impl WalletCore {
 
         println!("Syncing to block {block_id}. Blocks to sync: {num_of_blocks}");
 
-        let poller = self.optimal_poller();
+        let poller = self.poller_helm();
         let mut blocks =
             std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 

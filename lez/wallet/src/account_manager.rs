@@ -600,7 +600,7 @@ async fn fetch_private_proofs_and_root(
         .unzip();
 
     let (proofs, root) = wallet
-        .get_proofs_and_root(commitments.clone())
+        .get_proofs_and_root(&commitments)
         .await
         .map_err(ExecutionFailureKind::SequencerError)?;
 
