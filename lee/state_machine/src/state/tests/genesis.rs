@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use super::*;
 
 #[test]
@@ -112,6 +114,20 @@ fn builtin_programs_getter() {
     let builtin_programs = state.programs();
 
     assert_eq!(builtin_programs, &state.programs);
+}
+
+#[test]
+fn program_ids_are_sorted() {
+    assert!(V03State::new().program_ids().is_empty());
+
+    let first_program = crate::program::Program::new_unchecked([2; 8], Cow::Borrowed(&[]));
+    let second_program = crate::program::Program::new_unchecked([1; 8], Cow::Borrowed(&[]));
+    let mut expected_program_ids = vec![first_program.id(), second_program.id()];
+    expected_program_ids.sort_unstable();
+
+    let state = V03State::new().with_programs([first_program, second_program]);
+
+    assert_eq!(state.program_ids(), expected_program_ids);
 }
 
 #[test]

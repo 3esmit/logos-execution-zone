@@ -197,6 +197,11 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         Ok(program_ids)
     }
 
+    async fn list_programs(&self) -> Result<Vec<ProgramId>, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        Ok(sequencer.state().program_ids())
+    }
+
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned> {
         let channel_id = self.sequencer.lock().await.block_publisher().channel_id();
         Ok(ChannelId(*channel_id.as_ref()))

@@ -16,8 +16,10 @@ use wallet::{cli::Command, config::WalletConfigOverrides};
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
     let mut ctx = TestContext::new().await?;
+    let named_program_ids = ctx.sequencer_client().get_program_ids().await?;
 
     let claimer = test_programs::claimer();
+    let deployed_program_id = claimer.id();
     let mut tempfile = tempfile::NamedTempFile::new()?;
     tempfile.write_all(claimer.elf())?;
 
@@ -28,6 +30,15 @@ async fn deploy_and_execute_program() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    assert_eq!(
+        ctx.sequencer_client().get_program_ids().await?,
+        named_program_ids
+    );
+
+    let deployed_program_ids = ctx.sequencer_client().list_programs().await?;
+    assert!(deployed_program_ids.contains(&deployed_program_id));
+    assert!(deployed_program_ids.is_sorted());
 
     let account_id = new_account(&mut ctx, false, None).await?;
 
