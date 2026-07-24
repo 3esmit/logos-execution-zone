@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "explorer_service"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "axum 0.8.9",
  "chrono",
@@ -3965,7 +3965,7 @@ dependencies = [
 
 [[package]]
 name = "indexer_ffi"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "cbindgen",
  "env_logger",
@@ -3980,7 +3980,7 @@ dependencies = [
 
 [[package]]
 name = "indexer_service"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -9059,7 +9059,7 @@ dependencies = [
 
 [[package]]
 name = "sequencer_service"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "anyhow",
  "borsh",
@@ -10967,7 +10967,7 @@ dependencies = [
 
 [[package]]
 name = "wallet"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "amm_core",
  "anyhow",
@@ -11015,7 +11015,7 @@ dependencies = [
 
 [[package]]
 name = "wallet-ffi"
-version = "0.1.0"
+version = "0.4.0-alpha.1"
 dependencies = [
  "bip39",
  "cbindgen",

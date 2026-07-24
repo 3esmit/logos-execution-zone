@@ -4,6 +4,8 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+## 0.4.0-alpha.1 - 2026-07-24
+
 ### Added
 
 - Source-owned Linux AMD64 and Apple silicon macOS operator release bundles.
