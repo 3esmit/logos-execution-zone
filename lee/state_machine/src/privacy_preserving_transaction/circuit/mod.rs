@@ -71,7 +71,7 @@ pub fn execute_and_prove(
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    execute_and_prove_with_dummy_inputs(
+    execute_and_prove_with_padded_inputs(
         pre_states,
         instruction_data,
         account_identities,
@@ -80,7 +80,7 @@ pub fn execute_and_prove(
     )
 }
 
-pub fn execute_and_prove_with_dummy_inputs(
+pub fn execute_and_prove_with_padded_inputs(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,

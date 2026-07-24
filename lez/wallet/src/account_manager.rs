@@ -420,6 +420,13 @@ impl AccountManager {
             .iter()
             .filter(|state| matches!(state, State::Private(_)))
             .count();
+        if private_count > Self::MAX_PRIVATE_ACCOUNTS {
+            log::warn!(
+                "private account count {private_count} exceeds MAX_PRIVATE_ACCOUNTS ({}); \
+                 padding saturates and the private-input count is not hidden",
+                Self::MAX_PRIVATE_ACCOUNTS
+            );
+        }
         self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 

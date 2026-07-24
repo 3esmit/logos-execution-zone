@@ -775,7 +775,7 @@ impl WalletCore {
 
         let private_account_keys = acc_manager.private_account_keys();
         let (output, proof) =
-            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_dummy_inputs(
+            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
                 pre_states,
                 instruction_data,
                 acc_manager.account_identities(),
