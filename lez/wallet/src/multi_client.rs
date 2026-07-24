@@ -10,13 +10,17 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use common::{HashType, transaction::LeeTransaction};
 use lee_core::BlockId;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinSet};
 use url::Url;
 
-use crate::config::{MultiSequencerClientConfig, SequencerConnectionData};
+use crate::{
+    ExecutionFailureKind,
+    config::{MultiSequencerClientConfig, SequencerConnectionData},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Statistics {
@@ -131,12 +135,18 @@ impl MultiSequencerClient {
 
         // This actually runs in one thread, but eah exact future is parallelized.
         let (actualization_res, callibration_res) = tokio::join!(
-            multi_actualize_clients(&actualization_list),
+            multi_actualize_clients(actualization_list),
             multi_calibrate_clients(
-                &calibration_list,
+                calibration_list,
                 multi_sequencer_client_config.calibration_limit
             )
         );
+
+        for (addr, statistic_opt) in callibration_res {
+            if let Some(statistic) = statistic_opt {
+                statistics.insert(addr, statistic);
+            }
+        }
 
         for (addr, statistic_update_opt) in actualization_res {
             if let Some(statistic_mut) = statistics.get_mut(&addr)
@@ -146,14 +156,8 @@ impl MultiSequencerClient {
             }
         }
 
-        for (addr, statistic_opt) in callibration_res {
-            if let Some(statistic) = statistic_opt {
-                statistics.insert(addr, statistic);
-            }
-        }
-
         let leader_list = choose_leaders(
-            &client_list,
+            client_list,
             statistics,
             multi_sequencer_client_config.distribution_limit,
         )
@@ -165,7 +169,10 @@ impl MultiSequencerClient {
             );
         }
 
-        log::info!("Chosen leaders is {leader_list:?}");
+        log::info!(
+            "Chosen leaders is {:?}",
+            leader_list.iter().map(|(_, addr)| addr).collect::<Vec<_>>()
+        );
 
         Ok(leader_list)
     }
@@ -194,7 +201,10 @@ impl MultiSequencerClient {
     ) -> Result<()> {
         let leader_list = Self::setup(conn_data, statistics, multi_sequencer_client_config).await?;
 
-        log::info!("Chosen leaders is {leader_list:#?}");
+        log::info!(
+            "Chosen leaders is {:?}",
+            leader_list.iter().map(|(_, addr)| addr).collect::<Vec<_>>()
+        );
 
         self.leader_list = leader_list;
 
@@ -288,32 +298,55 @@ impl MultiSequencerClient {
         resp
     }
 
-    /// Metered call for `distribution_limit` amount of leaders for sending data, usually
-    /// transaction.
-    pub async fn metered_send<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
+    /// Metered `send_transaction` for `distribution_limit` amount of leaders.
+    ///
+    /// Less abstract that it could be, clean way to implement it in a more general way is
+    /// "return-type notation".
+    ///
+    /// `ToDo`: Return to it, when "return-type notation" is stable.
+    pub async fn metered_send_transaction(
         &self,
-        call: I,
-    ) -> Vec<Result<R, E>> {
-        let leaders = self.leaders().iter().take(self.config().distribution_limit);
-
+        tx: LeeTransaction,
+    ) -> Vec<Result<HashType, ExecutionFailureKind>> {
         // Collecting all statistics into one map to lock updates only once
         let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
 
         let mut results = vec![];
+        let mut join_set = JoinSet::new();
 
-        for (leader, leader_url) in leaders {
-            let (resp, statistics_update) =
-                tokio::join!(call(leader), actualize_client(leader.clone()));
+        for (leader, leader_url) in self.leaders() {
+            let curr_leader = leader.clone();
+            let curr_tx = tx.clone();
+            let curr_url = leader_url.clone();
 
-            log::debug!(
-                "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
-            );
+            join_set.spawn(async move {
+                (
+                    tokio::join!(
+                        curr_leader.send_transaction(curr_tx),
+                        actualize_client(curr_leader.clone())
+                    ),
+                    curr_url,
+                )
+            });
+        }
 
-            statistic_map
-                .entry(leader_url.clone())
-                .or_default()
-                .push(statistics_update);
-            results.push(resp);
+        while let Some(resp) = join_set.join_next().await {
+            let res = resp
+                .map_err(Into::into)
+                .and_then(|((resp, statistics_update), leader_url)| {
+                    log::debug!(
+                        "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
+                    );
+
+                    statistic_map
+                        .entry(leader_url)
+                        .or_default()
+                        .push(statistics_update);
+
+                    resp.map_err(Into::into)
+                });
+
+            results.push(res);
         }
 
         {
@@ -492,13 +525,14 @@ async fn actualize_client(client: SequencerClient) -> StatisticsUpdate {
 // ToDo: Return to it when "return-type notation" is stable
 
 pub async fn multi_actualize_clients(
-    clients: &[(Url, SequencerClient)],
+    clients: Vec<(Url, SequencerClient)>,
 ) -> Vec<(Url, Option<StatisticsUpdate>)> {
     let mut handle_map = HashMap::new();
 
     for (url, client) in clients {
-        let actualization_task = tokio::task::spawn(actualize_client(client.clone()));
-        handle_map.insert(url.clone(), actualization_task);
+        // `client` here must have 'static lifetime, so we can not use reference
+        let actualization_task = tokio::task::spawn(actualize_client(client));
+        handle_map.insert(url, actualization_task);
     }
 
     let mut statistic_updates = vec![];
@@ -517,15 +551,15 @@ pub async fn multi_actualize_clients(
 }
 
 pub async fn multi_calibrate_clients(
-    clients: &[(Url, SequencerClient)],
+    clients: Vec<(Url, SequencerClient)>,
     calibration_limit: usize,
 ) -> Vec<(Url, Option<Statistics>)> {
     let mut handle_map = HashMap::new();
 
     for (url, client) in clients {
-        let calibration_task =
-            tokio::task::spawn(calibrate_client(client.clone(), calibration_limit));
-        handle_map.insert(url.clone(), calibration_task);
+        // `client` here must have 'static lifetime, so we can not use reference
+        let calibration_task = tokio::task::spawn(calibrate_client(client, calibration_limit));
+        handle_map.insert(url, calibration_task);
     }
 
     let mut statistics = vec![];
@@ -559,13 +593,13 @@ pub async fn multi_calibrate_clients(
 ///
 /// Assumes that all clients have their statistics in `statistics`.
 fn choose_leaders(
-    client_vec: &[(Url, SequencerClient)],
+    client_vec: Vec<(Url, SequencerClient)>,
     statistics: &HashMap<Url, Statistics>,
     distribution_limit: usize,
 ) -> Option<Vec<(SequencerClient, Url)>> {
     // Sort out all unmetered clients
     let client_vec: Vec<_> = client_vec
-        .iter()
+        .into_iter()
         .filter(|item| statistics.contains_key(&item.0))
         .collect();
 
@@ -594,10 +628,10 @@ fn choose_leaders(
     // Sort out all clients running late
     let mut res_vec: Vec<_> = client_vec
         .iter()
-        .filter_map(|x| {
+        .filter(|x| {
             let latest_block_id = statistics.get(&x.0).unwrap().latest_block_id;
 
-            (latest_block_id == max_block_id).then_some(*x)
+            latest_block_id == max_block_id
         })
         .collect();
 
@@ -1026,7 +1060,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1083,7 +1117,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1140,7 +1174,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1197,7 +1231,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1254,7 +1288,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let mut url_set_origin = HashSet::new();
         let mut url_set_res = HashSet::new();
@@ -1322,7 +1356,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, helm) = leaders.first().unwrap();
 
@@ -1380,7 +1414,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();
@@ -1440,7 +1474,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();
@@ -1500,7 +1534,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();

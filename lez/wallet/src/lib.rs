@@ -87,6 +87,8 @@ pub enum ExecutionFailureKind {
     SignError(anyhow::Error),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
+    #[error("Failed to join a task: {0}")]
+    JoinError(#[from] tokio::task::JoinError),
 }
 
 pub struct WalletCore {
@@ -808,11 +810,7 @@ impl WalletCore {
 
         let call_res = self
             .multi_sequencer_client
-            .metered_send(async |client: &SequencerClient| {
-                client
-                    .send_transaction(LeeTransaction::PrivacyPreserving(tx.clone()))
-                    .await
-            })
+            .metered_send_transaction(LeeTransaction::PrivacyPreserving(tx))
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
@@ -877,17 +875,12 @@ impl WalletCore {
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
-        Ok(self
-            .multi_sequencer_client
-            .metered_send(async |client: &SequencerClient| {
-                client
-                    .send_transaction(LeeTransaction::Public(tx.clone()))
-                    .await
-            })
+        self.multi_sequencer_client
+            .metered_send_transaction(LeeTransaction::Public(tx))
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
-            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)?
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
@@ -896,11 +889,7 @@ impl WalletCore {
 
         Ok(self
             .multi_sequencer_client
-            .metered_send(async |client: &SequencerClient| {
-                client
-                    .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
-                    .await
-            })
+            .metered_send_transaction(LeeTransaction::ProgramDeployment(transaction))
             .await
             .into_iter()
             .find(std::result::Result::is_ok)
