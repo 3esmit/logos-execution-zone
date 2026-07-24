@@ -50,6 +50,7 @@ def check_native() -> None:
         "runs-on: macos-latest",
         "linux-amd64",
         "darwin-arm64",
+        "GITHUB_TOKEN: ${{ github.token }}",
         "scripts/build-native-release.sh",
         "scripts/native_release.py validate-source",
         "scripts/native_release.py write-checksums",

@@ -163,6 +163,8 @@ jobs:
           env -u DEVELOPER_DIR -u SDKROOT xcrun --sdk macosx --find metallib
 
       - name: Install matching r0vm
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           curl -L --proto '=https' --tlsv1.2 -sSf https://risczero.com/install | bash
