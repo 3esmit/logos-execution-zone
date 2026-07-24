@@ -60,6 +60,8 @@ struct WalletConfigFile {
     #[serde(default)]
     sequencers: Option<Vec<SequencerConnectionData>>,
     #[serde(default)]
+    sequencers_conn_data: Option<Vec<SequencerConnectionData>>,
+    #[serde(default)]
     sequencer_addr: Option<Url>,
     #[serde(default)]
     basic_auth: Option<BasicAuth>,
@@ -88,6 +90,7 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
     fn try_from(file: WalletConfigFile) -> std::result::Result<Self, Self::Error> {
         let WalletConfigFile {
             sequencers,
+            sequencers_conn_data,
             sequencer_addr,
             basic_auth,
             seq_poll_timeout,
@@ -97,13 +100,8 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
             calibration_limit,
         } = file;
 
-        let sequencers = match (sequencers, sequencer_addr) {
-            (Some(_), Some(_)) => {
-                return Err(
-                    "wallet config cannot contain both `sequencers` and legacy `sequencer_addr`",
-                );
-            }
-            (Some(sequencers), None) => {
+        let sequencers = match (sequencers, sequencers_conn_data, sequencer_addr) {
+            (Some(sequencers), None, None) => {
                 if basic_auth.is_some() {
                     return Err(
                         "top-level legacy `basic_auth` cannot be combined with `sequencers`",
@@ -111,14 +109,28 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
                 }
                 sequencers
             }
-            (None, Some(sequencer_addr)) => {
+            (None, Some(sequencers), None) => {
+                if basic_auth.is_some() {
+                    return Err("top-level legacy `basic_auth` cannot be combined with \
+                         `sequencers_conn_data`");
+                }
+                sequencers
+            }
+            (None, None, Some(sequencer_addr)) => {
                 vec![SequencerConnectionData {
                     sequencer_addr,
                     basic_auth,
                 }]
             }
-            (None, None) => {
-                return Err("wallet config must contain `sequencers` or legacy `sequencer_addr`");
+            (None, None, None) => {
+                return Err("wallet config must contain `sequencers`, transitional \
+                     `sequencers_conn_data`, or legacy `sequencer_addr`");
+            }
+            _ => {
+                return Err(
+                    "wallet config must contain only one of `sequencers`, transitional \
+                     `sequencers_conn_data`, or legacy `sequencer_addr`",
+                );
             }
         };
 
@@ -316,6 +328,34 @@ mod tests {
     }
 
     #[test]
+    fn transitional_multi_sequencer_configuration_loads_and_serializes_as_current_schema() {
+        let mut value = polling_fields();
+        value["sequencers_conn_data"] = json!([
+            {"sequencer_addr": "https://first.example.test"},
+            {"sequencer_addr": "https://second.example.test"}
+        ]);
+
+        let config: WalletConfig =
+            serde_json::from_value(value).expect("transitional configuration should load");
+
+        assert_eq!(config.sequencers.len(), 2);
+        assert_eq!(
+            config.sequencers[0].sequencer_addr.as_str(),
+            "https://first.example.test/"
+        );
+        assert_eq!(
+            config.sequencers[1].sequencer_addr.as_str(),
+            "https://second.example.test/"
+        );
+
+        let serialized =
+            serde_json::to_value(config).expect("migrated configuration should serialize");
+        assert!(serialized.get("sequencers_conn_data").is_none());
+        assert!(serialized.get("sequencer_addr").is_none());
+        assert!(serialized.get("sequencers").is_some());
+    }
+
+    #[test]
     fn legacy_configuration_serializes_as_current_schema() {
         let mut value = polling_fields();
         value["sequencer_addr"] = json!("https://legacy.example.test");
@@ -361,7 +401,41 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("cannot contain both `sequencers` and legacy `sequencer_addr`")
+                .contains("must contain only one of `sequencers`")
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_current_and_transitional_sequencer_fields() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!([{"sequencer_addr": "https://current.example.test"}]);
+        value["sequencers_conn_data"] =
+            json!([{"sequencer_addr": "https://transitional.example.test"}]);
+
+        let error = serde_json::from_value::<WalletConfig>(value)
+            .expect_err("conflicting configuration should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must contain only one of `sequencers`")
+        );
+    }
+
+    #[test]
+    fn rejects_conflicting_transitional_and_legacy_sequencer_fields() {
+        let mut value = polling_fields();
+        value["sequencers_conn_data"] =
+            json!([{"sequencer_addr": "https://transitional.example.test"}]);
+        value["sequencer_addr"] = json!("https://legacy.example.test");
+
+        let error = serde_json::from_value::<WalletConfig>(value)
+            .expect_err("conflicting configuration should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must contain only one of `sequencers`")
         );
     }
 
@@ -373,7 +447,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must contain `sequencers` or legacy `sequencer_addr`")
+                .contains("must contain `sequencers`, transitional `sequencers_conn_data`")
         );
     }
 
