@@ -51,7 +51,6 @@ pub mod helperfunctions;
 pub mod multi_client;
 pub mod poller;
 pub mod program_facades;
-pub mod signing;
 pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
@@ -86,8 +85,6 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
-    #[error(transparent)]
-    KeycardError(#[from] pyo3::PyErr),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
 }
