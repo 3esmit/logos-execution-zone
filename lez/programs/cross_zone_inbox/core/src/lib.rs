@@ -116,6 +116,10 @@ impl SeenShard {
 pub enum Instruction {
     /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
+    /// Initializes the inbox config account at genesis. Written once, into a
+    /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
+    /// so it cannot be re-run to overwrite the allowlists.
+    InitConfig(InboxConfig),
 }
 
 /// Content-addressed replay key for a delivered message.
@@ -142,7 +146,14 @@ pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_tx_index: u32) -> M
 /// The config account holding the allowlists.
 #[must_use]
 pub fn inbox_config_account_id(inbox_id: ProgramId) -> AccountId {
-    AccountId::for_public_pda(&inbox_id, &PdaSeed::new(INBOX_CONFIG_SEED))
+    AccountId::for_public_pda(&inbox_id, &inbox_config_seed())
+}
+
+/// Seed of the config PDA, exposed so the guest can claim the account when it
+/// initializes the config at genesis.
+#[must_use]
+pub const fn inbox_config_seed() -> PdaSeed {
+    PdaSeed::new(INBOX_CONFIG_SEED)
 }
 
 /// The seen-set shard for the `(src_zone, epoch)` the message falls in.

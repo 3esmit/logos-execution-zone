@@ -8,6 +8,13 @@
 //! zone B, where the indexer re-derives and verifies it (Option B) before the
 //! wrapped token is minted to the recipient. Reuses the M3/M4 spine unchanged;
 //! only the source caller (`bridge_lock`) and target (`wrapped_token`) are new.
+//!
+//! Not production-safe. The inbox allowlist gates the target program, not the
+//! source emitter, and `extract_emission` recognizes any known emitter, so in a
+//! zone that allows `wrapped_token` as a target a permissionless `ping_sender`
+//! send can carry a `wrapped_token::Mint` and mint with no lock. Making this safe
+//! needs source verification, where a value-bearing target checks the message
+//! originated from `bridge_lock`; that is out of scope for the demo.
 
 use std::time::Duration;
 
@@ -103,16 +110,12 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // escrow now.
     let seq_a_client = sequencer_client(seq_a.addr())?;
     let escrow_id = bridge_lock_core::escrow_account_id(programs::bridge_lock().id());
-    let escrowed = bridge_lock_core::read_balance(
-        &seq_a_client.get_account(escrow_id).await?.data.into_inner(),
-    );
+    let escrowed = seq_a_client.get_account(escrow_id).await?.balance;
     assert_eq!(
         escrowed, LOCK_AMOUNT,
         "zone A escrow must hold the locked amount"
     );
-    let remaining = bridge_lock_core::read_balance(
-        &seq_a_client.get_account(holder_id).await?.data.into_inner(),
-    );
+    let remaining = seq_a_client.get_account(holder_id).await?.balance;
     assert_eq!(
         remaining,
         INITIAL_BALANCE - LOCK_AMOUNT,
