@@ -1,0 +1,446 @@
+name: Publish Native Release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/publish_native.yml"
+      - "scripts/build-native-release.sh"
+      - "scripts/check_release_workflows.py"
+      - "scripts/explorer-service-launcher"
+      - "scripts/native_release.py"
+      - "scripts/test_native_release.py"
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: native-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate source tag
+        id: release
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse HEAD)
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            tag="pr-${{ github.event.pull_request.number }}"
+            version="0.0.0-pr.${{ github.event.pull_request.number }}"
+            prerelease=true
+          else
+            if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+              echo "Native releases must run from an existing v* tag." >&2
+              exit 1
+            fi
+            tag=${GITHUB_REF#refs/tags/}
+            version=${tag#v}
+            prerelease=false
+            if [[ $version == *-* ]]; then
+              prerelease=true
+            fi
+          fi
+
+          python3 scripts/native_release.py validate \
+            --version "$version" \
+            --commit "$commit"
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            python3 scripts/native_release.py validate-source \
+              --root . \
+              --version "$version"
+          fi
+
+          {
+            printf 'tag=%s\n' "$tag"
+            printf 'version=%s\n' "$version"
+            printf 'commit=%s\n' "$commit"
+            printf 'prerelease=%s\n' "$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Refuse an existing release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing release $TAG." >&2
+            exit 1
+          fi
+
+      - name: Validate release contracts
+        run: |
+          set -euo pipefail
+          python3 scripts/test_native_release.py
+          python3 scripts/check_release_workflows.py
+
+  ci-image:
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/ci-image.yml
+
+  build-linux:
+    needs:
+      - validate
+      - ci-image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and smoke-test Linux bundle
+        uses: ./.github/actions/run-in-ci-image
+        with:
+          image: ${{ needs.ci-image.outputs.image }}
+          run: |
+            rustup target add wasm32-unknown-unknown
+            cargo binstall --no-confirm cargo-leptos@0.3.7
+            bash scripts/build-native-release.sh \
+              "${{ needs.validate.outputs.version }}" \
+              linux-amd64 \
+              "${{ needs.validate.outputs.commit }}" \
+              release-artifact
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-linux-amd64
+          path: release-artifact/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-macos:
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Install native build dependencies
+        run: |
+          set -euo pipefail
+          brew install pkg-config
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install cargo-leptos
+        uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: cargo-leptos@0.3.7
+          fallback: none
+
+      - name: Install macOS Metal Toolchain
+        run: |
+          set -euo pipefail
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -downloadComponent metalToolchain
+          env -u DEVELOPER_DIR -u SDKROOT xcrun --sdk macosx --find metal
+          env -u DEVELOPER_DIR -u SDKROOT xcrun --sdk macosx --find metallib
+
+      - name: Install matching r0vm
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -L --proto '=https' --tlsv1.2 -sSf https://risczero.com/install | bash
+          "$HOME/.risc0/bin/rzup" install r0vm 3.0.5
+          cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+          "$cargo_bin/r0vm" --version
+          printf '%s\n' "$cargo_bin" >> "$GITHUB_PATH"
+
+      - name: Build and smoke-test macOS bundle
+        run: |
+          set -euo pipefail
+          bash scripts/build-native-release.sh \
+            "${{ needs.validate.outputs.version }}" \
+            darwin-arm64 \
+            "${{ needs.validate.outputs.commit }}" \
+            release-artifact
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-darwin-arm64
+          path: release-artifact/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs:
+      - validate
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-*
+          path: release-artifact
+          merge-multiple: true
+
+      - name: Verify complete artifact set
+        run: |
+          set -euo pipefail
+          python3 scripts/native_release.py write-checksums \
+            --input-dir release-artifact \
+            --version "${{ needs.validate.outputs.version }}" \
+            --commit "${{ needs.validate.outputs.commit }}"
+          python3 scripts/native_release.py verify-release \
+            --input-dir release-artifact \
+            --version "${{ needs.validate.outputs.version }}" \
+            --commit "${{ needs.validate.outputs.commit }}"
+
+      - name: Write release notes
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          cat > release-notes.md <<EOF
+          # Logos Execution Zone v$VERSION
+
+          Source commit: \`$COMMIT\`
+
+          Native operator bundles:
+
+          - Linux x86_64
+          - Apple silicon macOS (unsigned)
+
+          Both bundles contain wallet, sequencer, standalone sequencer, indexer,
+          explorer, matching r0vm, FFI libraries, configuration examples,
+          per-file manifests, and runtime dependency reports.
+
+          Verify downloads with \`SHA256SUMS\`. See
+          \`docs/native-releases.md\` at this tag for installation and security
+          notes. Matching service containers are published to this repository's
+          GHCR namespace.
+          EOF
+
+      - name: Create exact owned draft
+        id: create_release
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          payload="$RUNNER_TEMP/native-release-payload.json"
+          jq -n \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --arg name "Logos Execution Zone v$VERSION" \
+            --argjson prerelease "$PRERELEASE" \
+            --rawfile body release-notes.md \
+            '{
+              tag_name: $tag,
+              target_commitish: $commit,
+              name: $name,
+              body: $body,
+              draft: true,
+              prerelease: $prerelease,
+              make_latest: "false"
+            }' > "$payload"
+          response="$(
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/releases" \
+              --input "$payload"
+          )"
+          release_id="$(jq -er '.id | tostring' <<<"$response")"
+          {
+            printf 'release_id=%s\n' "$release_id"
+            printf 'owned=true\n'
+          } >> "$GITHUB_OUTPUT"
+          jq -e \
+            --argjson id "$release_id" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$response" >/dev/null
+
+      - name: Upload exact owned draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          mapfile -t assets < <(
+            find release-artifact -maxdepth 1 -type f -printf '%p\n' |
+              sort
+          )
+          test "${#assets[@]}" -eq 3
+          test "$(printf '%s\n' "${assets[@]}" | grep -Ec '\.tar\.gz$')" -eq 2
+          test "$(printf '%s\n' "${assets[@]}" |
+            grep -Fxc 'release-artifact/SHA256SUMS')" -eq 1
+          for asset in "${assets[@]}"; do
+            name="${asset##*/}"
+            encoded_name="$(jq -nr --arg value "$name" '$value | @uri')"
+            response="$(
+              curl \
+                --fail-with-body \
+                --silent \
+                --show-error \
+                --request POST \
+                --header "Accept: application/vnd.github+json" \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                --header "Content-Type: application/octet-stream" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --data-binary "@$asset" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$encoded_name"
+            )"
+            jq -e --arg name "$name" \
+              '.name == $name and .state == "uploaded"' \
+              <<<"$response" >/dev/null
+          done
+
+      - name: Verify exact uploaded draft and publish
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          release="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          )"
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$release" >/dev/null
+          assets="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100"
+          )"
+          test "$(jq 'length' <<<"$assets")" -eq 3
+          expected_names="$(
+            printf '%s\n' \
+              logos-execution-zone-"$VERSION"-darwin-arm64.tar.gz \
+              logos-execution-zone-"$VERSION"-linux-amd64.tar.gz \
+              SHA256SUMS |
+              sort
+          )"
+          actual_names="$(jq -r '.[].name' <<<"$assets" | sort)"
+          test "$actual_names" = "$expected_names"
+
+          mkdir published-artifact
+          while IFS=$'\t' read -r asset_id asset_name; do
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --location \
+              --header "Accept: application/octet-stream" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --output "published-artifact/$asset_name" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          done < <(jq -r '.[] | [.id, .name] | @tsv' <<<"$assets")
+          python3 scripts/native_release.py verify-release \
+            --input-dir published-artifact \
+            --version "$VERSION" \
+            --commit "$COMMIT"
+          git fetch --force origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$COMMIT"
+
+          response="$(
+            jq -n \
+              --argjson prerelease "$PRERELEASE" \
+              '{
+                draft: false,
+                prerelease: $prerelease,
+                make_latest: "false"
+              }' |
+              gh api --method PATCH \
+                "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+                --input -
+          )"
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .draft == false
+              and .prerelease == $prerelease' \
+            <<<"$response" >/dev/null
+          git fetch --force origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$COMMIT"
+
+      - name: Roll back only exact owned draft
+        if: failure() && steps.create_release.outputs.owned == 'true'
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -uo pipefail
+          test -n "$RELEASE_ID" || exit 1
+          release="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              2>/dev/null
+          )" || exit 1
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$release" >/dev/null || exit 1
+          gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            >/dev/null
