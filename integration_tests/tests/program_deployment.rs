@@ -38,11 +38,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     let deployed_program_ids = ctx.sequencer_client().list_programs().await?;
     assert!(deployed_program_ids.contains(&deployed_program_id));
-    assert!(
-        deployed_program_ids
-            .windows(2)
-            .all(|pair| pair[0] < pair[1])
-    );
+    assert!(deployed_program_ids.is_sorted());
 
     let account_id = new_account(&mut ctx, false, None).await?;
 
