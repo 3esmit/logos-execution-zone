@@ -13,6 +13,15 @@ pub struct BlockMeta {
     pub hash: BlockHash,
 }
 
+impl From<&Block> for BlockMeta {
+    fn from(block: &Block) -> Self {
+        Self {
+            id: block.header.block_id,
+            hash: block.header.hash,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Our own hasher.
 /// Currently it is SHA256 hasher wrapper. May change in a future.

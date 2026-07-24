@@ -7,9 +7,10 @@ use crate::{
     cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
     sequencer::{
-        CF_LEE_STATE_NAME, DB_LEE_STATE_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
-        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_DEPOSIT_EVENTS_KEY,
-        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
+        CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
+        DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
+        DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY,
+        DB_META_ZONE_CURSOR_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
 
@@ -39,6 +40,72 @@ impl SimpleWritableCell for LEEStateCellRef<'_> {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
             DbError::borsh_cast_message(err, Some("Failed to serialize last state".to_owned()))
+        })
+    }
+}
+
+/// State at the last L1-finalized block, written atomically with
+/// [`FinalBlockMetaCellRef`].
+#[derive(BorshDeserialize)]
+pub struct FinalLeeStateCellOwned(pub V03State);
+
+impl SimpleStorableCell for FinalLeeStateCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_FINAL_LEE_STATE_KEY;
+    const CF_NAME: &'static str = CF_LEE_STATE_NAME;
+}
+
+impl SimpleReadableCell for FinalLeeStateCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct FinalLeeStateCellRef<'state>(pub &'state V03State);
+
+impl SimpleStorableCell for FinalLeeStateCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_FINAL_LEE_STATE_KEY;
+    const CF_NAME: &'static str = CF_LEE_STATE_NAME;
+}
+
+impl SimpleWritableCell for FinalLeeStateCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize final state".to_owned()))
+        })
+    }
+}
+
+/// `(id, hash)` of the last L1-finalized block, paired with [`FinalLeeStateCellRef`].
+#[derive(BorshDeserialize)]
+pub struct FinalBlockMetaCellOwned(pub BlockMeta);
+
+impl SimpleStorableCell for FinalBlockMetaCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_FINAL_BLOCK_META_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for FinalBlockMetaCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct FinalBlockMetaCellRef<'blockmeta>(pub &'blockmeta BlockMeta);
+
+impl SimpleStorableCell for FinalBlockMetaCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_FINAL_BLOCK_META_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for FinalBlockMetaCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize final block meta".to_owned()),
+            )
         })
     }
 }
@@ -128,6 +195,39 @@ impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
                 err,
                 Some("Failed to serialize zone-sdk checkpoint cell".to_owned()),
             )
+        })
+    }
+}
+
+/// The last channel block read back and verified from Bedrock.
+///
+/// Holds its L1 inscription `slot` plus the block's `id`/`hash`, and serves as
+/// both the anchor for the startup consistency check and the resume point for
+/// reconstruction. `slot` is stored as a raw `u64` because the zone-sdk `Slot`
+/// does not derive borsh; the caller converts to/from `Slot`.
+#[derive(Debug, Clone, Copy, BorshSerialize, BorshDeserialize)]
+pub struct ZoneAnchorRecord {
+    pub slot: u64,
+    pub block_id: u64,
+    pub hash: HashType,
+}
+
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct ZoneAnchorCell(pub ZoneAnchorRecord);
+
+impl SimpleStorableCell for ZoneAnchorCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ZoneAnchorCell {}
+
+impl SimpleWritableCell for ZoneAnchorCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize zone cursor".to_owned()))
         })
     }
 }

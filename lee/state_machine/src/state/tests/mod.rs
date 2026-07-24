@@ -48,6 +48,7 @@ impl V03State {
         self.insert_program(crate::test_methods::nonce_changer());
         self.insert_program(crate::test_methods::extra_output());
         self.insert_program(crate::test_methods::missing_output());
+        self.insert_program(crate::test_methods::dropped_account());
         self.insert_program(crate::test_methods::program_owner_changer());
         self.insert_program(crate::test_methods::data_changer());
         self.insert_program(crate::test_methods::minter());
@@ -269,7 +270,7 @@ fn shielded_balance_transfer_for_tests(
 
     let recipient = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -278,7 +279,7 @@ fn shielded_balance_transfer_for_tests(
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -319,7 +320,7 @@ fn private_balance_transfer_for_tests(
     );
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -330,13 +331,14 @@ fn private_balance_transfer_for_tests(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)
                     .expect("sender's commitment must be in state"),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -384,6 +386,7 @@ fn deshielded_balance_transfer_for_tests(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)

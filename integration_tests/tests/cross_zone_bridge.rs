@@ -9,7 +9,7 @@
 //! wrapped token is minted to the recipient. Reuses the M3/M4 spine unchanged;
 //! only the source caller (`bridge_lock`) and target (`wrapped_token`) are new.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
@@ -17,14 +17,14 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{setup_bedrock_node, setup_indexer, setup_sequencer},
+    setup::{SequencerSetup, indexer_client, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, GenesisAction};
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -62,18 +62,19 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         holder: holder_id,
         amount: INITIAL_BALANCE,
     }];
-    let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, genesis_a, channel_a, None)
+    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_a)
+        .with_genesis(genesis_a)
+        .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (_seq_b, _seq_b_home) = setup_sequencer(
-        partial,
-        bedrock_addr,
-        vec![],
-        channel_b,
-        Some(cross_zone.clone()),
-    )
-    .await
-    .context("Failed to set up zone B sequencer")?;
+    let (_seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
+        .with_channel_id(channel_b)
+        .with_genesis(vec![])
+        .with_cross_zone(cross_zone.clone())
+        .setup()
+        .await
+        .context("Failed to set up zone B sequencer")?;
     let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
         .await
         .context("Failed to set up zone B indexer")?;
@@ -87,9 +88,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
 
     // Wait until zone B's indexer reflects the verified mint.
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
-    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, idx_b.addr())
-        .context("Failed to build indexer URL")?;
-    let indexer = IndexerClient::new(&indexer_url)
+    let indexer = indexer_client(idx_b.addr())
         .await
         .context("Failed to build indexer client")?;
 
@@ -165,14 +164,6 @@ fn build_lock_tx(
         .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[holder_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
-}
-
-fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
-    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
-        .context("Failed to build sequencer URL")?;
-    SequencerClientBuilder::default()
-        .build(url)
-        .context("Failed to build sequencer client")
 }
 
 /// Polls zone B's indexer until the recipient's wrapped holding is non-zero.

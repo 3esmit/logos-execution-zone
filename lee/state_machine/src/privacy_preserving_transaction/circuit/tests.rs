@@ -1,8 +1,8 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use lee_core::{
-    Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, EphemeralSecretKey, Nullifier,
-    PrivacyPreservingCircuitOutput, SharedSecretKey,
+    Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
+    Nullifier, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
@@ -60,7 +60,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
     let balance_to_move: u128 = 37;
 
@@ -89,7 +89,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -144,7 +144,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
     let balance_to_move: u128 = 37;
 
     let mut commitment_set = CommitmentSet::with_capacity(2);
@@ -198,13 +198,14 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: commitment_set
                     .get_proof_for(&commitment_sender)
                     .expect("sender's commitment must be in the set"),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -243,11 +244,81 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 }
 
 #[test]
+fn init_note_view_tag_is_derived_from_account_keys() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 0;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account = AccountWithMetadata::new(Account::default(), true, account_id);
+
+    let (output, proof) = execute_and_prove(
+        vec![account],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::PrivateForeignInit {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            npk: keys.npk(),
+            identifier,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        }],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(
+        output.encrypted_private_post_states[0].view_tag,
+        EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+    );
+}
+
+#[test]
+fn update_note_view_tag_is_the_supplied_value() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 99;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account = Account {
+        program_owner: program.id(),
+        balance: 1,
+        ..Account::default()
+    };
+    let commitment = Commitment::new(&account_id, &account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment));
+    let sender = AccountWithMetadata::new(account, true, account_id);
+
+    // A tag deliberately different from the address-derived one, so a passthrough is
+    // distinguishable from re-derivation.
+    let fed_tag = EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()).wrapping_add(1);
+
+    let (output, proof) = execute_and_prove(
+        vec![sender],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            view_tag: fed_tag,
+            nsk: keys.nsk,
+            membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+            identifier,
+        }],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(output.encrypted_private_post_states[0].view_tag, fed_tag);
+}
+
+#[test]
 fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
     );
 
@@ -271,7 +342,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let result = execute_and_prove(
         vec![pre],
         instruction,
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: account_keys.vpk(),
             random_seed: [0; 32],
             npk: account_keys.npk(),
@@ -422,7 +493,7 @@ fn private_pda_withdraw() {
 /// Shared regular private account: receives funds via `authenticated_transfer` directly,
 /// no custom program needed. This demonstrates the non-PDA shared account flow where
 /// keys are derived from GMS via `derive_keys_for_shared_account`. The shared account
-/// uses the standard unauthorized private account path and works with auth-transfer's
+/// uses the standard foreign private account path and works with auth-transfer's
 /// transfer path like any other private account.
 #[test]
 fn shared_account_receives_via_simple_transfer() {
@@ -443,9 +514,9 @@ fn shared_account_receives_via_simple_transfer() {
         sender_id,
     );
 
-    // Recipient: shared private account (new, unauthorized)
+    // Recipient: shared private account (new, foreign)
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
-    let recipient = AccountWithMetadata::new(Account::default(), false, shared_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, shared_account_id);
 
     let balance_to_move: u128 = 100;
     let instruction = Program::serialize_instruction(balance_to_move).unwrap();
@@ -455,7 +526,7 @@ fn shared_account_receives_via_simple_transfer() {
         instruction,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: shared_keys.vpk(),
                 random_seed: [0; 32],
                 npk: shared_npk,
@@ -507,10 +578,10 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     );
 }
 
-/// `PrivateUnauthorized` with a non-default identifier produces a ciphertext that decrypts
+/// `PrivateForeignInit` with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Regular` carrying the correct identifier.
 #[test]
-fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
+fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
@@ -521,12 +592,12 @@ fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
         &Nonce::private_account_nonce_init(&recipient_id),
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_id);
 
     let (output, _) = execute_and_prove(
         vec![recipient],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: keys.vpk(),
             random_seed: [0; 32],
             npk: keys.npk(),
@@ -574,6 +645,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: keys.nsk,
             membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             identifier,
@@ -630,6 +702,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: keys.nsk,
                 membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier,
@@ -658,7 +731,7 @@ fn private_pda_init_identifier_mismatch_fails() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+    let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let result = execute_and_prove(
         vec![pre_state],
@@ -708,6 +781,7 @@ fn private_pda_update_identifier_mismatch_fails() {
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: keys.nsk,
                 membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier: 99,

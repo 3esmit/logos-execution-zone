@@ -4,7 +4,7 @@ use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey,
     account::{Account, AccountWithMetadata},
-    encryption::{EncryptedAccountData, ViewingPublicKey},
+    encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
@@ -42,13 +42,14 @@ pub enum InputAccountIdentity {
     PrivateAuthorizedUpdate {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
+        view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
     },
     /// Init of a standalone private account the caller does not own (e.g. a recipient who
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
-    PrivateUnauthorized {
+    PrivateForeignInit {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
         npk: NullifierPublicKey,
@@ -79,6 +80,7 @@ pub enum InputAccountIdentity {
     PrivatePdaUpdate {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
+        view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
@@ -125,7 +127,7 @@ impl InputAccountIdentity {
             Self::Public
             | Self::PrivateAuthorizedInit { .. }
             | Self::PrivateAuthorizedUpdate { .. }
-            | Self::PrivateUnauthorized { .. } => None,
+            | Self::PrivateForeignInit { .. } => None,
         }
     }
 }

@@ -272,7 +272,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
     );
 
@@ -294,11 +294,12 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_nsk,
                 membership_proof: proof,
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 npk: recipient_npk,

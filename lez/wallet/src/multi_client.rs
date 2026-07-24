@@ -159,7 +159,11 @@ impl MultiSequencerClient {
         )
         .ok_or_else(|| anyhow::anyhow!("Failed to find leader"))?;
 
-        assert_ne!(leader_list.len(), 0);
+        if leader_list.is_empty() {
+            anyhow::bail!(
+                "Leader search algorithm failure: Sorted out all clients during leader search"
+            );
+        }
 
         log::info!("Chosen leaders is {leader_list:?}");
 
@@ -331,18 +335,20 @@ impl MultiSequencerClient {
     }
 
     /// Update statistics of a leader, clear statistic updates log.
-    pub async fn update_statistics(&self, statistics: &mut HashMap<Url, Statistics>) {
+    pub async fn update_statistics(&self, statistics: &mut HashMap<Url, Statistics>) -> Result<()> {
         let mut statistic_updates = self.statistic_updates.write().await;
 
         #[expect(clippy::iter_over_hash_type, reason = "Ordering is unnecesary here")]
         for (addr, statistic_updates_vec) in statistic_updates.iter() {
             let leader_statistic = statistics
                 .get_mut(addr)
-                .expect("Leader statistic must be present after setup");
+                .ok_or_else(|| anyhow::anyhow!("Leader statistic must be present after setup"))?;
             leader_statistic.apply_updates(statistic_updates_vec.as_slice());
         }
 
         statistic_updates.clear();
+
+        Ok(())
     }
 }
 

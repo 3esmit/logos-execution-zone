@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
+chain_state.workspace = true
 common.workspace = true
 storage.workspace = true
 mempool.workspace = true
@@ -33,6 +34,7 @@ tempfile.workspace = true
 chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio-util.workspace = true
 rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true
