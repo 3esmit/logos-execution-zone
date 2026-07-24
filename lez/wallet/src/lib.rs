@@ -273,7 +273,7 @@ impl WalletCore {
     pub async fn client_rotation(&mut self) -> Result<()> {
         self.multi_sequencer_client
             .update_statistics(&mut self.statistics)
-            .await;
+            .await?;
 
         self.multi_sequencer_client
             .rotate(
