@@ -51,6 +51,8 @@ def check_native() -> None:
         "linux-amd64",
         "darwin-arm64",
         "GITHUB_TOKEN: ${{ github.token }}",
+        'cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"',
+        '"$cargo_bin/r0vm" --version',
         "scripts/build-native-release.sh",
         "scripts/native_release.py validate-source",
         "scripts/native_release.py write-checksums",
