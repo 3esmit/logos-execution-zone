@@ -244,21 +244,8 @@ jobs:
           GHCR namespace.
           EOF
 
-      - name: Create draft release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
-        with:
-          tag_name: ${{ needs.validate.outputs.tag }}
-          target_commitish: ${{ needs.validate.outputs.commit }}
-          name: Logos Execution Zone v${{ needs.validate.outputs.version }}
-          body_path: release-notes.md
-          draft: true
-          prerelease: ${{ needs.validate.outputs.prerelease }}
-          make_latest: false
-          files: |
-            release-artifact/*.tar.gz
-            release-artifact/SHA256SUMS
-
-      - name: Verify uploaded draft and publish
+      - name: Create exact owned draft
+        id: create_release
         env:
           COMMIT: ${{ needs.validate.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
@@ -267,38 +254,193 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
+          payload="$RUNNER_TEMP/native-release-payload.json"
+          jq -n \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --arg name "Logos Execution Zone v$VERSION" \
+            --argjson prerelease "$PRERELEASE" \
+            --rawfile body release-notes.md \
+            '{
+              tag_name: $tag,
+              target_commitish: $commit,
+              name: $name,
+              body: $body,
+              draft: true,
+              prerelease: $prerelease,
+              make_latest: "false"
+            }' > "$payload"
+          response="$(
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/releases" \
+              --input "$payload"
+          )"
+          release_id="$(jq -er '.id | tostring' <<<"$response")"
+          {
+            printf 'release_id=%s\n' "$release_id"
+            printf 'owned=true\n'
+          } >> "$GITHUB_OUTPUT"
+          jq -e \
+            --argjson id "$release_id" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$response" >/dev/null
+
+      - name: Upload exact owned draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          mapfile -t assets < <(
+            find release-artifact -maxdepth 1 -type f -printf '%p\n' |
+              sort
+          )
+          test "${#assets[@]}" -eq 3
+          test "$(printf '%s\n' "${assets[@]}" | grep -Ec '\.tar\.gz$')" -eq 2
+          test "$(printf '%s\n' "${assets[@]}" |
+            grep -Fxc 'release-artifact/SHA256SUMS')" -eq 1
+          for asset in "${assets[@]}"; do
+            name="${asset##*/}"
+            encoded_name="$(jq -nr --arg value "$name" '$value | @uri')"
+            response="$(
+              curl \
+                --fail-with-body \
+                --silent \
+                --show-error \
+                --request POST \
+                --header "Accept: application/vnd.github+json" \
+                --header "Authorization: Bearer $GH_TOKEN" \
+                --header "Content-Type: application/octet-stream" \
+                --header "X-GitHub-Api-Version: 2022-11-28" \
+                --data-binary "@$asset" \
+                "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$encoded_name"
+            )"
+            jq -e --arg name "$name" \
+              '.name == $name and .state == "uploaded"' \
+              <<<"$response" >/dev/null
+          done
+
+      - name: Verify exact uploaded draft and publish
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_ID"
+          release="$(
+            gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          )"
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$release" >/dev/null
+          assets="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100"
+          )"
+          test "$(jq 'length' <<<"$assets")" -eq 3
+          expected_names="$(
+            printf '%s\n' \
+              logos-execution-zone-"$VERSION"-darwin-arm64.tar.gz \
+              logos-execution-zone-"$VERSION"-linux-amd64.tar.gz \
+              SHA256SUMS |
+              sort
+          )"
+          actual_names="$(jq -r '.[].name' <<<"$assets" | sort)"
+          test "$actual_names" = "$expected_names"
+
           mkdir published-artifact
-          gh release download "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir published-artifact
+          while IFS=$'\t' read -r asset_id asset_name; do
+            curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --location \
+              --header "Accept: application/octet-stream" \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header "X-GitHub-Api-Version: 2022-11-28" \
+              --output "published-artifact/$asset_name" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          done < <(jq -r '.[] | [.id, .name] | @tsv' <<<"$assets")
           python3 scripts/native_release.py verify-release \
             --input-dir published-artifact \
             --version "$VERSION" \
             --commit "$COMMIT"
-          if [[ $PRERELEASE == true ]]; then
-            gh release edit "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft=false \
-              --prerelease \
-              --latest=false
-          else
-            gh release edit "$TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --draft=false \
-              --latest
-          fi
+          git fetch --force origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$COMMIT"
 
-      - name: Remove failed draft
-        if: failure()
+          response="$(
+            jq -n \
+              --argjson prerelease "$PRERELEASE" \
+              '{
+                draft: false,
+                prerelease: $prerelease,
+                make_latest: "false"
+              }' |
+              gh api --method PATCH \
+                "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+                --input -
+          )"
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .draft == false
+              and .prerelease == $prerelease' \
+            <<<"$response" >/dev/null
+          git fetch --force origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git rev-list -n 1 "$TAG")" = "$COMMIT"
+
+      - name: Roll back only exact owned draft
+        if: failure() && steps.create_release.outputs.owned == 'true'
         env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          RELEASE_ID: ${{ steps.create_release.outputs.release_id }}
           TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          set -euo pipefail
-          state=$(gh release view "$TAG" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,targetCommitish \
-            --jq '[.isDraft, .targetCommitish] | @tsv' 2>/dev/null || true)
-          if [[ $state == "$(printf 'true\t%s' "$GITHUB_SHA")" ]]; then
-            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes
-          fi
+          set -uo pipefail
+          test -n "$RELEASE_ID" || exit 1
+          release="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+              2>/dev/null
+          )" || exit 1
+          jq -e \
+            --argjson id "$RELEASE_ID" \
+            --arg tag "$TAG" \
+            --arg commit "$COMMIT" \
+            --argjson prerelease "$PRERELEASE" \
+            '.id == $id
+              and .tag_name == $tag
+              and .target_commitish == $commit
+              and .draft == true
+              and .prerelease == $prerelease' \
+            <<<"$release" >/dev/null || exit 1
+          gh api --method DELETE \
+            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
+            >/dev/null

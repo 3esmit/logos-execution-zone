@@ -58,8 +58,13 @@ def check_native() -> None:
         "scripts/native_release.py write-checksums",
         "scripts/native_release.py verify-release",
         "draft: true",
-        "gh release download",
-        "draft=false",
+        "id: create_release",
+        "steps.create_release.outputs.release_id",
+        '"repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"',
+        '"repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100"',
+        '"https://api.github.com/repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"',
+        "draft: false",
+        "Roll back only exact owned draft",
         "release-artifact/*.tar.gz",
         "release-artifact/SHA256SUMS",
         "contents: write",
@@ -69,6 +74,9 @@ def check_native() -> None:
         "RISC0_SKIP_BUILD_KERNELS",
         "RISC0_SKIP_BUILD=1",
         "secrets.DOCKER_",
+        "softprops/action-gh-release",
+        "gh release delete",
+        "--cleanup-tag",
     ):
         forbid(text, needle, source)
 
