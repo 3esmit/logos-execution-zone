@@ -159,14 +159,22 @@ impl CliAccountMention {
         }
     }
 
+    /// Convert to an [`crate::AccountIdentity`] for use in a public transaction.
+    ///
+    /// The `sign` flag indicates whether to sign or not with the account keys.
     #[must_use]
-    pub fn into_public_identity(self, account_id: lee::AccountId) -> crate::AccountIdentity {
+    pub fn into_public_identity(
+        self,
+        account_id: lee::AccountId,
+        sign: bool,
+    ) -> crate::AccountIdentity {
         match self {
             Self::KeyPath(key_path) => crate::AccountIdentity::PublicKeycard {
                 account_id,
                 key_path,
             },
-            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) if sign => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::PublicNoSign(account_id),
         }
     }
 }
