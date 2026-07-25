@@ -19,12 +19,14 @@ use crate::{
         config::ConfigSubcommand,
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
+        network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
             token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
         },
     },
+    config::SequencerConnectionData,
     storage::Storage,
 };
 
@@ -33,6 +35,7 @@ pub mod chain;
 pub mod config;
 pub mod group;
 pub mod keycard;
+pub mod network;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
@@ -80,6 +83,11 @@ pub enum Command {
     /// Command to setup config, get and set config fields.
     #[command(subcommand)]
     Config(ConfigSubcommand),
+    /// Change the network the wallet points to.
+    ChangeNetwork {
+        /// `testnet`, `local`, or a custom sequencer URL.
+        network: NetworkAlias,
+    },
     /// Restoring keys from given password at given `depth`.
     ///
     /// !!!WARNING!!! will rewrite current storage.
@@ -274,6 +282,20 @@ pub async fn execute_subcommand(
         }
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::ChangeNetwork { network } => {
+            let sequencer_addr: url::Url = network.try_into().context("Invalid sequencer URL")?;
+
+            let mut config = wallet_core.config().clone();
+            config.sequencers = vec![SequencerConnectionData {
+                sequencer_addr,
+                basic_auth: None,
+            }];
+
+            wallet_core.set_config(config);
+            wallet_core.store_config_changes().await?;
+
+            SubcommandReturnValue::Empty
         }
         Command::RestoreKeys { depth } => {
             let mnemonic = read_mnemonic_from_stdin()?;

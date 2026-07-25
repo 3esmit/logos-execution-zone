@@ -77,7 +77,7 @@ impl Default for WalletConfig {
     fn default() -> Self {
         Self {
             sequencers: vec![SequencerConnectionData {
-                sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
+                sequencer_addr: "https://testnet.lez.logos.co".parse().unwrap(),
                 basic_auth: None,
             }],
             seq_poll_timeout: Duration::from_secs(12),
