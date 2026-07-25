@@ -45,6 +45,16 @@ def check_native() -> None:
     source = ROOT / ".github/workflows/publish_native.yml"
     text = source.read_text(encoding="utf-8")
     for needle in (
+        'pull_request:\n    paths:',
+        '"CHANGELOG.md"',
+        '"Cargo.lock"',
+        '"Cargo.toml"',
+        '"lez/explorer_service/Cargo.toml"',
+        '"lez/indexer/ffi/Cargo.toml"',
+        '"lez/indexer/service/Cargo.toml"',
+        '"lez/sequencer/service/Cargo.toml"',
+        '"lez/wallet-ffi/Cargo.toml"',
+        '"lez/wallet/Cargo.toml"',
         'tags:\n      - "v*"',
         "runs-on: ubuntu-24.04",
         "runs-on: macos-latest",
