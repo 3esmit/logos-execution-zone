@@ -17,3 +17,4 @@ All notable changes to this fork are recorded here.
 
 - Existing single-sequencer wallet configurations now load through the
   multi-sequencer wallet.
+- Public transactions no longer require the optional bulk proof RPC.
