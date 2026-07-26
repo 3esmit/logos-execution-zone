@@ -4,6 +4,12 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+### Fixed
+
+- Native wallet and wallet FFI releases now use the immutable Testnet v0.2
+  public-transfer program-ID profile and report incompatible program catalogs
+  as errors instead of panicking.
+
 ## 0.4.0-alpha.1 - 2026-07-24
 
 ### Added

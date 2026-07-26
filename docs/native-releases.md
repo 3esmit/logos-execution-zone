@@ -58,6 +58,12 @@ test signing key. Never use that key for a production sequencer. Copy the
 examples to an operator-owned directory, replace node endpoints, channel ID,
 signing key, and data paths, then restrict file permissions before startup.
 
+The released wallet CLI and wallet FFI use the immutable `testnet-v0-2`
+profile for public account initialization and native-token transfers. Configure
+them with a Testnet sequencer endpoint. This profile does not make the bundled
+local sequencer or indexer compatible with historical Testnet private state;
+run those services only with their separately supported network configuration.
+
 Linux binaries use the runtime ABI listed in
 `share/runtime-dependencies.txt`. Install any listed system libraries missing
 from the host. The macOS archive is unsigned; verify the checksum and source tag

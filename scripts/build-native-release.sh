@@ -54,12 +54,12 @@ mkdir -p \
 
 cd "$root"
 
-cargo build --locked --release --package wallet --bin wallet
+cargo build --locked --release --package wallet --bin wallet --features testnet-v0-2
 cargo build --locked --release --package sequencer_service --bin sequencer_service
 install -m 0755 "$target_dir/release/sequencer_service" \
   "$temporary/sequencer_service"
 cargo build --locked --release --package indexer_service --bin indexer_service
-cargo build --locked --release --package wallet-ffi
+cargo build --locked --release --package wallet-ffi --features testnet-v0-2
 cargo build --locked --release --package indexer_ffi
 
 cargo build \

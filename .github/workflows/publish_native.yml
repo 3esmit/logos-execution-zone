@@ -6,6 +6,7 @@ on:
       - "CHANGELOG.md"
       - "Cargo.lock"
       - "Cargo.toml"
+      - "flake.nix"
       - ".github/workflows/publish_native.yml"
       - "lez/explorer_service/Cargo.toml"
       - "lez/indexer/ffi/Cargo.toml"
