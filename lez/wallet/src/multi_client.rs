@@ -11,7 +11,9 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
+use itertools::Itertools as _;
 use lee_core::BlockId;
+use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::RwLock, task::JoinSet};
@@ -97,6 +99,14 @@ impl MultiSequencerClient {
         statistics: &mut HashMap<Url, Statistics>,
         multi_sequencer_client_config: &MultiSequencerClientConfig,
     ) -> Result<Vec<(SequencerClient, Url)>> {
+        if !conn_data
+            .iter()
+            .map(|conn| &conn.sequencer_addr)
+            .all_unique()
+        {
+            anyhow::bail!("All adresses must be unique");
+        }
+
         let mut actualization_list = vec![];
         let mut calibration_list = vec![];
         let mut client_list = vec![];
@@ -133,7 +143,7 @@ impl MultiSequencerClient {
             client_list.push((sequencer_addr.clone(), sequencer_client));
         }
 
-        // This actually runs in one thread, but eah exact future is parallelized.
+        // This actually starts in one thread, but each exact future produces more tasks.
         let (actualization_res, callibration_res) = tokio::join!(
             multi_actualize_clients(actualization_list),
             multi_calibrate_clients(
@@ -300,7 +310,7 @@ impl MultiSequencerClient {
 
     /// Metered `send_transaction` for `distribution_limit` amount of leaders.
     ///
-    /// Less abstract that it could be, clean way to implement it in a more general way is
+    /// Less abstract than it could be, clean way to implement it in a more general way is
     /// "return-type notation".
     ///
     /// `ToDo`: Return to it, when "return-type notation" is stable.
@@ -332,6 +342,7 @@ impl MultiSequencerClient {
 
         while let Some(resp) = join_set.join_next().await {
             let res = resp
+                .inspect_err(|j_err| warn!("Task failed with join error: {j_err:?}"))
                 .map_err(Into::into)
                 .and_then(|((resp, statistics_update), leader_url)| {
                     log::debug!(
@@ -524,7 +535,7 @@ async fn actualize_client(client: SequencerClient) -> StatisticsUpdate {
 // Next 2 functions can be done in uniform way right now, but it will be incredibly cursed.
 // ToDo: Return to it when "return-type notation" is stable
 
-pub async fn multi_actualize_clients(
+async fn multi_actualize_clients(
     clients: Vec<(Url, SequencerClient)>,
 ) -> Vec<(Url, Option<StatisticsUpdate>)> {
     let mut handle_map = HashMap::new();
@@ -550,7 +561,7 @@ pub async fn multi_actualize_clients(
     statistic_updates
 }
 
-pub async fn multi_calibrate_clients(
+async fn multi_calibrate_clients(
     clients: Vec<(Url, SequencerClient)>,
     calibration_limit: usize,
 ) -> Vec<(Url, Option<Statistics>)> {
@@ -627,7 +638,7 @@ fn choose_leaders(
 
     // Sort out all clients running late
     let mut res_vec: Vec<_> = client_vec
-        .iter()
+        .into_iter()
         .filter(|x| {
             let latest_block_id = statistics.get(&x.0).unwrap().latest_block_id;
 
@@ -680,28 +691,15 @@ fn choose_leaders(
         let right_std = right_var.sqrt();
         let left_std = left_var.sqrt();
 
-        // Client is better if its average is better and variance does not make it worse
-        // So basically we want this:
-        // [-right_std < left_lat < right_lat < +left_std < +right_std]
-        //
-        // However one can argue that this:
-        //
-        // [-right_std < right_lat < left_lat < +left_std < +right_std]
-        //
-        // is still better, but it is up to discussion
-        let first_ordering = left_lat.total_cmp(&right_lat);
-        match first_ordering {
-            std::cmp::Ordering::Greater => first_ordering,
-            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                (left_lat + left_std).total_cmp(&(right_lat + right_std))
-            }
-        }
+        // Client is better if its average + std is lesser:
+        // [-right_std < right_lat < +left_std < +right_std]
+        (left_lat + left_std).total_cmp(&(right_lat + right_std))
     });
 
     Some(
         res_vec
             .into_iter()
-            .map(|(a, b)| (b.clone(), a.clone()))
+            .map(|(a, b)| (b, a))
             .take(distribution_limit)
             .collect(),
     )
