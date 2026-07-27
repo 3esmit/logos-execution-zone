@@ -1,5 +1,3 @@
-//! This module provides all metrics exposed by the sequencer core crate.
-
 #![expect(
     clippy::cast_precision_loss,
     clippy::as_conversions,
@@ -11,15 +9,12 @@ use std::time::Duration;
 use common::transaction::TxKind;
 use metrics::{Counter, Unit, counter, gauge, histogram};
 
-use crate::TransactionOrigin;
+use crate::names;
 
-mod names {
-    pub const BLOCK_CREATION_TIME: &str = "block_creation_time";
-    pub const BLOCK_COUNT: &str = "block_count";
-    pub const MEMPOOL_SIZE: &str = "mempool_size";
-    pub const MEMPOOL_TRANSACTION_APPLICATION_TIME: &str = "mempool_transaction_application_time";
-    pub const TRANSACTIONS_PER_BLOCK: &str = "transactions_per_block";
-    pub const FAILED_TRANSACTION_COUNT: &str = "failed_transaction_count";
+#[derive(Clone, Copy, strum::IntoStaticStr)]
+pub enum TransactionOrigin {
+    User,
+    Sequencer,
 }
 
 pub fn record_block_creation_time(duration: Duration) {

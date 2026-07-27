@@ -8,6 +8,9 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+sequencer_core_metrics.workspace = true
+sequencer_service_metrics.workspace = true
+
 serde = { workspace = true, features = ["derive", "alloc"] }
 serde_json.workspace = true
 json-pretty-compact = "0.1.2"

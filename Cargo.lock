@@ -2297,6 +2297,8 @@ name = "dashboard_gen"
 version = "0.1.0"
 dependencies = [
  "json-pretty-compact",
+ "sequencer_core_metrics",
+ "sequencer_service_metrics",
  "serde",
  "serde_json",
 ]
@@ -9503,16 +9505,15 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "mempool",
- "metrics",
  "num-bigint 0.4.6",
  "ping_core",
  "programs",
  "rand 0.8.6",
  "risc0-zkvm",
+ "sequencer_core_metrics",
  "serde",
  "serde_json",
  "storage",
- "strum 0.28.0",
  "system_accounts",
  "tempfile",
  "test_programs",
@@ -9522,6 +9523,15 @@ dependencies = [
  "tokio-util",
  "url",
  "vault_core",
+]
+
+[[package]]
+name = "sequencer_core_metrics"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "metrics",
+ "strum 0.28.0",
 ]
 
 [[package]]
@@ -9540,14 +9550,21 @@ dependencies = [
  "lee",
  "log",
  "mempool",
- "metrics",
  "metrics-exporter-prometheus",
  "programs",
  "sequencer_core",
+ "sequencer_service_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "sequencer_service_metrics"
+version = "0.1.0"
+dependencies = [
+ "metrics",
 ]
 
 [[package]]

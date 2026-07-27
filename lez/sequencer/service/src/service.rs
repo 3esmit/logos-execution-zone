@@ -93,7 +93,7 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             .await
             .expect("Mempool is closed, this is a bug");
 
-        crate::metrics::increment_submitted_transaction_count();
+        sequencer_service_metrics::increment_submitted_transaction_count();
 
         Ok(tx_hash)
     }
