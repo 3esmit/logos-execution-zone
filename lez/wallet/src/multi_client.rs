@@ -13,7 +13,6 @@ use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
 use itertools::Itertools as _;
 use lee_core::BlockId;
-use log::warn;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::RwLock, task::JoinSet};
@@ -342,7 +341,7 @@ impl MultiSequencerClient {
 
         while let Some(resp) = join_set.join_next().await {
             let res = resp
-                .inspect_err(|j_err| warn!("Task failed with join error: {j_err:?}"))
+                .inspect_err(|j_err| log::warn!("Task failed with join error: {j_err:?}"))
                 .map_err(Into::into)
                 .and_then(|((resp, statistics_update), leader_url)| {
                     log::debug!(
@@ -599,10 +598,10 @@ async fn multi_calibrate_clients(
     statistics
 }
 
-#[must_use]
 /// Choosing leaders up to a `distribution_limit`.
 ///
 /// Assumes that all clients have their statistics in `statistics`.
+#[must_use]
 fn choose_leaders(
     client_vec: Vec<(Url, SequencerClient)>,
     statistics: &HashMap<Url, Statistics>,
