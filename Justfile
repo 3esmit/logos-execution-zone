@@ -82,7 +82,7 @@ run-bedrock:
 # admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
 [working-directory: 'monitoring']
 run-monitoring:
-    @echo "📊 Running Prometheus + Grafana"
+    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
     docker compose up
 
 # Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
