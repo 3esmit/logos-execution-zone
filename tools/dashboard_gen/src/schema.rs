@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DATASOURCE_UID, FieldOverride, Target};
+use crate::{DATASOURCE_UID, FieldOverride, Target, unit::Unit};
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -245,7 +245,7 @@ pub struct Defaults {
     pub color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<Custom>,
-    pub unit: String,
+    pub unit: Unit,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
 }

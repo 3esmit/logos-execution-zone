@@ -22,11 +22,13 @@ use schema::{
     Stacking, StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip, TooltipMode,
 };
 use serde::Serialize;
+pub use unit::Unit;
 
 mod codegen;
 mod input;
 mod schema;
 mod styling;
+mod unit;
 
 /// Datasource uid every panel/target points at. Dashboards stay portable across
 /// environments because they reference the datasource by this stable uid rather
@@ -114,7 +116,7 @@ pub struct Panel {
     kind: Kind,
     targets: Vec<Target>,
     width: u32,
-    unit: Option<String>,
+    unit: Option<Unit>,
     decimals: Option<u32>,
     color: Option<Color>,
     span_nulls: bool,
@@ -168,8 +170,8 @@ impl Panel {
     }
 
     #[must_use]
-    pub fn unit(mut self, unit: impl Into<String>) -> Self {
-        self.unit = Some(unit.into());
+    pub fn unit(mut self, unit: Unit) -> Self {
+        self.unit = Some(unit);
         self
     }
 
@@ -439,8 +441,8 @@ pub fn rate_per_min(metric: &str, legend: &str) -> Target {
     Target::new(format!("rate({metric}[1m]) * 60")).legend(legend)
 }
 
-fn default_unit() -> String {
-    "short".to_owned()
+const fn default_unit() -> Unit {
+    Unit::Short
 }
 
 fn ref_letter(index: usize) -> String {

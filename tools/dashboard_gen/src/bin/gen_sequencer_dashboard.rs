@@ -10,7 +10,7 @@
 )]
 
 use dashboard_gen::{
-    Color, Dashboard, FieldOverride, Panel, Target, avg, percentiles, percentiles_labeled,
+    Color, Dashboard, FieldOverride, Panel, Target, Unit, avg, percentiles, percentiles_labeled,
     rate_per_min,
 };
 use json_pretty_compact::PrettyCompactFormatter;
@@ -26,7 +26,7 @@ fn sequencer_dashboard() -> Dashboard {
             [
                 Panel::stat("Chain height")
                     .width(6)
-                    .unit("short")
+                    .unit(Unit::Short)
                     .decimals(0)
                     .color(Color::fixed("blue"))
                     .target(
@@ -34,7 +34,7 @@ fn sequencer_dashboard() -> Dashboard {
                     ),
                 Panel::timeseries("Block production rate")
                     .width(18)
-                    .unit("short")
+                    .unit(Unit::Short)
                     .target(rate_per_min(
                         sequencer_core_metrics::names::BLOCK_COUNT,
                         "blocks/min",
@@ -45,7 +45,7 @@ fn sequencer_dashboard() -> Dashboard {
             9,
             [Panel::timeseries("Block creation time")
                 .width(24)
-                .unit("s")
+                .unit(Unit::Seconds)
                 .targets(percentiles(
                     sequencer_core_metrics::names::BLOCK_CREATION_TIME,
                     PERCENTILES,
@@ -62,7 +62,7 @@ fn sequencer_dashboard() -> Dashboard {
             [
                 Panel::timeseries("Transaction application time")
                     .width(12)
-                    .unit("s")
+                    .unit(Unit::Seconds)
                     .targets(percentiles_labeled(
                         sequencer_core_metrics::names::MEMPOOL_TRANSACTION_APPLICATION_TIME,
                         PERCENTILES,
@@ -70,7 +70,7 @@ fn sequencer_dashboard() -> Dashboard {
                     )),
                 Panel::timeseries("Mempool size")
                     .width(12)
-                    .unit("short")
+                    .unit(Unit::Short)
                     .span_nulls()
                     .target(
                         Target::new(sequencer_core_metrics::names::MEMPOOL_SIZE)
@@ -83,7 +83,7 @@ fn sequencer_dashboard() -> Dashboard {
             [
                 Panel::timeseries("Transactions per block")
                     .width(12)
-                    .unit("short")
+                    .unit(Unit::Short)
                     .targets(percentiles(
                         sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK,
                         PERCENTILES,
@@ -96,7 +96,7 @@ fn sequencer_dashboard() -> Dashboard {
                     ),
                 Panel::timeseries("Transaction throughput (per minute)")
                     .width(12)
-                    .unit("short")
+                    .unit(Unit::Short)
                     .target(rate_per_min(
                         sequencer_service_metrics::names::SUBMITTED_TRANSACTION_COUNT,
                         "submitted",

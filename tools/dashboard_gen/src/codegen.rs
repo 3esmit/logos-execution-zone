@@ -10,6 +10,7 @@
 use std::fmt::Write as _;
 
 use crate::{
+    Unit,
     input::PanelInput,
     schema::{
         AxisPlacement, Color, GradientMode, LineInterpolation, PanelType, ShowPoints, StackingMode,
@@ -38,7 +39,11 @@ fn panel_expr_inner(panel: &PanelInput) -> Result<String, std::fmt::Error> {
     let defaults = &panel.field_config.defaults;
     // `short` is the builder's own default unit, so it round-trips without a call.
     if let Some(unit) = defaults.unit.as_deref().filter(|u| *u != "short") {
-        write!(expr, "\n    .unit({unit:?})")?;
+        write!(
+            expr,
+            "\n    .unit({})",
+            Unit::from_id(unit).to_rust_source()
+        )?;
     }
     if let Some(decimals) = defaults.decimals {
         write!(expr, "\n    .decimals({decimals})")?;
