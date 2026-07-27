@@ -157,7 +157,7 @@
             // {
               pname = "logos-execution-zone-wallet-ffi";
               version = "0.1.0";
-              cargoExtraArgs = "-p wallet-ffi";
+              cargoExtraArgs = "-p wallet-ffi --features testnet-v0-2";
               postInstall = ''
                 mkdir -p $out/include
                 cp lez/wallet-ffi/wallet_ffi.h $out/include/

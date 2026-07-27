@@ -49,6 +49,7 @@ def check_native() -> None:
         '"CHANGELOG.md"',
         '"Cargo.lock"',
         '"Cargo.toml"',
+        '"flake.nix"',
         '"lez/explorer_service/Cargo.toml"',
         '"lez/indexer/ffi/Cargo.toml"',
         '"lez/indexer/service/Cargo.toml"',
@@ -91,10 +92,28 @@ def check_native() -> None:
         forbid(text, needle, source)
 
 
+def check_native_build_profile() -> None:
+    build_script = ROOT / "scripts/build-native-release.sh"
+    build_text = build_script.read_text(encoding="utf-8")
+    for needle in (
+        "--package wallet --bin wallet --features testnet-v0-2",
+        "--package wallet-ffi --features testnet-v0-2",
+    ):
+        require(build_text, needle, build_script)
+
+    flake = ROOT / "flake.nix"
+    require(
+        flake.read_text(encoding="utf-8"),
+        'cargoExtraArgs = "-p wallet-ffi --features testnet-v0-2"',
+        flake,
+    )
+
+
 def main() -> int:
     try:
         check_images()
         check_native()
+        check_native_build_profile()
     except (OSError, ValueError) as error:
         print(f"release workflow validation failed: {error}", file=sys.stderr)
         return 1

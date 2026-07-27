@@ -49,6 +49,7 @@ pub mod cli;
 pub mod config;
 pub mod helperfunctions;
 pub mod multi_client;
+pub(crate) mod network_profile;
 pub mod poller;
 pub mod program_facades;
 pub mod signing;

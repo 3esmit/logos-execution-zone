@@ -52,6 +52,9 @@ url.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 
 [features]
+# Target public native-token operations and health checks at the immutable
+# Testnet v0.2 program-ID profile.
+testnet-v0-2 = []
 # Enables `keycard get-private-keys` command that prints sensitive secret keys to terminal.
 # Never enable in production builds.
 keycard-debug = []

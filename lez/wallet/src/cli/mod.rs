@@ -1,4 +1,4 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr};
+use std::{collections::BTreeMap, io::Write as _, path::PathBuf, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use common::HashType;
 use derive_more::Display;
 use futures::TryFutureExt as _;
+use lee::ProgramId;
 use lee_core::BlockId;
 use sequencer_service_rpc::RpcClient as _;
 
@@ -218,36 +219,8 @@ pub async fn execute_subcommand(
             let remote_program_ids = wallet_core
                 .get_program_ids()
                 .await
-                .expect("Error fetching program ids");
-            let Some(authenticated_transfer_id) = remote_program_ids.get("authenticated_transfer")
-            else {
-                panic!("Missing authenticated transfer ID from remote");
-            };
-            assert!(
-                authenticated_transfer_id == &::programs::authenticated_transfer().id(),
-                "Local ID for authenticated transfer program is different from remote"
-            );
-            let Some(token_id) = remote_program_ids.get("token") else {
-                panic!("Missing token program ID from remote");
-            };
-            assert!(
-                token_id == &::programs::token().id(),
-                "Local ID for token program is different from remote"
-            );
-            let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
-                panic!("Missing privacy preserving circuit ID from remote");
-            };
-            assert!(
-                circuit_id == &lee::PRIVACY_PRESERVING_CIRCUIT_ID,
-                "Local ID for privacy preserving circuit is different from remote"
-            );
-            let Some(amm_id) = remote_program_ids.get("amm") else {
-                panic!("Missing AMM program ID from remote");
-            };
-            assert!(
-                amm_id == &::programs::amm().id(),
-                "Local ID for AMM program is different from remote"
-            );
+                .context("failed to fetch remote program IDs")?;
+            validate_remote_program_ids(&remote_program_ids)?;
 
             println!("\u{2705}All looks good!");
 
@@ -300,6 +273,22 @@ pub async fn execute_subcommand(
         .context("Failed to rotate wallet")?;
 
     Ok(subcommand_ret)
+}
+
+fn validate_remote_program_ids(remote_program_ids: &BTreeMap<String, ProgramId>) -> Result<()> {
+    for (display_name, remote_name, expected_id) in
+        crate::network_profile::health_check_program_ids()
+    {
+        let remote_id = remote_program_ids.get(remote_name).ok_or_else(|| {
+            anyhow::anyhow!("remote did not report the {display_name} program ID")
+        })?;
+        anyhow::ensure!(
+            remote_id == &expected_id,
+            "local {display_name} program ID does not match the remote"
+        );
+    }
+
+    Ok(())
 }
 
 pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
@@ -409,7 +398,50 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    fn active_profile_ids() -> BTreeMap<String, ProgramId> {
+        crate::network_profile::health_check_program_ids()
+            .into_iter()
+            .map(|(_, remote_name, program_id)| (remote_name.to_owned(), program_id))
+            .collect()
+    }
+
+    #[test]
+    fn accepts_program_ids_from_the_active_profile() {
+        assert!(validate_remote_program_ids(&active_profile_ids()).is_ok());
+    }
+
+    #[test]
+    fn rejects_a_missing_remote_program_id_without_panicking() {
+        let mut program_ids = active_profile_ids();
+        program_ids.remove("amm");
+
+        let error = validate_remote_program_ids(&program_ids).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("remote did not report the AMM program ID")
+        );
+    }
+
+    #[test]
+    fn rejects_a_mismatched_remote_program_id_without_panicking() {
+        let mut program_ids = active_profile_ids();
+        program_ids.insert(
+            "token".to_owned(),
+            crate::network_profile::authenticated_transfer_id(),
+        );
+
+        let error = validate_remote_program_ids(&program_ids).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("local token program ID does not match the remote")
+        );
+    }
 
     #[test]
     fn read_keys_file_roundtrip() {
