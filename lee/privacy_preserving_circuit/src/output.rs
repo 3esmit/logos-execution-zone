@@ -1,7 +1,7 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
+    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
+    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -12,6 +12,7 @@ use crate::execution_state::ExecutionState;
 pub fn compute_circuit_output(
     execution_state: ExecutionState,
     account_identities: &[InputAccountIdentity],
+    dummy_inputs: Vec<DummyInput>,
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
         execution_state.into_parts();
@@ -262,7 +263,29 @@ pub fn compute_circuit_output(
         }
     }
 
+    for dummy in dummy_inputs {
+        emit_dummy_output(&mut output, dummy);
+    }
+
     output
+}
+
+fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
+    // Note: the nullifiers and commitments are generated from seeds.
+    // The prover is responsible for their randomness.
+    let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
+    let commitment = Commitment::for_dummy(&nullifier, &dummy.commitment_seed);
+    output
+        .new_nullifiers
+        .push((nullifier, dummy.commitment_root));
+    output.new_commitments.push(commitment);
+    // Note: the encrypted post states are pushed as fed into the circuit.
+    // That means that the prover is responsible for managing the randomness
+    // so as to not reveal the padding.
+    //
+    // In particular, it is recommended to generate the ML KEM ciphertext
+    // explicitly as these are not uniformly random.
+    output.encrypted_private_post_states.push(dummy.note);
 }
 
 #[expect(

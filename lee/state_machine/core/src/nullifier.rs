@@ -109,6 +109,14 @@ impl Nullifier {
         bytes.extend_from_slice(account_id.value());
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
+
+    #[must_use]
+    pub fn for_dummy(nullifier_seed: &[u8; 32]) -> Self {
+        const DUMMY_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Dummy/\x00\x00\x00\x00\x00\x00";
+        let mut bytes = DUMMY_PREFIX.to_vec();
+        bytes.extend_from_slice(nullifier_seed);
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
 }
 
 #[cfg(test)]
@@ -208,5 +216,15 @@ mod tests {
         let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
 
         assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn for_dummy_matches_pinned_value() {
+        let nullifier_seed = [0; 32];
+        let expected_nullifier = Nullifier([
+            244, 220, 48, 137, 204, 138, 180, 41, 108, 86, 40, 46, 187, 7, 232, 57, 57, 167, 143,
+            157, 125, 171, 137, 46, 64, 206, 191, 211, 231, 0, 11, 86,
+        ]);
+        assert_eq!(Nullifier::for_dummy(&nullifier_seed), expected_nullifier);
     }
 }

@@ -19,6 +19,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub account_identities: Vec<InputAccountIdentity>,
     /// Program ID.
     pub program_id: ProgramId,
+    pub dummy_inputs: Vec<DummyInput>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -91,6 +92,20 @@ pub enum InputAccountIdentity {
         /// the binding. The `pre_state` must have `is_authorized == false`.
         seed: Option<(PdaSeed, ProgramId)>,
     },
+}
+
+/// A struct containing necessary data for dummy nullifier and
+/// commitment generation.
+#[derive(Serialize, Deserialize)]
+pub struct DummyInput {
+    /// The seed used for generating the dummy nullifier.
+    pub nullifier_seed: [u8; 32],
+    /// The seed used for generating the dummy commitment.
+    pub commitment_seed: [u8; 32],
+    /// The dummy ciphertext, epk, and view tag.
+    pub note: EncryptedAccountData,
+    /// The dummy root.
+    pub commitment_root: CommitmentSetDigest,
 }
 
 impl InputAccountIdentity {
