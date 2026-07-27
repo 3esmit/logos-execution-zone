@@ -4,11 +4,15 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+## 0.4.0-alpha.2 - 2026-07-27
+
 ### Fixed
 
 - Native wallet and wallet FFI releases now use the immutable Testnet v0.2
   public-transfer program-ID profile and report incompatible program catalogs
   as errors instead of panicking.
+- Wallet cold starts use a bounded calibration default when historical
+  statistics are not yet available.
 
 ## 0.4.0-alpha.1 - 2026-07-24
 
