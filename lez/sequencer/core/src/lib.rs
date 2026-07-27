@@ -923,8 +923,11 @@ fn apply_follow_update(
         let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
         for (this_msg, block) in &finalized {
-            // FIXME: thread the finalized inscription's L1 slot once the
-            // sdk surfaces it; only used for the invalid-finalized stall.
+            // FIXME: thread the finalized inscription's L1 slot instead of
+            // `Slot::from(0)`; only used for the invalid-finalized stall.
+            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
+            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
+            // bumped past that (a separate PR).
             match chain.apply_finalized(*this_msg, block, Slot::from(0)) {
                 AcceptOutcome::Applied => {
                     to_persist.push((block, true));
