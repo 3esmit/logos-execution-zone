@@ -191,7 +191,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer_to_outer_account(
-        from_mention.into_public_identity(from_id),
+        from_mention.into_public_identity(from_id, true),
         to_npk,
         to_vpk,
         to_identifier,
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer(
-        from_mention.into_public_identity(from_id),
+        from_mention.into_public_identity(from_id, true),
         to_id,
         amount,
     )) {

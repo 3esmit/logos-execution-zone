@@ -10,7 +10,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use humantime_serde;
-use lee::AccountId;
+use lee::{AccountId, Balance};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -21,15 +21,15 @@ use url::Url;
 pub enum GenesisAction {
     SupplyAccount {
         account_id: AccountId,
-        balance: u128,
+        balance: Balance,
     },
     SupplyBridgeAccount {
-        balance: u128,
+        balance: Balance,
     },
     /// Seeds a bridge-lock holder's initial bridgeable balance into genesis state.
     SupplyBridgeLockHolding {
         holder: AccountId,
-        amount: u128,
+        amount: Balance,
     },
 }
 

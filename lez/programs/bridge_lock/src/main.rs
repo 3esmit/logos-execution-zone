@@ -1,4 +1,4 @@
-use bridge_lock_core::{Instruction, balance_bytes, escrow_account_id, escrow_seed, read_balance};
+use bridge_lock_core::{Instruction, escrow_account_id, escrow_seed};
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
     account::AccountWithMetadata,
@@ -36,7 +36,10 @@ fn main() {
     let WrappedInstruction::Mint {
         amount: mint_amount,
         ..
-    } = decode_mint(&payload);
+    } = decode_mint(&payload)
+    else {
+        panic!("bridge_lock payload must be a wrapped-token mint");
+    };
     assert_eq!(
         mint_amount, amount,
         "locked amount must equal the wrapped mint amount"
@@ -47,6 +50,10 @@ fn main() {
         .expect("Lock requires holder, escrow, and outbox accounts");
 
     assert!(holder.is_authorized, "holder must authorize the lock");
+    // The holder holding is bridge_lock-owned, so bridge_lock may debit its native
+    // balance directly (state-machine rule 5). This also pins the transfer to a
+    // genuine holding: a caller cannot substitute an account owned by some other
+    // program to emit the mint without an actual lock.
     assert_eq!(
         holder.account.program_owner, self_program_id,
         "holder account must be a bridge_lock holding"
@@ -57,25 +64,26 @@ fn main() {
         "second account must be the escrow PDA"
     );
 
-    let holder_new = read_balance(&holder.account.data.clone().into_inner())
+    // Move the real native balance holder -> escrow. bridge_lock owns both accounts,
+    // so it debits the holder and credits the escrow directly; conservation holds
+    // because the same amount moves between them.
+    let holder_new = holder
+        .account
+        .balance
         .checked_sub(amount)
         .expect("insufficient balance to lock");
-    let escrow_new = read_balance(&escrow.account.data.clone().into_inner())
+    let escrow_new = escrow
+        .account
+        .balance
         .checked_add(amount)
         .expect("escrow balance overflow");
 
     let mut holder_account = holder.account.clone();
-    holder_account.data = balance_bytes(holder_new)
-        .to_vec()
-        .try_into()
-        .expect("balance fits in account data");
+    holder_account.balance = holder_new;
     let holder_post = AccountPostState::new(holder_account);
 
     let mut escrow_account = escrow.account.clone();
-    escrow_account.data = balance_bytes(escrow_new)
-        .to_vec()
-        .try_into()
-        .expect("balance fits in account data");
+    escrow_account.balance = escrow_new;
     let escrow_post =
         AccountPostState::new_claimed_if_default(escrow_account, Claim::Pda(escrow_seed()));
 

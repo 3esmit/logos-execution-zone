@@ -12,7 +12,6 @@ use std::{path::Path, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
-use integration_tests::L2_TO_L1_TIMEOUT;
 use lee::{AccountId, PrivateKey, PublicKey};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use sequencer_core::config::GenesisAction;
@@ -23,6 +22,10 @@ use test_fixtures::{
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use tokio::test;
+
+/// Finalization can lag several minutes under CI load; give the bootstrap and
+/// reconstruction waits generous headroom so runner-speed variance does not flake.
+const FINALIZE_TIMEOUT: Duration = Duration::from_mins(12);
 
 /// Block cadence for the tests: short so we don't wait long for local production.
 fn fast_blocks() -> SequencerPartialConfig {
@@ -227,7 +230,7 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Wait until those blocks are finalized on Bedrock — reconstruction only
     // reads finalized history. A stays alive so its publish task keeps flushing.
-    let finalized = wait_for_finalized(&indexer, PRODUCED_TARGET, L2_TO_L1_TIMEOUT).await?;
+    let finalized = wait_for_finalized(&indexer, PRODUCED_TARGET, FINALIZE_TIMEOUT).await?;
 
     // Stop A, then wipe just its L2 store (keeping the bedrock signing key) so it
     // restarts from an empty store on the same channel/identity — a sequencer that
@@ -398,7 +401,7 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .await
         .context("Failed to start sequencer A")?;
     let client_a = sequencer_client(handle_a.addr())?;
-    let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, L2_TO_L1_TIMEOUT).await?;
+    let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, FINALIZE_TIMEOUT).await?;
     let tip_before = client_a.get_last_block_id().await?;
     assert!(
         tip_before > finalized,
@@ -501,7 +504,7 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
             .setup_at(home.path())
             .await
             .context("Failed to resume sequencer")?;
-        let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, L2_TO_L1_TIMEOUT).await?;
+        let finalized = wait_for_finalized(&indexer, FINALIZED_TARGET, FINALIZE_TIMEOUT).await?;
         drop(handle);
         tokio::time::sleep(Duration::from_secs(2)).await;
         finalized

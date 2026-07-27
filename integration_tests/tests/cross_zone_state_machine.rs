@@ -54,7 +54,7 @@ fn seed_inbox_config(
         allowed_peers: BTreeMap::new(),
         allowed_targets,
     };
-    state.insert_genesis_account(
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
         Account {
             program_owner: inbox_id,
@@ -65,14 +65,14 @@ fn seed_inbox_config(
                 .expect("config fits in account data"),
             nonce: 0_u128.into(),
         },
-    );
+    )]);
 }
 
 /// Seeds the wrapped-token config account pinning the inbox as authorized minter,
 /// matching what genesis seeds for a real zone.
 fn seed_wrapped_config(state: &mut V03State) {
     let wrapped_token_id = programs::wrapped_token().id();
-    state.insert_genesis_account(
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
         Account {
             program_owner: wrapped_token_id,
@@ -82,7 +82,7 @@ fn seed_wrapped_config(state: &mut V03State) {
                 .expect("minter id fits in account data"),
             ..Default::default()
         },
-    );
+    )]);
 }
 
 /// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
@@ -170,18 +170,14 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    state.insert_genesis_account(
+    state = state.with_public_accounts([(
         holder_id,
         Account {
             program_owner: bridge_lock_id,
-            balance: 0,
-            data: bridge_lock_core::balance_bytes(INITIAL_BALANCE)
-                .to_vec()
-                .try_into()
-                .expect("balance fits in account data"),
-            nonce: 0_u128.into(),
+            balance: INITIAL_BALANCE,
+            ..Default::default()
         },
-    );
+    )]);
 
     let payload = mint_payload();
     let target_accounts = vec![
@@ -214,16 +210,14 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
-    let holder_after =
-        bridge_lock_core::read_balance(&public_diff[&holder_id].data.clone().into_inner());
+    let holder_after = public_diff[&holder_id].balance;
     assert_eq!(
         holder_after,
         INITIAL_BALANCE - LOCK_AMOUNT,
         "holder debited"
     );
 
-    let escrow_after =
-        bridge_lock_core::read_balance(&public_diff[&escrow_id].data.clone().into_inner());
+    let escrow_after = public_diff[&escrow_id].balance;
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
     let record =
@@ -314,7 +308,7 @@ fn mint_replay_rejected() {
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(message_key(&src_zone, src_block_id, src_tx_index));
-    state.insert_genesis_account(
+    state = state.with_public_accounts([(
         seen_id,
         Account {
             program_owner: inbox_id,
@@ -325,7 +319,7 @@ fn mint_replay_rejected() {
                 .expect("shard fits in account data"),
             nonce: 0_u128.into(),
         },
-    );
+    )]);
 
     let msg = CrossZoneMessage {
         src_zone,

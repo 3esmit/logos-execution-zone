@@ -1,10 +1,13 @@
 use cross_zone_inbox_core::{
-    InboxConfig, Instruction, SeenShard, inbox_config_account_id, inbox_seen_shard_account_id,
-    inbox_seen_shard_seed, message_key,
+    CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
+    inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed, message_key,
 };
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{Account, AccountWithMetadata},
+    program::{
+        AccountPostState, ChainedCall, Claim, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 
 fn unchanged(pre: &AccountWithMetadata) -> AccountPostState {
@@ -27,8 +30,32 @@ fn main() {
         "Inbox is only invoked as a top-level sequencer-origin transaction"
     );
 
-    let Instruction::Dispatch(msg) = instruction;
+    match instruction {
+        Instruction::Dispatch(msg) => dispatch(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+            &msg,
+        ),
+        Instruction::InitConfig(config) => init_config(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+            &config,
+        ),
+    }
+}
 
+/// Delivers a finalized peer message to its target program, no-op on replay.
+fn dispatch(
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+    msg: &CrossZoneMessage,
+) {
     assert!(
         msg.l1_inclusion_witness.is_none(),
         "l1_inclusion_witness must be None in v1"
@@ -121,5 +148,58 @@ fn main() {
         post_states,
     )
     .with_chained_calls(chained_calls)
+    .write();
+}
+
+/// Writes the inbox config (peer + target allowlists) into the config PDA exactly
+/// once at genesis.
+fn init_config(
+    self_program_id: ProgramId,
+    caller_program_id: Option<ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+    config: &InboxConfig,
+) {
+    // pre_states: [config PDA].
+    let [config_meta] = <[AccountWithMetadata; 1]>::try_from(pre_states)
+        .expect("InitConfig requires the config account");
+    assert_eq!(
+        config_meta.account_id,
+        inbox_config_account_id(self_program_id),
+        "account must be the inbox config PDA"
+    );
+    // Init-once, idempotent under genesis replay: a `default` config is a first
+    // init; an already-owned config must already hold exactly these allowlists (the
+    // genesis block is replayed onto seeded state during multi-sequencer
+    // reconstruction), otherwise reject a post-genesis attempt to change them.
+    // `new_claimed_if_default` alone would not stop the owning program from
+    // rewriting its own config data on a later call.
+    if config_meta.account != Account::default() {
+        assert_eq!(
+            config_meta.account.program_owner, self_program_id,
+            "inbox config PDA is owned by another program"
+        );
+        assert_eq!(
+            config_meta.account.data.clone().into_inner(),
+            config.to_bytes(),
+            "inbox config already initialized with different allowlists"
+        );
+    }
+
+    let mut config_account = config_meta.account.clone();
+    config_account.data = config
+        .to_bytes()
+        .try_into()
+        .expect("inbox config fits in account data");
+    let config_post =
+        AccountPostState::new_claimed_if_default(config_account, Claim::Pda(inbox_config_seed()));
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        vec![config_meta],
+        vec![config_post],
+    )
     .write();
 }

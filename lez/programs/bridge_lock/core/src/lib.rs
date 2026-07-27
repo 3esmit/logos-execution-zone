@@ -39,29 +39,9 @@ pub const fn escrow_seed() -> PdaSeed {
     PdaSeed::new(ESCROW_SEED_DOMAIN)
 }
 
-/// Reads a bridgeable balance from account data; empty data is a zero balance.
-#[must_use]
-pub fn read_balance(data: &[u8]) -> u128 {
-    if data.len() < 16 {
-        return 0;
-    }
-    u128::from_le_bytes(data[..16].try_into().unwrap_or_else(|_| unreachable!()))
-}
-
-#[must_use]
-pub const fn balance_bytes(amount: u128) -> [u8; 16] {
-    amount.to_le_bytes()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn balance_round_trips() {
-        assert_eq!(read_balance(&balance_bytes(7)), 7);
-        assert_eq!(read_balance(&[]), 0);
-    }
 
     #[test]
     fn escrow_is_stable() {

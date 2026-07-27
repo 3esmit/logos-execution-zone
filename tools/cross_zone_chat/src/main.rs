@@ -442,7 +442,9 @@ async fn poll_finality(state: Arc<AppState>) {
 fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
     let instruction: Instruction =
         risc0_zkvm::serde::from_slice::<Instruction, u32>(instruction_data).ok()?;
-    let Instruction::Dispatch(message) = instruction;
+    let Instruction::Dispatch(message) = instruction else {
+        return None;
+    };
     decode_payload(&message.payload)
 }
 
