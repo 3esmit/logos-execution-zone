@@ -75,6 +75,20 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+/// Config for test context in multi-node case.
+///
+/// For now have only one field: `num_nodes`.
+pub struct MultiNodeTestContextConfig {
+    pub num_nodes: usize,
+}
+
+impl Default for MultiNodeTestContextConfig {
+    fn default() -> Self {
+        Self { num_nodes: 1 }
+    }
+}
+
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
@@ -211,13 +225,19 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
-    Ok(WalletConfig {
-        sequencers: vec![SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
+pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
+    let mut sequencers = vec![];
+
+    for addr in sequencer_addrs {
+        sequencers.push(SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        }],
+        });
+    }
+
+    Ok(WalletConfig {
+        sequencers,
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,

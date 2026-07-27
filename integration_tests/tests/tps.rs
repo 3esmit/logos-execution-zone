@@ -29,6 +29,7 @@ use lee_core::{
 use log::info;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::config::MultiNodeTestContextConfig;
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -177,7 +178,7 @@ pub async fn tps_test() -> Result<()> {
     let target_tps = 8;
 
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
-    let ctx = TestContext::builder()
+    let ctx = TestContext::builder(MultiNodeTestContextConfig::default())
         .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
         .with_genesis(tps_test.generate_genesis())
         .build()

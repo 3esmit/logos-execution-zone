@@ -1,7 +1,7 @@
 //! Shared test/bench fixtures: spins up bedrock + sequencer + indexer + wallet
 //! end-to-end against docker-compose, exposes a `TestContext` callers can drive.
 
-use std::{net::SocketAddr, path::Path, sync::LazyLock};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
@@ -22,6 +22,7 @@ use wallet::{
 };
 
 use crate::{
+    config::MultiNodeTestContextConfig,
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
@@ -76,28 +77,36 @@ pub struct DiskSizes {
 /// as each instance uses its own temporary directories for sequencer and wallet data.
 // NOTE: Order of fields is important for proper drop order.
 pub struct TestContext {
-    sequencer_client: SequencerClient,
+    sequencer_clients: HashMap<SocketAddr, SequencerClient>,
     wallet: WalletCore,
     wallet_password: String,
     /// Optional to move out value in Drop.
-    sequencer_handle: Option<SequencerHandle>,
+    sequencer_handles: Option<Vec<SequencerHandle>>,
     indexer_components: Option<IndexerComponents>,
     bedrock_compose: DockerCompose,
     bedrock_addr: SocketAddr,
-    temp_sequencer_dir: TempDir,
+    temp_sequencer_dirs: Vec<TempDir>,
     temp_wallet_dir: TempDir,
+    config: MultiNodeTestContextConfig,
 }
 
 impl TestContext {
     /// Create new test context.
+    pub async fn new_custom(config: MultiNodeTestContextConfig) -> Result<Self> {
+        Self::builder(config).build().await
+    }
+
+    /// Create new test context with default config.
     pub async fn new() -> Result<Self> {
-        Self::builder().build().await
+        Self::builder(MultiNodeTestContextConfig::default())
+            .build()
+            .await
     }
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder() -> TestContextBuilder {
-        TestContextBuilder::new()
+    pub fn builder(config: MultiNodeTestContextConfig) -> TestContextBuilder {
+        TestContextBuilder::new(config)
     }
 
     /// Get reference to the wallet.
@@ -116,10 +125,19 @@ impl TestContext {
         &mut self.wallet
     }
 
+    /// Get reference to the sequencer client in default case (1 sequencer).
+    #[must_use]
+    pub fn sequencer_client(&self) -> &SequencerClient {
+        self.sequencer_clients
+            .values()
+            .next()
+            .expect("Must be at least one sequencer client")
+    }
+
     /// Get reference to the sequencer client.
     #[must_use]
-    pub const fn sequencer_client(&self) -> &SequencerClient {
-        &self.sequencer_client
+    pub fn sequencer_client_getter(&self, addr: &SocketAddr) -> Option<&SequencerClient> {
+        self.sequencer_clients.get(addr)
     }
 
     /// Get the Bedrock Node address.
@@ -166,12 +184,21 @@ impl TestContext {
             .expect("Called `TestContext::indexer_client()` on context with disabled indexer")
     }
 
+    #[must_use]
+    /// Get the multi-node config.
+    pub const fn config(&self) -> &MultiNodeTestContextConfig {
+        &self.config
+    }
+
     /// Recursively-sized bytes on disk for sequencer + indexer + wallet tempdirs.
     /// Indexer bytes are zero if the indexer is disabled.
     #[must_use]
     pub fn disk_sizes(&self) -> DiskSizes {
         DiskSizes {
-            sequencer_bytes: dir_size_bytes(self.temp_sequencer_dir.path()),
+            sequencer_bytes: self
+                .temp_sequencer_dirs
+                .iter()
+                .fold(0, |acc, dir| acc.saturating_add(dir_size_bytes(dir.path()))),
             indexer_bytes: self
                 .indexer_components
                 .as_ref()
@@ -206,28 +233,32 @@ impl TestContext {
 impl Drop for TestContext {
     fn drop(&mut self) {
         let Self {
-            sequencer_handle,
+            sequencer_handles,
             bedrock_compose,
             bedrock_addr: _,
             indexer_components: _,
-            sequencer_client: _,
+            sequencer_clients: _,
             wallet: _,
             wallet_password: _,
-            temp_sequencer_dir: _,
+            temp_sequencer_dirs: _,
             temp_wallet_dir: _,
+            config: _,
         } = self;
 
-        let sequencer_handle = sequencer_handle
+        let sequencer_handles = sequencer_handles
             .take()
             .expect("Sequencer handle should be present in TestContext drop");
-        if !sequencer_handle.is_healthy() {
-            let Err(err) = sequencer_handle
-                .failed()
-                .now_or_never()
-                .expect("Sequencer handle should not be running");
-            error!(
-                "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
-            );
+
+        for sequencer_handle in sequencer_handles {
+            if !sequencer_handle.is_healthy() {
+                let Err(err) = sequencer_handle
+                    .failed()
+                    .now_or_never()
+                    .expect("Sequencer handle should not be running");
+                error!(
+                    "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
+                );
+            }
         }
 
         let container = bedrock_compose
@@ -256,16 +287,18 @@ pub struct TestContextBuilder {
     enable_indexer: bool,
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
+    config: MultiNodeTestContextConfig,
 }
 
 impl TestContextBuilder {
-    fn new() -> Self {
+    fn new(config: MultiNodeTestContextConfig) -> Self {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
             enable_indexer: true,
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
+            config,
         }
     }
 
@@ -320,6 +353,7 @@ impl TestContextBuilder {
             enable_indexer,
             wallet_config_overrides,
             from_scratch,
+            config,
         } = self;
 
         // Ensure logger is initialized only once
@@ -357,29 +391,48 @@ impl TestContextBuilder {
 
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
-        let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
-        if !use_prebuilt {
-            // Wallet genesis must always be present so that
-            // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
-            // When a test supplies custom genesis, merge rather than replace.
-            let wallet_genesis =
-                config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
-            let genesis = match genesis_transactions {
-                Some(mut custom) => {
-                    custom.extend(wallet_genesis);
-                    custom
-                }
-                None => wallet_genesis,
-            };
-            sequencer_setup = sequencer_setup.with_genesis(genesis);
+        let mut sequencer_handles = vec![];
+        let mut temp_sequencer_dirs = vec![];
+        let mut sequencer_clients = HashMap::new();
+
+        for _ in 0..config.num_nodes {
+            let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
+            if !use_prebuilt {
+                // Wallet genesis must always be present so that
+                // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
+                // When a test supplies custom genesis, merge rather than replace.
+                let wallet_genesis = config::genesis_from_accounts(
+                    &initial_public_accounts,
+                    &initial_private_accounts,
+                );
+                let genesis = match genesis_transactions.clone() {
+                    Some(mut custom) => {
+                        custom.extend(wallet_genesis);
+                        custom
+                    }
+                    None => wallet_genesis,
+                };
+                sequencer_setup = sequencer_setup.with_genesis(genesis);
+            }
+            let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
+                .setup()
+                .await
+                .context("Failed to setup Sequencer")?;
+
+            let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
+                .context("Failed to create sequencer client")?;
+
+            sequencer_clients.insert(sequencer_handle.addr(), sequencer_client);
+
+            sequencer_handles.push(sequencer_handle);
+            temp_sequencer_dirs.push(temp_sequencer_dir);
         }
-        let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-            .setup()
-            .await
-            .context("Failed to setup Sequencer")?;
 
         let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
-            sequencer_handle.addr(),
+            &sequencer_handles
+                .iter()
+                .map(sequencer_service::SequencerHandle::addr)
+                .collect::<Vec<_>>(),
             &initial_public_accounts,
             &initial_private_accounts,
             wallet_config_overrides,
@@ -402,19 +455,17 @@ impl TestContextBuilder {
                 .context("Failed to initialize private accounts in wallet")?;
         }
 
-        let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
-            .context("Failed to create sequencer client")?;
-
         Ok(TestContext {
-            sequencer_client,
+            sequencer_clients,
             wallet,
             wallet_password,
             bedrock_compose,
             bedrock_addr,
-            sequencer_handle: Some(sequencer_handle),
+            sequencer_handles: Some(sequencer_handles),
             indexer_components,
-            temp_sequencer_dir,
+            temp_sequencer_dirs,
             temp_wallet_dir,
+            config,
         })
     }
 
@@ -437,8 +488,8 @@ pub struct BlockingTestContext {
 }
 
 impl BlockingTestContext {
-    pub fn new() -> Result<Self> {
-        TestContext::builder().build_blocking()
+    pub fn new(config: MultiNodeTestContextConfig) -> Result<Self> {
+        TestContext::builder(config).build_blocking()
     }
 
     pub const fn ctx(&self) -> &TestContext {
