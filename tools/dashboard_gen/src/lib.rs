@@ -11,28 +11,27 @@
 //!
 //! Build a [`Dashboard`] and serialize it directly.
 
+// Styling vocabularies passed to the optional `styling` setters are part of the
+// public API (and are used by this module's `Panel` fields and `finalize`).
+pub use codegen::panel_to_rust_source;
+pub use schema::{AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode};
 use schema::{
-    Calc, Color, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GraphMode,
+    Calc, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GraphMode,
     GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind, Options, OverrideProperty,
     PanelModel, PanelType, Placement, PropertyId, PropertyValue, ReduceOptions, SortOrder,
-    StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip, TooltipMode,
+    Stacking, StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip, TooltipMode,
 };
 use serde::Serialize;
 
+mod codegen;
+mod input;
 mod schema;
+mod styling;
 
 /// Datasource uid every panel/target points at. Dashboards stay portable across
 /// environments because they reference the datasource by this stable uid rather
 /// than by a per-environment URL.
 pub const DATASOURCE_UID: &str = "prometheus";
-
-fn default_unit() -> String {
-    "short".to_owned()
-}
-
-fn ref_letter(index: usize) -> String {
-    ((b'A' + index as u8) as char).to_string()
-}
 
 /// A single Prometheus query within a panel.
 #[derive(Clone, Serialize)]
@@ -55,6 +54,7 @@ impl Target {
         }
     }
 
+    #[must_use]
     pub fn legend(mut self, legend: impl Into<String>) -> Self {
         self.legend = legend.into();
         self
@@ -79,14 +79,16 @@ impl FieldOverride {
         }
     }
 
-    pub fn fixed_color(mut self, color: impl Into<String>) -> Self {
+    #[must_use]
+    pub fn color(mut self, color: Color) -> Self {
         self.properties.push(OverrideProperty {
             id: PropertyId::Color,
-            value: PropertyValue::Color(Color::fixed(color.into())),
+            value: PropertyValue::Color(color),
         });
         self
     }
 
+    #[must_use]
     pub fn dashed_line(mut self) -> Self {
         self.properties.push(OverrideProperty {
             id: PropertyId::LineStyle,
@@ -114,9 +116,16 @@ pub struct Panel {
     width: u32,
     unit: Option<String>,
     decimals: Option<u32>,
-    fixed_color: Option<String>,
+    color: Option<Color>,
     span_nulls: bool,
     overrides: Vec<FieldOverride>,
+    // Optional timeseries styling, set via the `styling` setters.
+    line_interpolation: Option<LineInterpolation>,
+    show_points: Option<ShowPoints>,
+    gradient_mode: Option<GradientMode>,
+    stacking: Option<StackingMode>,
+    axis_placement: Option<AxisPlacement>,
+    axis_label: Option<String>,
 }
 
 impl Panel {
@@ -128,9 +137,15 @@ impl Panel {
             width: 0,
             unit: None,
             decimals: None,
-            fixed_color: None,
+            color: None,
             span_nulls: false,
             overrides: Vec::new(),
+            line_interpolation: None,
+            show_points: None,
+            gradient_mode: None,
+            stacking: None,
+            axis_placement: None,
+            axis_label: None,
         }
     }
 
@@ -146,41 +161,49 @@ impl Panel {
 
     /// Grid width in Grafana's 24-column units. Unset panels split the row's
     /// remaining width evenly.
-    pub fn width(mut self, width: u32) -> Self {
+    #[must_use]
+    pub const fn width(mut self, width: u32) -> Self {
         self.width = width;
         self
     }
 
+    #[must_use]
     pub fn unit(mut self, unit: impl Into<String>) -> Self {
         self.unit = Some(unit.into());
         self
     }
 
-    pub fn decimals(mut self, decimals: u32) -> Self {
+    #[must_use]
+    pub const fn decimals(mut self, decimals: u32) -> Self {
         self.decimals = Some(decimals);
         self
     }
 
-    pub fn fixed_color(mut self, color: impl Into<String>) -> Self {
-        self.fixed_color = Some(color.into());
+    #[must_use]
+    pub fn color(mut self, color: Color) -> Self {
+        self.color = Some(color);
         self
     }
 
-    pub fn span_nulls(mut self) -> Self {
+    #[must_use]
+    pub const fn span_nulls(mut self) -> Self {
         self.span_nulls = true;
         self
     }
 
+    #[must_use]
     pub fn target(mut self, target: Target) -> Self {
         self.targets.push(target);
         self
     }
 
+    #[must_use]
     pub fn targets(mut self, targets: impl IntoIterator<Item = Target>) -> Self {
         self.targets.extend(targets);
         self
     }
 
+    #[must_use]
     pub fn with_override(mut self, over: FieldOverride) -> Self {
         self.overrides.push(over);
         self
@@ -201,7 +224,7 @@ impl Panel {
         let (defaults, options, panel_type) = match self.kind {
             Kind::Stat => {
                 let defaults = Defaults {
-                    color: self.fixed_color.map(Color::fixed),
+                    color: self.color,
                     custom: None,
                     unit,
                     decimals: self.decimals,
@@ -211,7 +234,7 @@ impl Panel {
                     graph_mode: GraphMode::Area,
                     reduce_options: ReduceOptions {
                         calcs: vec![Calc::LastNotNull],
-                        fields: "",
+                        fields: String::new(),
                         values: false,
                     },
                 });
@@ -225,6 +248,15 @@ impl Panel {
                         line_width: 1,
                         fill_opacity: 10,
                         span_nulls: self.span_nulls.then_some(true),
+                        line_interpolation: self.line_interpolation,
+                        show_points: self.show_points,
+                        gradient_mode: self.gradient_mode,
+                        stacking: self.stacking.map(|mode| Stacking {
+                            mode,
+                            group: "A".to_owned(),
+                        }),
+                        axis_placement: self.axis_placement,
+                        axis_label: self.axis_label,
                     }),
                     unit,
                     decimals: None,
@@ -310,8 +342,8 @@ impl Dashboard {
             tags: Vec::new(),
             templating: EmptyList::default(),
             time: TimeRange {
-                from: "now-15m",
-                to: "now",
+                from: "now-15m".to_owned(),
+                to: "now".to_owned(),
             },
             timezone: String::new(),
             title: title.into(),
@@ -321,11 +353,13 @@ impl Dashboard {
         }
     }
 
+    #[must_use]
     pub fn tag(mut self, tag: impl Into<String>) -> Self {
         self.tags.push(tag.into());
         self
     }
 
+    #[must_use]
     pub fn refresh(mut self, refresh: impl Into<String>) -> Self {
         self.refresh = refresh.into();
         self
@@ -334,15 +368,17 @@ impl Dashboard {
     /// Place a horizontal row of panels at the current vertical cursor. Panel
     /// ids, x offsets and y are assigned here; unset widths split the remaining
     /// 24 columns evenly.
+    #[must_use]
     pub fn row(mut self, height: u32, panels: impl IntoIterator<Item = Panel>) -> Self {
         let panels: Vec<Panel> = panels.into_iter().collect();
         let specified: u32 = panels.iter().map(|p| p.width).sum();
-        let auto_count = panels.iter().filter(|p| p.width == 0).count() as u32;
-        let auto_width = if auto_count > 0 {
-            24u32.saturating_sub(specified) / auto_count
-        } else {
-            0
-        };
+        let auto_count = u32::try_from(panels.iter().filter(|p| p.width == 0).count()).unwrap_or(0);
+        // `checked_div` yields `None` when there are no auto-width panels; the
+        // fallback width is unused in that case.
+        let auto_width = 24_u32
+            .saturating_sub(specified)
+            .checked_div(auto_count)
+            .unwrap_or(0);
 
         let mut x = 0;
         for panel in panels {
@@ -358,28 +394,33 @@ impl Dashboard {
                 y: self.cursor_y,
             };
             let id = self.next_id;
-            self.next_id += 1;
-            x += w;
+            self.next_id = self.next_id.saturating_add(1);
+            x = x.saturating_add(w);
             self.panels.push(panel.finalize(id, grid_pos));
         }
-        self.cursor_y += height;
+        self.cursor_y = self.cursor_y.saturating_add(height);
         self
     }
 }
 
 /// Percentile line targets for a summary metric: `p50`, `p90`, … each querying
 /// the matching `quantile="0.x"` series.
+#[must_use]
 pub fn percentiles(metric: &str, percentiles: &[u32]) -> Vec<Target> {
     percentiles_labeled(metric, percentiles, "")
 }
 
 /// Like [`percentiles`], but appends `legend_suffix` to every legend — handy
 /// when the metric carries labels (e.g. ` · {{kind}} · {{origin}}`).
+#[must_use]
 pub fn percentiles_labeled(metric: &str, percentiles: &[u32], legend_suffix: &str) -> Vec<Target> {
     percentiles
         .iter()
         .map(|&p| {
-            let quantile = f64::from(p) / 100.0;
+            // `quantile="0.x"` label, derived without float math: zero-pad to two
+            // digits then drop trailing zeros (50 → "0.5", 95 → "0.95").
+            let quantile = format!("0.{p:02}");
+            let quantile = quantile.trim_end_matches('0');
             Target::new(format!("{metric}{{quantile=\"{quantile}\"}}"))
                 .legend(format!("p{p}{legend_suffix}"))
         })
@@ -387,11 +428,22 @@ pub fn percentiles_labeled(metric: &str, percentiles: &[u32], legend_suffix: &st
 }
 
 /// An `avg` target for a summary metric: `rate(sum) / rate(count)` over 1m.
+#[must_use]
 pub fn avg(metric: &str) -> Target {
     Target::new(format!("rate({metric}_sum[1m]) / rate({metric}_count[1m])")).legend("avg")
 }
 
 /// A per-minute rate target for a counter metric.
+#[must_use]
 pub fn rate_per_min(metric: &str, legend: &str) -> Target {
     Target::new(format!("rate({metric}[1m]) * 60")).legend(legend)
+}
+
+fn default_unit() -> String {
+    "short".to_owned()
+}
+
+fn ref_letter(index: usize) -> String {
+    let offset = u8::try_from(index).unwrap_or(0);
+    char::from(b'A'.saturating_add(offset)).to_string()
 }

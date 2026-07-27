@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
-# NOTE: experiment — intentionally NOT inheriting `[lints] workspace = true`.
-# If we keep this crate, turn workspace lints on and fix the fallout.
+[lints]
+workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive", "alloc"] }

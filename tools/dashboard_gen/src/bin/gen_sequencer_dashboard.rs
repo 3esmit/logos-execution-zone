@@ -1,12 +1,17 @@
 //! Generates the sequencer dashboard and prints it to stdout.
-//!
-//! Compare against the committed file:
-//!   cargo run -p dashboard_gen | diff - monitoring/grafana/dashboards/sequencer.json
-//! Regenerate it:
-//!   cargo run -p dashboard_gen > monitoring/grafana/dashboards/sequencer.json
+
+#![expect(
+    clippy::print_stdout,
+    reason = "CLI tool: emitting the dashboard JSON on stdout is the deliverable"
+)]
+#![expect(
+    clippy::non_ascii_literal,
+    reason = "legend separators use `·` intentionally, matching the rendered Grafana labels"
+)]
 
 use dashboard_gen::{
-    Dashboard, FieldOverride, Panel, Target, avg, percentiles, percentiles_labeled, rate_per_min,
+    Color, Dashboard, FieldOverride, Panel, Target, avg, percentiles, percentiles_labeled,
+    rate_per_min,
 };
 use json_pretty_compact::PrettyCompactFormatter;
 use serde::Serialize as _;
@@ -35,7 +40,7 @@ fn sequencer_dashboard() -> Dashboard {
                     .width(6)
                     .unit("short")
                     .decimals(0)
-                    .fixed_color("blue")
+                    .color(Color::fixed("blue"))
                     .target(Target::new(BLOCK_COUNT).legend("height")),
                 Panel::timeseries("Block production rate")
                     .width(18)
@@ -53,7 +58,7 @@ fn sequencer_dashboard() -> Dashboard {
                 .with_override(
                     FieldOverride::by_name("avg")
                         .dashed_line()
-                        .fixed_color("text"),
+                        .color(Color::fixed("text")),
                 )],
         )
         .row(
@@ -85,15 +90,17 @@ fn sequencer_dashboard() -> Dashboard {
                     .with_override(
                         FieldOverride::by_name("avg")
                             .dashed_line()
-                            .fixed_color("text"),
+                            .color(Color::fixed("text")),
                     ),
                 Panel::timeseries("Transaction throughput (per minute)")
                     .width(12)
                     .unit("short")
                     .target(rate_per_min(SUBMITTED_TX, "submitted"))
                     .target(rate_per_min(FAILED_TX, "failed"))
-                    .with_override(FieldOverride::by_name("failed").fixed_color("red"))
-                    .with_override(FieldOverride::by_name("submitted").fixed_color("green")),
+                    .with_override(FieldOverride::by_name("failed").color(Color::fixed("red")))
+                    .with_override(
+                        FieldOverride::by_name("submitted").color(Color::fixed("green")),
+                    ),
             ],
         )
 }

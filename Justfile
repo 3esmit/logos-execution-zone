@@ -57,8 +57,14 @@ regenerate-test-fixture:
 # (tools/dashboard_gen) and commit the result. CI checks these are up to date.
 regenerate-dashboards:
     @echo "📊 Regenerating Grafana dashboards"
-    @cargo build -q -p dashboard_gen
-    @cargo run -q -p dashboard_gen > monitoring/grafana/dashboards/sequencer.json
+    @cargo build -q -p dashboard_gen --bin gen_sequencer_dashboard
+    @cargo run -q -p dashboard_gen --bin gen_sequencer_dashboard > monitoring/grafana/dashboards/sequencer.json
+
+# Transpile a single Grafana panel JSON (stdin) — Inspect → Panel JSON — into a
+# Rust builder expression (stdout), omitting Grafana defaults. Paste into a row.
+# Usage: `just panel-to-rust < panel.json`.
+panel-to-rust:
+    @cargo run -q -p dashboard_gen --bin panel_json_to_rust
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:

@@ -1,7 +1,12 @@
 //! The serializable Grafana dashboard schema — the internal data model the
 //! public builders assemble into.
+//!
+//! Most types are `Serialize`-only, sized for what we *emit*. A handful of
+//! vocabularies (`PanelType`, `Color`, and the styling enums) additionally
+//! derive `Deserialize` because the lenient `input` model — which backs the
+//! panel→Rust transpiler — reuses them.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{DATASOURCE_UID, FieldOverride, Target};
 
@@ -9,12 +14,6 @@ use crate::{DATASOURCE_UID, FieldOverride, Target};
 #[serde(rename_all = "lowercase")]
 pub enum DatasourceKind {
     Prometheus,
-}
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ColorMode {
-    Fixed,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -89,42 +88,129 @@ pub enum SortOrder {
     Desc,
 }
 
-#[derive(Clone, Copy, Serialize)]
+// Reused by the `input` model, hence `Deserialize`.
+#[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PanelType {
     Stat,
     Timeseries,
 }
 
+// Optional timeseries styling vocabularies. Each derives `PartialEq` so the
+// public setters can panic when handed the Grafana default (see `styling`), and
+// `Deserialize` because the `input` model reuses them.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LineInterpolation {
+    Linear,
+    Smooth,
+    StepBefore,
+    StepAfter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShowPoints {
+    Auto,
+    Never,
+    Always,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GradientMode {
+    None,
+    Opacity,
+    Hue,
+    Scheme,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StackingMode {
+    None,
+    Normal,
+    Percent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AxisPlacement {
+    Auto,
+    Left,
+    Right,
+    Hidden,
+}
+
+#[derive(Serialize)]
+pub struct Stacking {
+    pub mode: StackingMode,
+    pub group: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Custom {
+    pub draw_style: DrawStyle,
+    pub line_width: u32,
+    pub fill_opacity: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span_nulls: Option<bool>,
+    // Optional styling — omitted (left at Grafana's default) unless a setter
+    // fills it in. See `styling`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_interpolation: Option<LineInterpolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_points: Option<ShowPoints>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gradient_mode: Option<GradientMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stacking: Option<Stacking>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_placement: Option<AxisPlacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis_label: Option<String>,
+}
+
 #[derive(Clone, Serialize)]
 pub struct Datasource {
     #[serde(rename = "type")]
     pub kind: DatasourceKind,
-    pub uid: &'static str,
+    pub uid: String,
 }
 
 impl Datasource {
     pub fn prometheus() -> Self {
         Self {
             kind: DatasourceKind::Prometheus,
-            uid: DATASOURCE_UID,
+            uid: DATASOURCE_UID.to_owned(),
         }
     }
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Color {
-    pub mode: ColorMode,
-    pub fixed_color: String,
+// Reused by the `input` model, hence `Deserialize`.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+#[serde(tag = "mode")]
+pub enum Color {
+    Fixed {
+        #[serde(rename = "fixedColor")]
+        fixed_color: String,
+    },
+    PaletteClassic,
 }
 
 impl Color {
-    pub fn fixed(color: String) -> Self {
-        Self {
-            mode: ColorMode::Fixed,
-            fixed_color: color,
+    pub fn fixed(color: impl Into<String>) -> Self {
+        Self::Fixed {
+            fixed_color: color.into(),
         }
+    }
+
+    #[must_use]
+    pub const fn palette_classic() -> Self {
+        Self::PaletteClassic
     }
 }
 
@@ -154,23 +240,13 @@ pub struct Matcher {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Custom {
-    pub draw_style: DrawStyle,
-    pub line_width: u32,
-    pub fill_opacity: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub span_nulls: Option<bool>,
-}
-
-#[derive(Serialize)]
 pub struct Defaults {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<Custom>,
     pub unit: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
 }
 
@@ -184,7 +260,7 @@ pub struct FieldConfig {
 pub struct ReduceOptions {
     pub calcs: Vec<Calc>,
     // Empty string means "all fields"; genuinely free-form, not a vocabulary.
-    pub fields: &'static str,
+    pub fields: String,
     pub values: bool,
 }
 
@@ -207,7 +283,7 @@ pub struct Legend {
 #[derive(Serialize)]
 pub struct Tooltip {
     pub mode: TooltipMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sort: Option<SortOrder>,
 }
 
@@ -247,6 +323,10 @@ pub struct PanelModel {
     pub panel_type: PanelType,
 }
 
+#[expect(
+    clippy::trailing_empty_array,
+    reason = "Grafana expects `list: []` for the blocks we don't populate"
+)]
 #[derive(Serialize, Default)]
 pub struct EmptyList {
     pub list: [u8; 0],
@@ -255,6 +335,6 @@ pub struct EmptyList {
 #[derive(Serialize)]
 pub struct TimeRange {
     // Free-form Grafana time expressions, not a closed vocabulary.
-    pub from: &'static str,
-    pub to: &'static str,
+    pub from: String,
+    pub to: String,
 }
