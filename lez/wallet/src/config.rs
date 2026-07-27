@@ -7,7 +7,10 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-const DEFAULT_CALLIBRATION_LIMIT: usize = 100;
+// A wallet without persisted statistics calibrates synchronously during open.
+// Keep the default small enough for interactive module hosts; callers that need
+// a deeper sample can still set `calibration_limit` explicitly.
+const DEFAULT_CALLIBRATION_LIMIT: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
@@ -280,6 +283,17 @@ mod tests {
         assert_eq!(config.seq_poll_max_retries, 13);
         assert_eq!(config.seq_block_poll_max_amount, 17);
         assert_eq!(config.calibration_limit, DEFAULT_CALLIBRATION_LIMIT);
+    }
+
+    #[test]
+    fn omitted_calibration_limit_uses_interactive_default() {
+        let mut value = polling_fields();
+        value["sequencers"] = json!([{"sequencer_addr": "https://first.example.test"}]);
+
+        let config: WalletConfig =
+            serde_json::from_value(value).expect("configuration should load");
+
+        assert_eq!(config.calibration_limit, 3);
     }
 
     #[test]

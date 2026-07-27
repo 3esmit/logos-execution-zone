@@ -1,4 +1,4 @@
-#![expect(
+#![allow(
     clippy::print_stderr,
     reason = "This is a CLI application, printing to stderr is expected and convenient"
 )]
