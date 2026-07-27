@@ -20,6 +20,10 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
 
+/// Key of the account holding the sequencer's genesis stake. Separate from
+/// [`SEQUENCER_SIGNING_KEY`]: block signing and stake control are distinct roles.
+pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
+
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
 // them.
@@ -95,6 +99,13 @@ impl Default for MultiNodeTestContextConfig {
     }
 }
 
+#[must_use]
+pub fn sequencer_stake_account_id() -> AccountId {
+    let private_key =
+        PrivateKey::try_new(SEQUENCER_STAKE_KEY).expect("Fixed sequencer stake key must be valid");
+    AccountId::from(&PublicKey::new_from_private_key(&private_key))
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "All fields are necessary and better to keep separate"
@@ -126,6 +137,7 @@ pub fn sequencer_config(
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
         signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
+        sequencer_stake_account_id: sequencer_stake_account_id(),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)

@@ -68,6 +68,9 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Sequencer own signing key.
     pub signing_key: [u8; 32],
+    /// LEZ account holding this sequencer's genesis stake. The operator must
+    /// hold its key to top up or unstake.
+    pub sequencer_stake_account_id: AccountId,
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
     /// Genesis configuration.
@@ -135,7 +138,12 @@ const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
 
+/// Extra fee added to every funded Bedrock transaction, in case gas prices go
+/// up before it gets mined. A stuck transaction keeps retrying with the same
+/// fee, so if prices rise past this, it never gets mined. 10k still covers a
+/// normal price jump on a block transaction; the sdk's default of 200 is too
+/// low for large transactions and can leave them stuck.
 #[must_use]
 pub const fn default_priority_fee() -> u64 {
-    logos_blockchain_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE
+    10_000
 }

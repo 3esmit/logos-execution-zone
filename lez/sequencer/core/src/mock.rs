@@ -7,7 +7,7 @@ use logos_blockchain_core::{
     header::HeaderId,
     mantle::{
         ledger::{NoteId, Utxo},
-        ops::channel::{ChannelId, MsgId},
+        ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -83,6 +83,14 @@ impl BlockPublisherTrait for MockBlockPublisher {
             checkpoint: mock_checkpoint(),
             released_notes: mock_released_notes(&withdrawals),
         })
+    }
+
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+        Ok(Vec::new())
+    }
+
+    async fn submit_channel_config(&self, _new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        Ok(())
     }
 
     fn channel_id(&self) -> ChannelId {

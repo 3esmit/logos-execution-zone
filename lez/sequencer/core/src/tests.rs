@@ -35,13 +35,14 @@ use crate::{
     apply_follow_update,
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
-    build_bridge_deposit_tx_from_event, build_genesis_state, classify_settled_deliveries,
+    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
+    build_initial_state, classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
         SequencerConfig,
     },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program,
+    extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, mock_checkpoint},
     resubmittable_txs,
 };
@@ -57,6 +58,19 @@ struct DepositMetadataForEncoding {
     recipient_id: lee::AccountId,
 }
 
+/// The bootstrap sequencer's key for `config`, exactly as `start_from_config`
+/// would derive it: read from `config.home`'s key file if present, else
+/// generated and persisted there. Callers building genesis state by hand (or
+/// reopening a store `start_from_config` already created) must use this
+/// rather than a fixed constant, so it always matches what's actually on
+/// disk.
+fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
+    crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+        .expect("Failed to load or create bedrock signing key")
+        .public_key()
+        .to_bytes()
+}
+
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_follow_update()`.
 fn empty_follow_update() -> FollowUpdate {
@@ -70,6 +84,15 @@ fn empty_follow_update() -> FollowUpdate {
     }
 }
 
+/// Key of the account holding the bootstrap sequencer's genesis stake in tests.
+fn bootstrap_stake_key() -> PrivateKey {
+    PrivateKey::try_new([55; 32]).unwrap()
+}
+
+fn bootstrap_stake_account_id() -> AccountId {
+    AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key()))
+}
+
 fn setup_sequencer_config() -> SequencerConfig {
     let tempdir = tempfile::tempdir().unwrap();
     let home = tempdir.path().to_path_buf();
@@ -81,6 +104,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
         signing_key: *sequencer_sign_key_for_testing().value(),
+        sequencer_stake_account_id: bootstrap_stake_account_id(),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -289,8 +313,9 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     let mut config = config;
     config.home = temp_dir.path().to_path_buf();
 
+    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let (genesis_state, genesis_txs) = build_genesis_state(&config);
+    let (genesis_state, genesis_txs) = build_genesis_state(&config, bootstrap_sequencer_key);
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -1126,10 +1151,44 @@ async fn build_block_from_mempool() {
         .await
         .unwrap();
 
-    let result = sequencer.build_block_from_mempool();
+    let result = sequencer.build_block_from_mempool(Some(&[]));
     assert!(result.is_ok());
     // Building itself does not advance the head; only apply-after-publish does.
     assert_eq!(sequencer.chain_height(), genesis_height);
+}
+
+#[test]
+fn without_a_committee_snapshot_finalize_unstake_is_not_includable() {
+    let state = V03State::new();
+    let finalize_unstake = build_finalize_unstake_tx(
+        AccountId::new([1; 32]),
+        sequencer_stake_core::PendingUnstake {
+            amount: 10,
+            destination: AccountId::new([2; 32]),
+        },
+    )
+    .expect("FinalizeUnstake tx should build");
+
+    // An empty committee is a real answer ("no key is accredited"), so it lets
+    // a full drain through. No answer at all must not.
+    assert!(finalize_unstake_is_includable(
+        &state,
+        &finalize_unstake,
+        Some(&[])
+    ));
+    assert!(!finalize_unstake_is_includable(
+        &state,
+        &finalize_unstake,
+        None
+    ));
+}
+
+#[test]
+fn a_missing_committee_snapshot_holds_back_nothing_else() {
+    let state = V03State::new();
+    let ordinary_tx = common::test_utils::produce_dummy_empty_transaction();
+
+    assert!(finalize_unstake_is_includable(&state, &ordinary_tx, None));
 }
 
 #[tokio::test]
@@ -2838,4 +2897,540 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         .get_account_by_id(acc2)
         .balance;
     assert_eq!(stored_balance, 20010);
+}
+
+/// Diagnostic repro: exercises `sequencer_stake`'s `Stake` instruction (claim
+/// on the outer call, hand off to a mover chained call, self-chained confirm)
+/// directly through `V03State::transition_from_public_transaction`, with no
+/// sequencer/mempool/Bedrock machinery involved, to isolate whether the LEE
+/// state machine itself claims the ownership account correctly.
+#[test]
+fn diag_sequencer_stake_claims_ownership_account() {
+    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount: u128 = 5_000_000;
+    let sequencer_key = [0x42; 32];
+
+    let config_id = system_accounts::sequencer_stake_config_account_id();
+    let mut state = V03State::new()
+        .with_programs([
+            programs::authenticated_transfer(),
+            programs::sequencer_stake(),
+        ])
+        .with_public_accounts([
+            (
+                funding_id,
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: amount,
+                    ..Account::default()
+                },
+            ),
+            (
+                config_id,
+                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+            ),
+        ]);
+
+    assert_eq!(
+        state.get_account_by_id(ownership_id),
+        Account::default(),
+        "ownership account must start out fresh/unclaimed"
+    );
+
+    let mover_instruction_data =
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount,
+        })
+        .unwrap();
+
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![funding_id, ownership_id, config_id],
+        vec![Nonce(0), Nonce(0)],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key,
+            amount,
+            mover_program_id: programs::authenticated_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key, &ownership_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("Stake transaction should succeed");
+
+    let ownership_account = state.get_account_by_id(ownership_id);
+    assert_eq!(
+        ownership_account.program_owner,
+        programs::sequencer_stake().id(),
+        "ownership account should be claimed by sequencer_stake"
+    );
+    assert_eq!(ownership_account.balance, amount);
+}
+
+/// Builds a `Stake` moving `amount` from `funding` into `ownership` via
+/// `authenticated_transfer`, taking each signer's nonce from `state`.
+fn stake_transaction(
+    state: &V03State,
+    funding: (AccountId, &PrivateKey),
+    ownership: (AccountId, &PrivateKey),
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    amount: u128,
+) -> PublicTransaction {
+    let (funding_id, funding_key) = funding;
+    let (ownership_id, ownership_key) = ownership;
+    let mover_instruction_data =
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount,
+        })
+        .unwrap();
+
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            funding_id,
+            ownership_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![
+            state.get_account_by_id(funding_id).nonce,
+            state.get_account_by_id(ownership_id).nonce,
+        ],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key,
+            amount,
+            mover_program_id: programs::authenticated_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[funding_key, ownership_key]);
+    PublicTransaction::new(message, witness_set)
+}
+
+fn stake_entry(
+    state: &V03State,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+) -> Option<sequencer_stake_core::SequencerEntry> {
+    sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        state
+            .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
+            .data
+            .as_ref(),
+    )
+    .expect("config account should decode")
+    .entries
+    .get(&sequencer_key)
+    .copied()
+}
+
+/// A state carrying the two `sequencer_stake` needs plus a funding account
+/// holding `funding_balance`.
+fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
+    V03State::new()
+        .with_programs([
+            programs::authenticated_transfer(),
+            programs::sequencer_stake(),
+        ])
+        .with_public_accounts([
+            (
+                funding_id,
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: funding_balance,
+                    ..Account::default()
+                },
+            ),
+            (
+                system_accounts::sequencer_stake_config_account_id(),
+                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+            ),
+        ])
+}
+
+/// Builds an `UnstakeRequest` against `ownership`, passing `config_slot` where
+/// the config account belongs.
+fn unstake_request_transaction(
+    state: &V03State,
+    ownership: (AccountId, &PrivateKey),
+    config_slot: AccountId,
+    amount: u128,
+    destination: AccountId,
+) -> PublicTransaction {
+    let (ownership_id, ownership_key) = ownership;
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![ownership_id, config_slot],
+        vec![state.get_account_by_id(ownership_id).nonce],
+        sequencer_stake_core::Instruction::UnstakeRequest {
+            amount,
+            destination,
+        },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[ownership_key]);
+    PublicTransaction::new(message, witness_set)
+}
+
+/// Anyone can credit a program-owned account, so an `UnstakeRequest` sized off
+/// the balance rather than the tracked stake must be rejected.
+#[test]
+fn an_unstake_request_cannot_exceed_the_tracked_stake() {
+    let funding_key = PrivateKey::try_new([31; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([32; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let donation = 1;
+    let sequencer_key = [0x43; 32];
+
+    let mut state = stake_test_state(funding_id, amount + donation);
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("Stake should succeed");
+
+    // Donate into the claimed ownership account: a balance increase needs no
+    // ownership of the target.
+    let message = lee::public_transaction::Message::try_new(
+        programs::authenticated_transfer().id(),
+        vec![funding_id, ownership_id],
+        vec![state.get_account_by_id(funding_id).nonce],
+        authenticated_transfer_core::Instruction::Transfer { amount: donation },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key]);
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
+        .expect("donation should succeed");
+
+    let balance = state.get_account_by_id(ownership_id).balance;
+    assert_eq!(
+        balance,
+        amount + donation,
+        "balance now exceeds total_staked"
+    );
+
+    let over = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        balance,
+        funding_id,
+    );
+    state
+        .transition_from_public_transaction(&over, 3, 0)
+        .expect_err("an UnstakeRequest for the full balance must be rejected");
+
+    // The tracked total is still releasable.
+    let exact = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        amount,
+        funding_id,
+    );
+    state
+        .transition_from_public_transaction(&exact, 4, 0)
+        .expect("an UnstakeRequest for the tracked stake should succeed");
+}
+
+#[test]
+fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
+    let funding_key = PrivateKey::try_new([33; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([34; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let sequencer_key = [0x44; 32];
+
+    let mut state = stake_test_state(funding_id, 3 * minimum);
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        2 * minimum,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("Stake should succeed");
+
+    // Partial release, leaving exactly the minimum staked.
+    let request = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        system_accounts::sequencer_stake_config_account_id(),
+        minimum,
+        funding_id,
+    );
+    state
+        .transition_from_public_transaction(&request, 2, 0)
+        .expect("partial UnstakeRequest should succeed");
+
+    let top_up = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        minimum,
+    );
+    state
+        .transition_from_public_transaction(&top_up, 3, 0)
+        .expect_err("a top up must be rejected while an unstake request is pending");
+}
+
+/// Ownership accounts are `sequencer_stake`-owned too, so the config account is
+/// identified by its address.
+#[test]
+fn an_ownership_account_cannot_stand_in_for_the_config_account() {
+    let funding_key = PrivateKey::try_new([35; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([36; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let other_ownership_key = PrivateKey::try_new([37; 32]).unwrap();
+    let other_ownership_id =
+        AccountId::from(&PublicKey::new_from_private_key(&other_ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let mut state = stake_test_state(funding_id, 2 * amount);
+
+    for (index, (id, key, sequencer_key)) in [
+        (ownership_id, &ownership_key, [0x45; 32]),
+        (other_ownership_id, &other_ownership_key, [0x46; 32]),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let stake = stake_transaction(
+            &state,
+            (funding_id, &funding_key),
+            (id, key),
+            sequencer_key,
+            amount,
+        );
+        state
+            .transition_from_public_transaction(
+                &stake,
+                u64::try_from(index).expect("test index fits") + 1,
+                0,
+            )
+            .expect("Stake should succeed");
+    }
+
+    assert_eq!(
+        state.get_account_by_id(other_ownership_id).program_owner,
+        programs::sequencer_stake().id(),
+        "the stand-in is owned by sequencer_stake, so ownership alone would not catch it"
+    );
+
+    let spoofed = unstake_request_transaction(
+        &state,
+        (ownership_id, &ownership_key),
+        other_ownership_id,
+        amount,
+        funding_id,
+    );
+    state
+        .transition_from_public_transaction(&spoofed, 3, 0)
+        .expect_err("an ownership account passed as the config account must be rejected");
+}
+
+/// `FinalizeUnstake` drops a fully drained key's config entry, and the same
+/// ownership account can stake again against it.
+#[test]
+fn a_fully_exited_ownership_account_can_stake_again() {
+    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
+    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
+    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let sequencer_key = [0x42; 32];
+
+    let mut state = V03State::new()
+        .with_programs([
+            programs::authenticated_transfer(),
+            programs::sequencer_stake(),
+        ])
+        .with_public_accounts([
+            (
+                funding_id,
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: amount,
+                    ..Account::default()
+                },
+            ),
+            (
+                system_accounts::sequencer_stake_config_account_id(),
+                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+            ),
+        ]);
+
+    let stake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&stake, 1, 0)
+        .expect("initial Stake should succeed");
+    assert_eq!(
+        stake_entry(&state, sequencer_key).map(|entry| entry.total_staked),
+        Some(amount)
+    );
+
+    // Full exit, releasing back to the (now drained) funding account.
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            ownership_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![state.get_account_by_id(ownership_id).nonce],
+        sequencer_stake_core::Instruction::UnstakeRequest {
+            amount,
+            destination: funding_id,
+        },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&ownership_key]);
+    state
+        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
+        .expect("UnstakeRequest should succeed");
+
+    let finalize = build_finalize_unstake_tx(
+        ownership_id,
+        sequencer_stake_core::PendingUnstake {
+            amount,
+            destination: funding_id,
+        },
+    )
+    .unwrap();
+    let LeeTransaction::Public(finalize) = finalize else {
+        panic!("FinalizeUnstake should be a public transaction");
+    };
+    state
+        .transition_from_public_transaction(&finalize, 3, 0)
+        .expect("FinalizeUnstake should succeed");
+
+    assert_eq!(stake_entry(&state, sequencer_key), None, "key fully exited");
+    assert_eq!(state.get_account_by_id(ownership_id).balance, 0);
+    assert_eq!(
+        state.get_account_by_id(ownership_id).program_owner,
+        programs::sequencer_stake().id(),
+        "the ownership account stays claimed after a full exit"
+    );
+
+    // The account is still claimed, so the re-stake goes through the same
+    // already-owned account rather than needing a fresh one.
+    let restake = stake_transaction(
+        &state,
+        (funding_id, &funding_key),
+        (ownership_id, &ownership_key),
+        sequencer_key,
+        amount,
+    );
+    state
+        .transition_from_public_transaction(&restake, 4, 0)
+        .expect("a fully exited account should be able to stake again");
+
+    let entry = stake_entry(&state, sequencer_key).expect("key is registered again");
+    assert_eq!(entry.account_id, ownership_id);
+    assert_eq!(entry.total_staked, amount);
+    assert_eq!(entry.total_pending_unstake, 0);
+    assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
+}
+
+#[test]
+fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
+    let config = setup_sequencer_config();
+    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
+    let state = build_initial_state(&config, bootstrap_sequencer_key);
+
+    let stake_account = state.get_account_by_id(config.sequencer_stake_account_id);
+    assert_eq!(
+        stake_account.program_owner,
+        programs::sequencer_stake().id()
+    );
+    assert_eq!(
+        stake_account.balance,
+        system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE
+    );
+
+    let stake_config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        state
+            .get_account_by_id(system_accounts::sequencer_stake_config_account_id())
+            .data
+            .as_ref(),
+    )
+    .expect("genesis config account should decode");
+    assert_eq!(
+        stake_config.entries[&bootstrap_sequencer_key].account_id,
+        config.sequencer_stake_account_id
+    );
+}
+
+/// The genesis stake account must be one the operator can sign for, so the
+/// bootstrap sequencer can top up and exit like any self-joined staker.
+#[test]
+fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
+    let config = setup_sequencer_config();
+    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
+    let mut state = build_initial_state(&config, bootstrap_sequencer_key);
+
+    let stake_id = config.sequencer_stake_account_id;
+    let destination = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([56; 32]).unwrap(),
+    ));
+
+    let message = lee::public_transaction::Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            stake_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![Nonce(0)],
+        sequencer_stake_core::Instruction::UnstakeRequest {
+            amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
+            destination,
+        },
+    )
+    .unwrap();
+    let witness_set =
+        lee::public_transaction::WitnessSet::for_message(&message, &[&bootstrap_stake_key()]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("the bootstrap sequencer should be able to request an unstake");
+
+    let record = sequencer_stake_core::StakeRecord::from_bytes(
+        state.get_account_by_id(stake_id).data.as_ref(),
+    )
+    .expect("genesis stake account should hold a StakeRecord");
+    assert_eq!(
+        record.pending_unstake.map(|pending| pending.amount),
+        Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
+    );
 }

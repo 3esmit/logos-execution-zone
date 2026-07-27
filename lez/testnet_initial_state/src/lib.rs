@@ -212,6 +212,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 .into_iter()
                 .map(|clock_id| (clock_id, system_accounts::clock_account())),
         )
+        .chain([(
+            system_accounts::sequencer_stake_config_account_id(),
+            system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+        )])
         .collect()
 }
 
@@ -235,6 +239,7 @@ fn initial_programs() -> Vec<Program> {
         programs::ping_receiver(),
         programs::bridge_lock(),
         programs::wrapped_token(),
+        programs::sequencer_stake(),
     ]
 }
 

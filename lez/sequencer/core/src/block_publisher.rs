@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
 use futures::Stream;
-use log::warn;
+use log::{info, warn};
 pub use logos_blockchain_core::mantle::{
     ledger::NoteId,
     ops::channel::{Ed25519PublicKey, MsgId},
@@ -103,12 +103,21 @@ enum Command {
         withdrawals: Vec<WithdrawArg>,
         resp: oneshot::Sender<Result<PublishOutcome>>,
     },
+    /// Submit a committee `ChannelConfigOp` as its own, independent Mantle tx
+    /// — not bundled with any block publish.
+    SubmitChannelConfig {
+        new_keys: Keys,
+        resp: oneshot::Sender<Result<()>>,
+    },
 }
 
 type CommandSender = mpsc::Sender<Command>;
 
-#[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
-pub trait BlockPublisherTrait: Sized {
+#[expect(
+    async_fn_in_trait,
+    reason = "Only the methods reached from the executor actor need an explicitly Send future"
+)]
+pub trait BlockPublisherTrait: Sized + Sync {
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
@@ -127,6 +136,19 @@ pub trait BlockPublisherTrait: Sized {
         block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'blk;
+
+    /// Live (adopted, possibly not yet finalized) accredited-key snapshot for
+    /// this channel, read directly from the connected Bedrock node.
+    fn accredited_keys(&self) -> impl Future<Output = Result<Vec<Ed25519PublicKey>>> + Send;
+
+    /// Submit a committee `ChannelConfigOp` as its own, independent Mantle
+    /// tx (not bundled with any block publish). `new_keys` is the full
+    /// replacement accredited-keys list; the channel administration
+    /// parameters posted alongside it are the `system_accounts` defaults.
+    fn submit_channel_config(
+        &self,
+        new_keys: Vec<Ed25519PublicKey>,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -148,7 +170,7 @@ pub trait BlockPublisherTrait: Sized {
 
     /// Current channel frontier slot on the connected chain, or `None` if the
     /// channel does not exist there. Drives the startup frontier check.
-    async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
+    fn channel_tip_slot(&self) -> impl Future<Output = Result<Option<Slot>>> + Send;
 
     /// Finalized channel messages from `after_slot` (exclusive) up to LIB, used
     /// for the startup consistency check and reconstruction. Pass `None` to read
@@ -188,12 +210,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         let zone_sdk_config = ZoneSdkSequencerConfig {
             resubmit_interval,
-            funding: Some(FundingConfig {
+            ..ZoneSdkSequencerConfig::new(FundingConfig {
                 funding_pk: config.funding_key,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
                 priority_fee: config.priority_fee,
-            }),
-            ..ZoneSdkSequencerConfig::default()
+            })
         };
 
         let mut sequencer = ZoneSequencer::init_with_config(
@@ -261,6 +282,41 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     Err(e) => warn!("zone-sdk publish failed: {e:?}"),
                                 }
                                 let _dontcare = resp_tx.send(msg_result);
+                            }
+                            Command::SubmitChannelConfig {
+                                new_keys,
+                                resp: resp_tx,
+                            } => {
+                                // zone-sdk funds from the node wallet, signs,
+                                // and enqueues this as its own independent
+                                // Mantle tx onto the drive loop's in-flight
+                                // pool — no manual bundling with any block
+                                // inscription.
+                                let result = sequencer
+                                    .handle()
+                                    .channel_config(
+                                        new_keys,
+                                        SlotTimeframe::from(
+                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+                                        ),
+                                        SlotTimeout::from(
+                                            system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+                                        ),
+                                        system_accounts::DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD,
+                                        system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
+                                    )
+                                    .await
+                                    .map(|_| ())
+                                    .context("Failed to submit channel-config update");
+
+                                match &result {
+                                    Ok(()) => info!("Submitted committee channel-config update"),
+                                    Err(err) => {
+                                        warn!("Channel-config update submission failed: {err:?}");
+                                    }
+                                }
+
+                                let _dontcare = resp_tx.send(result);
                             }
                         },
                         event = sequencer.next_event() => {
@@ -373,6 +429,34 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         resp_rx
             .await
             .map_err(|_closed| anyhow!("Drive task dropped the publish response"))?
+    }
+
+    async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
+        Ok(self
+            .node
+            .channel_state(self.channel_id)
+            .await
+            .context("Failed to read channel state")?
+            .map(|state| state.accredited_keys.to_vec())
+            .unwrap_or_default())
+    }
+
+    async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        let new_keys =
+            Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
+
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::SubmitChannelConfig {
+                new_keys,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
+
+        resp_rx
+            .await
+            .map_err(|_closed| anyhow!("Drive task dropped the submit response"))?
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -507,7 +591,7 @@ pub async fn post_channel_config(
             change_public_key: config.funding_key,
             funding_public_keys: vec![config.funding_key],
             max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-            priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+            priority_fee: config.priority_fee,
         })
         .await
         .context("Failed to fund channel config transaction")?;
