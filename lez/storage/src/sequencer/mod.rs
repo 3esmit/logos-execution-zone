@@ -465,6 +465,11 @@ impl RocksDBIO {
     pub fn add_pending_deposit_event(&self, event: PendingDepositEventRecord) -> DbResult<bool> {
         let mut batch = WriteBatch::default();
         let accepted = self.stage_pending_deposit_events(&[event], &[], &mut batch)?;
+        // A re-delivery of an already-pending deposit — the steady state — stages
+        // nothing; skip the write rather than sync an empty batch.
+        if batch.is_empty() {
+            return Ok(false);
+        }
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
@@ -508,8 +513,12 @@ impl RocksDBIO {
         let removed = if remove_op_ids.is_empty() {
             0
         } else {
+            // A set for the membership test: a backfill can finalize many
+            // deposits against many still-pending records at once, and a linear
+            // `contains` per record would be quadratic.
+            let to_remove: std::collections::HashSet<&HashType> = remove_op_ids.iter().collect();
             let after_append = records.len();
-            records.retain(|record| !remove_op_ids.contains(&record.deposit_op_id));
+            records.retain(|record| !to_remove.contains(&record.deposit_op_id));
             after_append.saturating_sub(records.len())
         };
 
@@ -601,22 +610,42 @@ impl RocksDBIO {
         }
     }
 
-    fn increment_unseen_withdraw_count(
+    /// Stages the unseen-withdraw increments for one update into `batch`.
+    ///
+    /// Occurrences are folded per key for the same reason as
+    /// [`Self::stage_consumed_withdrawals`]: two intents in one update can share
+    /// a reconciliation key, and a per-occurrence disk read would miss the
+    /// staged increment and count the pair once.
+    fn stage_new_withdraw_intents(
         &self,
-        withdrawal: WithdrawalReconciliationKey,
+        withdrawals: &[WithdrawalReconciliationKey],
         batch: &mut WriteBatch,
-    ) -> DbResult<u64> {
-        let current = self
-            .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
-            .map_or(0, |cell| cell.0);
+    ) -> DbResult<()> {
+        if withdrawals.is_empty() {
+            return Ok(());
+        }
 
-        let next = current.checked_add(1).ok_or_else(|| {
-            DbError::db_interaction_error("Unseen withdraw counter overflow".to_owned())
-        })?;
+        let mut occurrences: Vec<(WithdrawalReconciliationKey, u64)> = Vec::new();
+        for withdrawal in withdrawals {
+            match occurrences.iter_mut().find(|(key, _)| key == withdrawal) {
+                Some((_, times)) => *times = times.saturating_add(1),
+                None => occurrences.push((*withdrawal, 1)),
+            }
+        }
 
-        self.put_batch(&UnseenWithdrawCountCell(next), withdrawal, batch)?;
+        for (withdrawal, times) in occurrences {
+            let current = self
+                .get_opt::<UnseenWithdrawCountCell>(withdrawal)?
+                .map_or(0, |cell| cell.0);
 
-        Ok(next)
+            let next = current.checked_add(times).ok_or_else(|| {
+                DbError::db_interaction_error("Unseen withdraw counter overflow".to_owned())
+            })?;
+
+            self.put_batch(&UnseenWithdrawCountCell(next), withdrawal, batch)?;
+        }
+
+        Ok(())
     }
 
     /// Reconciles a single L1 withdraw event, returning whether it matched a
@@ -905,14 +934,18 @@ impl RocksDBIO {
         )?;
         let unmatched_withdrawals =
             self.stage_consumed_withdrawals(consumed_withdrawals, &mut batch)?;
-        for withdrawal in new_withdraw_intents {
-            self.increment_unseen_withdraw_count(*withdrawal, &mut batch)?;
-        }
+        self.stage_new_withdraw_intents(new_withdraw_intents, &mut batch)?;
 
         // `head_tip` is `None` only for a chain holding no blocks at all, which
         // the store — created with genesis — cannot represent. Nothing to pin.
         if chain_changed && let Some(tip) = head_tip {
-            for stale_id in tip.id.saturating_add(1)..=last_block_in_db {
+            // `last_block_in_db` predates this batch, so on its own it misses
+            // payloads staged above the pinned tip — a finalized block landing
+            // below an adopted one rewinds the tip under blocks this same update
+            // wrote. Leaving one there fails the restart replay. The deletes are
+            // staged after the puts, so the batch order resolves the overlap.
+            let highest_staged = to_write.last_key_value().map_or(0, |(id, _)| *id);
+            for stale_id in tip.id.saturating_add(1)..=last_block_in_db.max(highest_staged) {
                 self.delete_block_payload(stale_id, &mut batch)?;
             }
             self.put_meta_last_block_in_db_batch(tip.id, &mut batch)?;

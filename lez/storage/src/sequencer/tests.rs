@@ -400,7 +400,7 @@ fn finalized_deposit_records_are_removed_by_op_id() {
 }
 
 #[test]
-fn repeated_withdrawal_key_in_one_update_decrements_once_per_occurrence() {
+fn repeated_withdrawal_key_in_one_update_folds_once_per_occurrence() {
     let temp_dir = tempdir().unwrap();
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
 
@@ -408,13 +408,20 @@ fn repeated_withdrawal_key_in_one_update_decrements_once_per_occurrence() {
         amount: 7,
         bedrock_account_pk: [3; 32],
     };
-    // Two local intents for the same key.
-    for _ in 0..2 {
-        let mut batch = WriteBatch::default();
-        dbio.increment_unseen_withdraw_count(key, &mut batch)
-            .unwrap();
-        dbio.db.write(batch).unwrap();
-    }
+
+    // Two local intents for the same key in one update — two withdrawals of the
+    // same amount to the same L1 key. A per-occurrence disk read would miss the
+    // staged increment and record the pair as one.
+    dbio.store_update(&StoreUpdate {
+        new_withdraw_intents: &[key, key],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+    let recorded = dbio
+        .get_opt::<UnseenWithdrawCountCell>(key)
+        .unwrap()
+        .map(|cell| cell.0);
+    assert_eq!(recorded, Some(2));
 
     // Both L1 events arrive in one update; a per-occurrence disk read would
     // miss the staged decrement and consume only one.
@@ -427,9 +434,9 @@ fn repeated_withdrawal_key_in_one_update_decrements_once_per_occurrence() {
 
     assert!(outcome.unmatched_withdrawals.is_empty());
     // Both decrements landed; a per-occurrence disk read would leave `Some(1)`.
-    // (The absolute value trails the intent count by one — `increment` stores 1
-    // for the first intent while `consume` still treats a stored 0 as
-    // consumable — but that predates the batching and is replicated as-is.)
+    // (The absolute value trails the intent count by one — `consume` still
+    // treats a stored 0 as consumable — but that predates the batching and is
+    // replicated as-is.)
     let remaining = dbio
         .get_opt::<UnseenWithdrawCountCell>(key)
         .unwrap()

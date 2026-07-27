@@ -917,16 +917,25 @@ fn apply_follow_update(
             .map(|((_, block), _)| (block, false))
             .collect();
 
+        // Only blocks the final tier holds drive the bookkeeping below: a parked
+        // one never became irreversible, so marking blocks finalized through it
+        // or dropping its deposit records would lose them for good.
+        let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
         for (this_msg, block) in &finalized {
             // FIXME: thread the finalized inscription's L1 slot once the
             // sdk surfaces it; only used for the invalid-finalized stall.
-            if matches!(
-                chain.apply_finalized(*this_msg, block, Slot::from(0)),
-                AcceptOutcome::Applied
-            ) {
-                to_persist.push((block, true));
-                final_advanced = true;
+            match chain.apply_finalized(*this_msg, block, Slot::from(0)) {
+                AcceptOutcome::Applied => {
+                    to_persist.push((block, true));
+                    irreversible.push(block);
+                    final_advanced = true;
+                }
+                // A re-delivery of a block the final tier already holds: no new
+                // payload and the tier does not move, but it is irreversible all
+                // the same, so it still settles its deposits.
+                AcceptOutcome::AlreadyApplied => irreversible.push(block),
+                AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
             }
         }
         // Snapshot the advanced final tier so a restart re-anchors on it.
@@ -938,19 +947,16 @@ fn apply_follow_update(
 
         // Every block at or below the highest finalized one is irreversible, so
         // stored blocks there can be marked finalized.
-        let last_finalized = finalized
-            .iter()
-            .map(|(_, block)| block.header.block_id)
-            .max();
+        let last_finalized = irreversible.iter().map(|block| block.header.block_id).max();
 
         // A deposit observed in a finalized block is permanently minted (its
         // receipt is now in the irreversible tier), so its pending record can be
         // dropped. Keyed by op id, not block id: a record only goes once its own
         // deposit finalizes, never because some other block finalized at its
         // height.
-        let finalized_deposit_ids: Vec<HashType> = finalized
+        let finalized_deposit_ids: Vec<HashType> = irreversible
             .iter()
-            .flat_map(|(_, block)| block.body.transactions.iter())
+            .flat_map(|block| block.body.transactions.iter())
             .filter_map(extract_bridge_deposit_id)
             .collect();
 

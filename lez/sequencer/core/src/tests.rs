@@ -1684,6 +1684,76 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
 }
 
 #[tokio::test]
+async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_record() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    // A produced block at head, still pending on the channel.
+    let tx = common::test_utils::produce_dummy_empty_transaction();
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+
+    let deposit_op_id = HashType([21; 32]);
+    let record = PendingDepositEventRecord {
+        deposit_op_id,
+        source_tx_hash: HashType([22; 32]),
+        amount: 5,
+        metadata: borsh::to_vec(&DepositMetadataForEncoding {
+            recipient_id: initial_public_user_accounts()[0].account_id,
+        })
+        .unwrap(),
+    };
+    let deposit_tx = build_bridge_deposit_tx_from_event(&record).unwrap();
+    assert!(
+        sequencer
+            .store
+            .dbio()
+            .add_pending_deposit_event(record)
+            .unwrap()
+    );
+
+    // Skip-ahead block carrying that deposit: not in head and linking to
+    // nothing we hold, so the final tier parks it instead of applying it.
+    let parked =
+        common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![deposit_tx]);
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            adopted: vec![],
+            orphaned: vec![],
+            finalized: vec![(MsgId::from([9; 32]), parked)],
+            ..empty_follow_update()
+        },
+    );
+
+    // Nothing became irreversible, so the store must not be swept through the
+    // parked block's height.
+    let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    assert!(
+        matches!(stored.bedrock_status, BedrockStatus::Pending),
+        "a parked finalized block must not mark earlier blocks finalized"
+    );
+    // And its deposit is not minted anywhere, so dropping the record would lose
+    // the deposit for good once the stall clears.
+    assert!(
+        sequencer
+            .store
+            .get_pending_deposit_events()
+            .unwrap()
+            .iter()
+            .any(|event| event.deposit_op_id == deposit_op_id),
+        "a parked finalized block must not drop its deposit record"
+    );
+}
+
+#[tokio::test]
 async fn restart_restores_head_tier_and_recovers_from_orphan() {
     let config = setup_sequencer_config();
     let acc1 = initial_public_user_accounts()[0].account_id;
