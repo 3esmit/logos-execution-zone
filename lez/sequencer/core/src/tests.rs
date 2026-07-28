@@ -346,6 +346,137 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
     );
 }
 
+#[tokio::test]
+async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
+    // Manifestation 2 from #639: a deposit-carrying block is orphaned. Recovery
+    // rests entirely on the receipt PDA reverting with the block — no requeue,
+    // no bookkeeping of our own — so the still-pending record is drained again
+    // on the next turn and the vault is credited exactly once across the reorg.
+    let mut config = setup_sequencer_config();
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let recipient_id = initial_public_user_accounts()[0].account_id;
+    let deposit_op_id = [0x2c_u8; 32];
+    let amount = 500_u64;
+
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_deposit_event(PendingDepositEventRecord {
+            deposit_op_id: HashType(deposit_op_id),
+            source_tx_hash: HashType([7_u8; 32]),
+            amount,
+            metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+        })
+        .unwrap();
+
+    // Produce the block that mints the deposit; its receipt marks it minted.
+    sequencer.produce_new_block().await.unwrap();
+    let minted_block = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    assert!(
+        sequencer.with_state(|s| deposit_already_minted(s, HashType(deposit_op_id))),
+        "the first mint claims the receipt in head state"
+    );
+
+    // Orphan that block. The receipt reverts with it — nothing else tracks the
+    // mint — so the deposit reads as unminted again.
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            adopted: vec![],
+            orphaned: vec![(MsgId::from(minted_block.header.hash.0), minted_block)],
+            ..empty_follow_update()
+        },
+    );
+    assert_eq!(sequencer.chain_height(), 1, "the minting block is orphaned");
+    assert!(
+        !sequencer.with_state(|s| deposit_already_minted(s, HashType(deposit_op_id))),
+        "the receipt reverts with the orphaned block"
+    );
+
+    // Next turn: the still-pending record is drained and re-minted on the new
+    // head, exactly once.
+    let replacement = sequencer.produce_new_block().await.unwrap();
+    let mints = sequencer
+        .store
+        .get_block_at_id(replacement)
+        .unwrap()
+        .expect("replacement block is stored")
+        .body
+        .transactions
+        .iter()
+        .filter(|tx| tx_is_bridge_deposit(tx, deposit_op_id, amount))
+        .count();
+    assert_eq!(
+        mints, 1,
+        "the deposit is re-minted exactly once after the orphan"
+    );
+    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(vault_id).balance),
+        u128::from(amount),
+        "the vault is credited exactly once across the reorg"
+    );
+}
+
+#[tokio::test]
+async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
+    // Runs the bridge guest directly with a pre-existing receipt — the replay
+    // no-op branch the exactly-once guarantee rests on. The store drain filters
+    // duplicates out before the program executes, so this is the only test that
+    // reaches that branch; applying the same mint twice asserts the second is a
+    // no-op (credited once) rather than an error.
+    let mut config = setup_sequencer_config();
+    config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
+    let recipient_id = initial_public_user_accounts()[0].account_id;
+    let deposit_op_id = [0x5a_u8; 32];
+    let amount = 500_u64;
+
+    let (sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let deposit_tx = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
+        deposit_op_id: HashType(deposit_op_id),
+        source_tx_hash: HashType([7_u8; 32]),
+        amount,
+        metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+    })
+    .unwrap();
+    let LeeTransaction::Public(public_tx) = &deposit_tx else {
+        panic!("bridge deposit tx is public");
+    };
+
+    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
+    let mut state = sequencer.chain().lock().unwrap().head_state().clone();
+
+    // First mint: claims the receipt and credits the recipient vault.
+    state
+        .transition_from_public_transaction(public_tx, 1, 0)
+        .expect("first mint executes");
+    assert_eq!(
+        state.get_account_by_id(vault_id).balance,
+        u128::from(amount)
+    );
+    assert!(
+        deposit_already_minted(&state, HashType(deposit_op_id)),
+        "the first mint claims the receipt PDA"
+    );
+
+    // Replay the identical mint. The guest sees the receipt already exists and
+    // no-ops instead of failing, so the vault is credited exactly once.
+    state
+        .transition_from_public_transaction(public_tx, 2, 0)
+        .expect("a replayed deposit is a no-op, not an error");
+    assert_eq!(
+        state.get_account_by_id(vault_id).balance,
+        u128::from(amount),
+        "a replayed deposit must not re-credit the vault"
+    );
+}
+
 #[test]
 fn transaction_pre_check_pass() {
     let tx = common::test_utils::produce_dummy_empty_transaction();

@@ -496,36 +496,43 @@ impl RocksDBIO {
             return Ok(0);
         }
 
-        let mut records = self.get_pending_deposit_events()?;
-        let before = records.len();
+        // A set for the membership test: a backfill can finalize many deposits
+        // against many still-pending records at once, and a linear `contains`
+        // per record would be quadratic.
+        let to_remove: std::collections::HashSet<&HashType> = remove_op_ids.iter().collect();
 
+        let mut records = self.get_pending_deposit_events()?;
+        let before_append = records.len();
+
+        // `accepted` is the count of records that will actually be drained on a
+        // future turn, so an op id both observed and finalized in this same
+        // event (backfill can deliver both at once) is neither appended nor
+        // counted — its mint already happened, and counting it would log an
+        // incoming mint that never comes. It is a length delta of the appends
+        // alone; the retain below only touches pre-existing records.
         for event in new_events {
-            if records
-                .iter()
-                .any(|record| record.deposit_op_id == event.deposit_op_id)
+            if to_remove.contains(&event.deposit_op_id)
+                || records
+                    .iter()
+                    .any(|record| record.deposit_op_id == event.deposit_op_id)
             {
                 continue;
             }
             records.push(event.clone());
         }
-        let accepted = records.len().saturating_sub(before);
+        let accepted = records.len().saturating_sub(before_append);
 
         let removed = if remove_op_ids.is_empty() {
             0
         } else {
-            // A set for the membership test: a backfill can finalize many
-            // deposits against many still-pending records at once, and a linear
-            // `contains` per record would be quadratic.
-            let to_remove: std::collections::HashSet<&HashType> = remove_op_ids.iter().collect();
-            let after_append = records.len();
+            let before_retain = records.len();
             records.retain(|record| !to_remove.contains(&record.deposit_op_id));
-            after_append.saturating_sub(records.len())
+            before_retain.saturating_sub(records.len())
         };
 
-        // Tracked separately rather than inferred from the length: one event can
-        // both observe a deposit and finalize another, which nets to the same
-        // count while the contents changed. The common finalizing event owns no
-        // pending record at all, and must not rewrite the cell.
+        // Guard on both counts: the common finalizing event appends nothing yet
+        // still mutates the cell, and a pure re-delivery mutates neither and
+        // must not rewrite it.
         if accepted > 0 || removed > 0 {
             self.put_pending_deposit_events_batch(&records, batch)?;
         }
@@ -569,7 +576,8 @@ impl RocksDBIO {
             let matched = times.min(stored.map_or(0, |count| count.saturating_add(1)));
             unmatched.extend(std::iter::repeat_n(
                 withdrawal,
-                usize::try_from(times.saturating_sub(matched)).unwrap_or(usize::MAX),
+                usize::try_from(times.saturating_sub(matched))
+                    .expect("unmatched withdrawal count fits usize"),
             ));
 
             match stored.and_then(|count| count.checked_sub(times)) {

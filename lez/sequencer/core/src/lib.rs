@@ -584,7 +584,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         block_height: u64,
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
-    ) -> Result<bool> {
+    ) -> bool {
         let tx_hash = tx.hash();
         match origin {
             TransactionOrigin::User => {
@@ -594,7 +594,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         error!(
                             "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
                         );
-                        return Ok(false);
+                        return false;
                     }
                 };
 
@@ -612,14 +612,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // Bridge deposits are deduped by their receipt PDA in chain
                 // state (drained only when unminted, no-op on replay), so no
                 // node-local guard is needed here.
-                state
-                    .transition_from_public_transaction(public_tx, block_height, timestamp)
-                    .context("Failed to execute sequencer-generated transaction")?;
+                //
+                // Skip-and-log rather than propagate: a drained deposit is
+                // re-fed from the store every turn and only finality removes it,
+                // so a `?` here would let a single unexecutable mint (e.g. a
+                // bridge escrow under-funded relative to the L1 deposit, which
+                // every sequencer hits identically) abort production on all of
+                // them forever. Skipping keeps the record queued for retry
+                // without halting the node.
+                if let Err(err) =
+                    state.transition_from_public_transaction(public_tx, block_height, timestamp)
+                {
+                    error!(
+                        "Sequencer-generated transaction {tx_hash} failed execution: {err:#?}, skipping it",
+                    );
+                    return false;
+                }
             }
         }
 
         info!("Validated transaction with hash {tx_hash}, including it in block");
-        Ok(true)
+        true
     }
 
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
@@ -725,7 +738,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
-            )? {
+            ) {
                 valid_transactions.push(tx);
             }
 
@@ -787,10 +800,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     }
 
     /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
-    /// finalized. Idempotent. Production callers don't invoke this directly —
-    /// it's wired up in `start_from_config` to the publisher's
-    /// `on_finalized_block` sink, which fires on `Event::TxsFinalized` /
-    /// `Event::FinalizedInscriptions`. Kept on the type for tests.
+    /// finalized. Idempotent. Production no longer calls this: finalization
+    /// flips now ride the follow path's atomic write via
+    /// [`StoreUpdate::finalized_up_to`]. Kept on the type for tests.
     // TODO: Delete blocks instead of marking them as finalized. Current
     // approach is used because we still have `GetBlockDataRequest`.
     pub fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
