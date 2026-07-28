@@ -6,7 +6,7 @@ use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock};
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
-use indexer_service::IndexerHandle;
+use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivacyPreservingTransaction};
 use lee_core::Commitment;
 use log::{debug, error};
@@ -71,73 +71,149 @@ pub struct DiskSizes {
     pub wallet_bytes: u64,
 }
 
+pub struct SequencerComponent {
+    /// In fact, not optional, just for Drop implementation.
+    sequencer_handle: Option<SequencerHandle>,
+    temp_sequencer_dir: TempDir,
+    sequencer_client: SequencerClient,
+}
+
+pub struct TestContextZone {
+    /// Every zone must have its own wallet, otherwise multi-sequecner client loses sence.
+    wallet: WalletCore,
+    wallet_password: String,
+    temp_wallet_dir: TempDir,
+    config: MultiNodeTestContextConfig,
+    /// Each sequencer component is mapped from sequencer `SocketAddr`.
+    sequencer_components: HashMap<SocketAddr, SequencerComponent>,
+    indexer_components: Option<IndexerComponents>,
+}
+
 /// Test context which sets up a sequencer and a wallet for integration tests.
 ///
 /// It's memory and logically safe to create multiple instances of this struct in parallel tests,
 /// as each instance uses its own temporary directories for sequencer and wallet data.
 // NOTE: Order of fields is important for proper drop order.
 pub struct TestContext {
-    sequencer_clients: HashMap<SocketAddr, SequencerClient>,
-    wallet: WalletCore,
-    wallet_password: String,
-    /// Optional to move out value in Drop.
-    sequencer_handles: Option<Vec<SequencerHandle>>,
-    indexer_components: Option<IndexerComponents>,
+    zones: HashMap<ChannelId, TestContextZone>,
     bedrock_compose: DockerCompose,
     bedrock_addr: SocketAddr,
-    temp_sequencer_dirs: Vec<TempDir>,
-    temp_wallet_dir: TempDir,
-    config: MultiNodeTestContextConfig,
 }
 
 impl TestContext {
     /// Create new test context.
-    pub async fn new_custom(config: MultiNodeTestContextConfig) -> Result<Self> {
-        Self::builder(config).build().await
+    pub async fn new_custom(configs: Vec<MultiNodeTestContextConfig>) -> Result<Self> {
+        Self::builder(configs).build().await
     }
 
-    /// Create new test context with default config.
+    /// Create new test context with default config(1 zone).
     pub async fn new() -> Result<Self> {
-        Self::builder(MultiNodeTestContextConfig::default())
+        Self::builder(vec![MultiNodeTestContextConfig::default()])
             .build()
             .await
     }
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder(config: MultiNodeTestContextConfig) -> TestContextBuilder {
-        TestContextBuilder::new(config)
+    pub fn builder(configs: Vec<MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
+        MultiZoneTestContextBuilder {
+            zone_builders: configs.into_iter().map(TestContextBuilder::new).collect(),
+        }
     }
 
-    /// Get reference to the wallet.
-    #[must_use]
-    pub const fn wallet(&self) -> &WalletCore {
-        &self.wallet
-    }
-
-    #[must_use]
-    pub fn wallet_password(&self) -> &str {
-        &self.wallet_password
-    }
-
-    /// Get mutable reference to the wallet.
-    pub const fn wallet_mut(&mut self) -> &mut WalletCore {
-        &mut self.wallet
-    }
-
-    /// Get reference to the sequencer client in default case (1 sequencer).
-    #[must_use]
-    pub fn sequencer_client(&self) -> &SequencerClient {
-        self.sequencer_clients
+    /// Reference for the default zone(in case if only one present).
+    fn default_zone(&self) -> &TestContextZone {
+        self.zones
             .values()
             .next()
-            .expect("Must be at least one sequencer client")
+            .expect("Must be at least one zone")
+    }
+
+    /// Reference for the default sequencer component(in case, if only one zone exists and only
+    /// one sequencer exists).
+    fn default_sequencer_component(&self) -> &SequencerComponent {
+        self.default_zone()
+            .sequencer_components
+            .values()
+            .next()
+            .expect("Must be at least one integration component")
+    }
+
+    /// Mutable reference for the default zone(in case if only one present).
+    fn default_zone_mut(&mut self) -> &mut TestContextZone {
+        self.zones
+            .values_mut()
+            .next()
+            .expect("Must be at least one zone")
+    }
+
+    /// Mutable reference for the default sequencer component(in case, if only one zone exists and
+    /// only one sequencer exists).
+    fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
+        self.default_zone_mut()
+            .sequencer_components
+            .values_mut()
+            .next()
+            .expect("Must be at least one integration component")
+    }
+
+    /// Get reference to the deafault wallet.
+    #[must_use]
+    pub fn wallet(&self) -> &WalletCore {
+        &self.default_zone().wallet
+    }
+
+    /// Get password of the default wallet.
+    #[must_use]
+    pub fn wallet_password(&self) -> &str {
+        &self.default_zone().wallet_password
+    }
+
+    /// Get mutable reference to default the wallet.
+    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+        &mut self.default_zone_mut().wallet
+    }
+
+    /// Get reference to the zone wallet.
+    #[must_use]
+    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
+        self.zones.get(&channel_id).map(|val| &val.wallet)
+    }
+
+    /// Get password of the zone wallet.
+    #[must_use]
+    pub fn wallet_password_zone(&self, channel_id: ChannelId) -> Option<&str> {
+        self.zones
+            .get(&channel_id)
+            .map(|val| val.wallet_password.as_str())
+    }
+
+    /// Get mutable reference to the zone wallet.
+    pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
+        self.zones.get_mut(&channel_id).map(|val| &mut val.wallet)
+    }
+
+    /// Get reference to the sequencer client in default case (1 zone, 1 sequencer).
+    #[must_use]
+    pub fn sequencer_client(&self) -> &SequencerClient {
+        &self.default_sequencer_component().sequencer_client
     }
 
     /// Get reference to the sequencer client.
     #[must_use]
-    pub fn sequencer_client_getter(&self, addr: &SocketAddr) -> Option<&SequencerClient> {
-        self.sequencer_clients.get(addr)
+    pub fn sequencer_client_getter(
+        &self,
+        channel_id: ChannelId,
+        addr: &SocketAddr,
+    ) -> Option<&SequencerClient> {
+        self.zones
+            .get(&channel_id)
+            .map(|val| {
+                val.sequencer_components
+                    .get(addr)
+                    .map(|vall| &vall.sequencer_client)
+            })
+            .flatten()
     }
 
     /// Get the Bedrock Node address.
@@ -146,7 +222,7 @@ impl TestContext {
         self.bedrock_addr
     }
 
-    /// Get reference to the indexer.
+    /// Get reference to the default indexer(1 zone).
     ///
     /// # Panics
     ///
@@ -154,13 +230,15 @@ impl TestContext {
     /// [`TestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer(&self) -> &IndexerHandle {
-        self.indexer_components
+        &self
+            .default_zone()
+            .indexer_components
             .as_ref()
-            .map(|components| &components.indexer_handle)
             .expect("Called `TestContext::indexer()` on context with disabled indexer")
+            .indexer_handle
     }
 
-    /// Get the indexer's bound socket address.
+    /// Get the default indexer's(1 zone) bound socket address.
     ///
     /// # Panics
     ///
@@ -170,7 +248,7 @@ impl TestContext {
         self.indexer().addr()
     }
 
-    /// Get reference to the indexer client.
+    /// Get reference to the default indexer(1 zone) client.
     ///
     /// # Panics
     ///
@@ -178,16 +256,64 @@ impl TestContext {
     /// [`TestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
-        self.indexer_components
+        &self
+            .default_zone()
+            .indexer_components
             .as_ref()
-            .map(|components| &components.indexer_client)
-            .expect("Called `TestContext::indexer_client()` on context with disabled indexer")
+            .expect("Called `TestContext::indexer()` on context with disabled indexer")
+            .indexer_client
+    }
+
+    /// Get reference to the indexer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not enabled in the test context. See
+    /// [`TestContextBuilder::disable_indexer()`].
+    #[must_use]
+    pub fn indexer_getter(&self, channel_id: ChannelId) -> Option<&IndexerHandle> {
+        self.zones
+            .get(&channel_id)
+            .map(|val| {
+                val.indexer_components
+                    .as_ref()
+                    .map(|val| &val.indexer_handle)
+            })
+            .flatten()
+    }
+
+    /// Get the default indexer's bound socket address.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not enabled in the test context.
+    #[must_use]
+    pub fn indexer_addr_getter(&self, channel_id: ChannelId) -> Option<SocketAddr> {
+        self.indexer_getter(channel_id).map(|val| val.addr())
+    }
+
+    /// Get reference to the indexer client.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not enabled in the test context. See
+    /// [`TestContextBuilder::disable_indexer()`].
+    #[must_use]
+    pub fn indexer_client_getter(&self, channel_id: ChannelId) -> Option<&IndexerClient> {
+        self.zones
+            .get(&channel_id)
+            .map(|val| {
+                val.indexer_components
+                    .as_ref()
+                    .map(|val| &val.indexer_client)
+            })
+            .flatten()
     }
 
     #[must_use]
     /// Get the multi-node config.
-    pub const fn config(&self) -> &MultiNodeTestContextConfig {
-        &self.config
+    pub fn config(&self, channel_id: ChannelId) -> Option<&MultiNodeTestContextConfig> {
+        self.zones.get(&channel_id).map(|val| &val.config)
     }
 
     /// Recursively-sized bytes on disk for sequencer + indexer + wallet tempdirs.
@@ -195,22 +321,33 @@ impl TestContext {
     #[must_use]
     pub fn disk_sizes(&self) -> DiskSizes {
         DiskSizes {
-            sequencer_bytes: self
-                .temp_sequencer_dirs
-                .iter()
-                .fold(0, |acc, dir| acc.saturating_add(dir_size_bytes(dir.path()))),
-            indexer_bytes: self
-                .indexer_components
-                .as_ref()
-                .map_or(0, |c| dir_size_bytes(c.temp_dir.path())),
-            wallet_bytes: dir_size_bytes(self.temp_wallet_dir.path()),
+            sequencer_bytes: self.zones.values().fold(0, |acc, zone| {
+                acc.saturating_add(
+                    zone.sequencer_components
+                        .values()
+                        .fold(0, |accc, component| {
+                            accc.saturating_add(dir_size_bytes(component.temp_sequencer_dir.path()))
+                        }),
+                )
+            }),
+            indexer_bytes: self.zones.values().fold(0, |acc, zone| {
+                acc.saturating_add(
+                    zone.indexer_components
+                        .as_ref()
+                        .map_or(0, |val| dir_size_bytes(val.temp_dir.path())),
+                )
+            }),
+            wallet_bytes: self.zones.values().fold(0, |acc, zone| {
+                acc.saturating_add(dir_size_bytes(zone.temp_wallet_dir.path()))
+            }),
         }
     }
 
-    /// Get existing public account IDs in the wallet.
+    /// Get default(1 zone) existing public account IDs in the wallet.
     #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
-        self.wallet
+        self.default_zone()
+            .wallet
             .storage()
             .key_chain()
             .public_account_ids()
@@ -218,46 +355,81 @@ impl TestContext {
             .collect()
     }
 
-    /// Get existing private account IDs in the wallet.
+    /// Get default(1 zone) existing private account IDs in the wallet.
     #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
-        self.wallet
+        self.default_zone()
+            .wallet
             .storage()
             .key_chain()
             .private_account_ids()
             .map(|(account_id, _idx)| account_id)
             .collect()
     }
+
+    /// Get existing public account IDs in the wallet.
+    #[must_use]
+    pub fn existing_public_accounts_zone(&self, channel_id: ChannelId) -> Option<Vec<AccountId>> {
+        self.wallet_zone(channel_id).map(|wallet_ref| {
+            wallet_ref
+                .storage()
+                .key_chain()
+                .public_account_ids()
+                .map(|(account_id, _idx)| account_id)
+                .collect()
+        })
+    }
+
+    /// Get existing private account IDs in the wallet.
+    #[must_use]
+    pub fn existing_private_accounts_zone(&self, channel_id: ChannelId) -> Option<Vec<AccountId>> {
+        self.wallet_zone(channel_id).map(|wallet_ref| {
+            wallet_ref
+                .storage()
+                .key_chain()
+                .private_account_ids()
+                .map(|(account_id, _idx)| account_id)
+                .collect()
+        })
+    }
 }
 
 impl Drop for TestContext {
     fn drop(&mut self) {
         let Self {
-            sequencer_handles,
+            zones,
             bedrock_compose,
             bedrock_addr: _,
-            indexer_components: _,
-            sequencer_clients: _,
-            wallet: _,
-            wallet_password: _,
-            temp_sequencer_dirs: _,
-            temp_wallet_dir: _,
-            config: _,
         } = self;
 
-        let sequencer_handles = sequencer_handles
-            .take()
-            .expect("Sequencer handle should be present in TestContext drop");
+        for TestContextZone {
+            wallet: _,
+            wallet_password: _,
+            temp_wallet_dir: _,
+            config: _,
+            sequencer_components,
+            indexer_components: _,
+        } in zones.values_mut()
+        {
+            for SequencerComponent {
+                sequencer_handle,
+                temp_sequencer_dir: _,
+                sequencer_client: _,
+            } in sequencer_components.values_mut()
+            {
+                let sequencer_handle = sequencer_handle
+                    .take()
+                    .expect("Sequencer handle should be present in TestContext drop");
 
-        for sequencer_handle in sequencer_handles {
-            if !sequencer_handle.is_healthy() {
-                let Err(err) = sequencer_handle
-                    .failed()
-                    .now_or_never()
-                    .expect("Sequencer handle should not be running");
-                error!(
-                    "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
-                );
+                if !sequencer_handle.is_healthy() {
+                    let Err(err) = sequencer_handle
+                        .failed()
+                        .now_or_never()
+                        .expect("Sequencer handle should not be running");
+                    error!(
+                        "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
+                    );
+                }
             }
         }
 
@@ -288,6 +460,10 @@ pub struct TestContextBuilder {
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
     config: MultiNodeTestContextConfig,
+}
+
+pub struct MultiZoneTestContextBuilder {
+    zone_builders: Vec<TestContextBuilder>,
 }
 
 impl TestContextBuilder {
@@ -346,7 +522,7 @@ impl TestContextBuilder {
         self
     }
 
-    pub async fn build(self) -> Result<TestContext> {
+    pub async fn build(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
         let Self {
             genesis_transactions,
             sequencer_partial_config,
@@ -364,10 +540,6 @@ impl TestContextBuilder {
         // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
         // must build live. Otherwise load the fixture (fails if it is missing).
         let use_prebuilt = !from_scratch && genesis_transactions.is_none();
-
-        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
-            .await
-            .context("Failed to setup Bedrock node")?;
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) =
@@ -478,6 +650,18 @@ impl TestContextBuilder {
             ctx: Some(ctx),
             runtime,
         })
+    }
+}
+
+impl MultiZoneTestContextBuilder {
+    pub async fn build(self) -> Result<TestContext> {
+        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
+            .await
+            .context("Failed to setup Bedrock node")?;
+
+        self.zone_builders
+            .into_iter()
+            .map(|ctxb| TestContextBuilder::build(ctxb, bedrock_addr.clone()))
     }
 }
 
