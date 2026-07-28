@@ -11,9 +11,10 @@ use std::fmt::Write as _;
 
 use crate::{
     Unit,
-    input::PanelInput,
+    input::{Defaults, PanelInput},
     schema::{
         AxisPlacement, Color, GradientMode, LineInterpolation, PanelType, ShowPoints, StackingMode,
+        ThresholdMode, Thresholds,
     },
 };
 
@@ -33,25 +34,12 @@ fn panel_expr_inner(panel: &PanelInput) -> Result<String, std::fmt::Error> {
     let mut expr = match panel.panel_type {
         PanelType::Stat => format!("Panel::stat({:?})", panel.title),
         PanelType::Timeseries => format!("Panel::timeseries({:?})", panel.title),
+        PanelType::Gauge => format!("Panel::gauge({:?})", panel.title),
     };
     write!(expr, "\n    .width({})", panel.grid_pos.w)?;
 
     let defaults = &panel.field_config.defaults;
-    // `short` is the builder's own default unit, so it round-trips without a call.
-    if let Some(unit) = defaults.unit.as_deref().filter(|u| *u != "short") {
-        write!(
-            expr,
-            "\n    .unit({})",
-            Unit::from_id(unit).to_rust_source()
-        )?;
-    }
-    if let Some(decimals) = defaults.decimals {
-        write!(expr, "\n    .decimals({decimals})")?;
-    }
-    // Only a fixed color is worth emitting; `palette-classic` is Grafana's default.
-    if let Some(Color::Fixed { fixed_color }) = &defaults.color {
-        write!(expr, "\n    .color(Color::fixed({fixed_color:?}))")?;
-    }
+    write_defaults(&mut expr, defaults)?;
 
     if let Some(custom) = &defaults.custom {
         if custom.span_nulls == Some(true) {
@@ -144,6 +132,65 @@ fn panel_expr_inner(panel: &PanelInput) -> Result<String, std::fmt::Error> {
     }
 
     Ok(expr)
+}
+
+/// The field-level setters — everything outside the `custom` styling block.
+fn write_defaults(expr: &mut String, defaults: &Defaults) -> Result<(), std::fmt::Error> {
+    // `short` is the builder's own default unit, so it round-trips without a call.
+    if let Some(unit) = defaults.unit.as_deref().filter(|u| *u != "short") {
+        write!(
+            expr,
+            "\n    .unit({})",
+            Unit::from_id(unit).to_rust_source()
+        )?;
+    }
+    if let Some(decimals) = defaults.decimals {
+        write!(expr, "\n    .decimals({decimals})")?;
+    }
+    // Only a fixed color is worth emitting; `palette-classic` is Grafana's default.
+    if let Some(Color::Fixed { fixed_color }) = &defaults.color {
+        write!(expr, "\n    .color(Color::fixed({fixed_color:?}))")?;
+    }
+    if let Some(min) = defaults.min {
+        write!(expr, "\n    .min({min:?})")?;
+    }
+    if let Some(max) = defaults.max {
+        write!(expr, "\n    .max({max:?})")?;
+    }
+
+    let ladder = defaults
+        .thresholds
+        .as_ref()
+        .filter(|thresholds| is_expressible_ladder(thresholds))
+        .and_then(|thresholds| thresholds.steps.split_first());
+    if let Some((base, steps)) = ladder {
+        write!(expr, "\n    .thresholds(Thresholds::base({:?})", base.color)?;
+        for step in steps {
+            // A non-base step without a value is nonsense Grafana wouldn't render.
+            if let Some(value) = step.value {
+                write!(expr, ".step({value:?}, {:?})", step.color)?;
+            }
+        }
+        expr.push(')');
+    }
+
+    Ok(())
+}
+
+/// Whether a ladder is worth emitting: `percentage` mode is beyond the builder,
+/// and green/red-at-80 is the ladder Grafana attaches to every panel by default.
+fn is_expressible_ladder(thresholds: &Thresholds) -> bool {
+    if thresholds.mode != ThresholdMode::Absolute {
+        return false;
+    }
+    !matches!(
+        thresholds.steps.as_slice(),
+        [base, red]
+            if base.color == "green"
+                && base.value.is_none()
+                && red.color == "red"
+                && red.value == Some(80.0)
+    )
 }
 
 const fn line_interp(value: LineInterpolation) -> &'static str {

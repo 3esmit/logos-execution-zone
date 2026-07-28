@@ -10,8 +10,8 @@
 )]
 
 use dashboard_gen::{
-    Color, Dashboard, FieldOverride, Panel, Target, Unit, avg, percentiles, percentiles_labeled,
-    rate_per_min,
+    Color, Dashboard, FieldOverride, Panel, Target, Thresholds, Unit, avg, percentiles,
+    percentiles_labeled, rate_per_min,
 };
 use json_pretty_compact::PrettyCompactFormatter;
 use serde::Serialize as _;
@@ -68,19 +68,6 @@ fn sequencer_dashboard() -> Dashboard {
                         PERCENTILES,
                         " · {{kind}} · {{origin}}",
                     )),
-                Panel::timeseries("Mempool size")
-                    .width(12)
-                    .unit(Unit::Short)
-                    .span_nulls()
-                    .target(
-                        Target::new(sequencer_core_metrics::names::MEMPOOL_SIZE)
-                            .legend("mempool size"),
-                    ),
-            ],
-        )
-        .row(
-            9,
-            [
                 Panel::timeseries("Transactions per block")
                     .width(12)
                     .unit(Unit::Short)
@@ -94,9 +81,78 @@ fn sequencer_dashboard() -> Dashboard {
                             .dashed_line()
                             .color(Color::fixed("text")),
                     ),
-                Panel::timeseries("Transaction throughput (per minute)")
-                    .width(12)
+            ],
+        )
+        .row(
+            8,
+            [
+                Panel::gauge("Mempool utilization")
+                    .width(6)
+                    .unit(Unit::Percent)
+                    .decimals(1)
+                    .min(0.0)
+                    .max(100.0)
+                    .thresholds(
+                        Thresholds::base("green")
+                            .step(70.0, "orange")
+                            .step(90.0, "red"),
+                    )
+                    .target(
+                        Target::new(format!(
+                            "100 * {size} / {max_size}",
+                            size = sequencer_core_metrics::names::MEMPOOL_SIZE,
+                            max_size = sequencer_core_metrics::names::MEMPOOL_MAX_SIZE,
+                        ))
+                        .legend("utilization"),
+                    ),
+                Panel::timeseries("Mempool size vs capacity")
+                    .width(18)
                     .unit(Unit::Short)
+                    .span_nulls()
+                    .min(0.0)
+                    .target(
+                        Target::new(sequencer_core_metrics::names::MEMPOOL_SIZE).legend("queued"),
+                    )
+                    .target(
+                        Target::new(sequencer_core_metrics::names::MEMPOOL_MAX_SIZE)
+                            .legend("capacity"),
+                    )
+                    .with_override(
+                        FieldOverride::by_name("capacity")
+                            .dashed_line()
+                            .color(Color::fixed("red")),
+                    )
+                    .with_override(FieldOverride::by_name("queued").color(Color::fixed("blue"))),
+            ],
+        )
+        .row(
+            8,
+            [
+                Panel::gauge("Failed transactions share")
+                    .width(6)
+                    .unit(Unit::Percent)
+                    .decimals(2)
+                    .min(0.0)
+                    .max(100.0)
+                    .thresholds(
+                        Thresholds::base("green")
+                            .step(1.0, "orange")
+                            .step(5.0, "red"),
+                    )
+                    .target(
+                        Target::new(format!(
+                            // `clamp_min` keeps an idle window (nothing submitted)
+                            // reading as 0% instead of a division by zero.
+                            "100 * increase({failed}[$__range]) / clamp_min(increase({submitted}[$__range]), 1)",
+                            failed = sequencer_core_metrics::names::FAILED_TRANSACTION_COUNT,
+                            submitted = sequencer_service_metrics::names::SUBMITTED_TRANSACTION_COUNT,
+                        ))
+                        .legend("failed"),
+                    ),
+                Panel::timeseries("Submitted vs failed transactions (per minute)")
+                    .width(18)
+                    .unit(Unit::Short)
+                    .min(0.0)
                     .target(rate_per_min(
                         sequencer_service_metrics::names::SUBMITTED_TRANSACTION_COUNT,
                         "submitted",

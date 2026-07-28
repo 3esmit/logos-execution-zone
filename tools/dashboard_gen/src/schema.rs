@@ -94,6 +94,54 @@ pub enum SortOrder {
 pub enum PanelType {
     Stat,
     Timeseries,
+    Gauge,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThresholdMode {
+    Absolute,
+    /// Steps expressed as a percentage of the min–max range. The builder never
+    /// emits this; it exists so Grafana exports using it still parse.
+    Percentage,
+}
+
+/// One threshold step: the color values at or above `value` take. The base step
+/// carries `value: null` — Grafana's "everything below the first threshold".
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ThresholdStep {
+    pub color: String,
+    pub value: Option<f64>,
+}
+
+/// A threshold ladder, driving gauge/stat coloring.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Thresholds {
+    pub mode: ThresholdMode,
+    pub steps: Vec<ThresholdStep>,
+}
+
+impl Thresholds {
+    /// Start a ladder with the color used below every threshold.
+    pub fn base(color: impl Into<String>) -> Self {
+        Self {
+            mode: ThresholdMode::Absolute,
+            steps: vec![ThresholdStep {
+                color: color.into(),
+                value: None,
+            }],
+        }
+    }
+
+    /// Add a step: values at or above `value` render in `color`.
+    #[must_use]
+    pub fn step(mut self, value: f64, color: impl Into<String>) -> Self {
+        self.steps.push(ThresholdStep {
+            color: color.into(),
+            value: Some(value),
+        });
+        self
+    }
 }
 
 // Optional timeseries styling vocabularies. Each derives `PartialEq` so the
@@ -248,6 +296,12 @@ pub struct Defaults {
     pub unit: Unit,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thresholds: Option<Thresholds>,
 }
 
 #[derive(Serialize)]
@@ -294,10 +348,19 @@ pub struct TimeSeriesOptions {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GaugeOptions {
+    pub reduce_options: ReduceOptions,
+    pub show_threshold_labels: bool,
+    pub show_threshold_markers: bool,
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 pub enum Options {
     Stat(StatOptions),
     TimeSeries(TimeSeriesOptions),
+    Gauge(GaugeOptions),
 }
 
 #[derive(Clone, Copy, Serialize)]

@@ -14,12 +14,15 @@
 // Styling vocabularies passed to the optional `styling` setters are part of the
 // public API (and are used by this module's `Panel` fields and `finalize`).
 pub use codegen::panel_to_rust_source;
-pub use schema::{AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode};
+pub use schema::{
+    AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
+};
 use schema::{
-    Calc, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GraphMode,
-    GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind, Options, OverrideProperty,
-    PanelModel, PanelType, Placement, PropertyId, PropertyValue, ReduceOptions, SortOrder,
-    Stacking, StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip, TooltipMode,
+    Calc, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GaugeOptions,
+    GraphMode, GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind, Options,
+    OverrideProperty, PanelModel, PanelType, Placement, PropertyId, PropertyValue, ReduceOptions,
+    SortOrder, Stacking, StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip,
+    TooltipMode,
 };
 use serde::Serialize;
 pub use unit::Unit;
@@ -107,6 +110,7 @@ impl FieldOverride {
 enum Kind {
     Stat,
     TimeSeries,
+    Gauge,
 }
 
 /// A dashboard panel builder. Grid position and panel id are assigned by
@@ -119,6 +123,9 @@ pub struct Panel {
     unit: Option<Unit>,
     decimals: Option<u32>,
     color: Option<Color>,
+    min: Option<f64>,
+    max: Option<f64>,
+    thresholds: Option<Thresholds>,
     span_nulls: bool,
     overrides: Vec<FieldOverride>,
     // Optional timeseries styling, set via the `styling` setters.
@@ -140,6 +147,9 @@ impl Panel {
             unit: None,
             decimals: None,
             color: None,
+            min: None,
+            max: None,
+            thresholds: None,
             span_nulls: false,
             overrides: Vec::new(),
             line_interpolation: None,
@@ -159,6 +169,12 @@ impl Panel {
     /// A time-series line panel.
     pub fn timeseries(title: impl Into<String>) -> Self {
         Self::new(title, Kind::TimeSeries)
+    }
+
+    /// A radial gauge panel. Pair it with [`Panel::min`]/[`Panel::max`] — the
+    /// dial needs a range to fill — and [`Panel::thresholds`] for its coloring.
+    pub fn gauge(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::Gauge)
     }
 
     /// Grid width in Grafana's 24-column units. Unset panels split the row's
@@ -184,6 +200,26 @@ impl Panel {
     #[must_use]
     pub fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
+        self
+    }
+
+    /// Lower bound of the value scale.
+    #[must_use]
+    pub const fn min(mut self, min: f64) -> Self {
+        self.min = Some(min);
+        self
+    }
+
+    /// Upper bound of the value scale.
+    #[must_use]
+    pub const fn max(mut self, max: f64) -> Self {
+        self.max = Some(max);
+        self
+    }
+
+    #[must_use]
+    pub fn thresholds(mut self, thresholds: Thresholds) -> Self {
+        self.thresholds = Some(thresholds);
         self
     }
 
@@ -230,6 +266,9 @@ impl Panel {
                     custom: None,
                     unit,
                     decimals: self.decimals,
+                    min: self.min,
+                    max: self.max,
+                    thresholds: self.thresholds,
                 };
                 let options = Options::Stat(StatOptions {
                     color_mode: StatColorMode::Value,
@@ -241,6 +280,27 @@ impl Panel {
                     },
                 });
                 (defaults, options, PanelType::Stat)
+            }
+            Kind::Gauge => {
+                let defaults = Defaults {
+                    color: self.color,
+                    custom: None,
+                    unit,
+                    decimals: self.decimals,
+                    min: self.min,
+                    max: self.max,
+                    thresholds: self.thresholds,
+                };
+                let options = Options::Gauge(GaugeOptions {
+                    reduce_options: ReduceOptions {
+                        calcs: vec![Calc::LastNotNull],
+                        fields: String::new(),
+                        values: false,
+                    },
+                    show_threshold_labels: false,
+                    show_threshold_markers: true,
+                });
+                (defaults, options, PanelType::Gauge)
             }
             Kind::TimeSeries => {
                 let defaults = Defaults {
@@ -262,6 +322,9 @@ impl Panel {
                     }),
                     unit,
                     decimals: None,
+                    min: self.min,
+                    max: self.max,
+                    thresholds: self.thresholds,
                 };
                 // Panels with several series read better as a sortable table with
                 // a multi-series tooltip; single-series panels stay compact.

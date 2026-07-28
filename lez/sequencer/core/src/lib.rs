@@ -224,6 +224,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let is_fresh_start = initial_checkpoint.is_none();
 
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
+        sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
         let block_publisher = BP::new(
             &config.bedrock_config,

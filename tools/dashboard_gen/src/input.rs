@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, PanelType, ShowPoints, StackingMode,
+    Thresholds,
 };
 
 #[derive(Deserialize)]
@@ -54,6 +55,12 @@ pub struct Defaults {
     pub color: Option<Color>,
     #[serde(default)]
     pub custom: Option<Custom>,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+    #[serde(default)]
+    pub thresholds: Option<Thresholds>,
 }
 
 #[derive(Deserialize, Default)]

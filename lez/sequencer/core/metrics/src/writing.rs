@@ -51,6 +51,15 @@ pub fn record_mempool_size(size: usize) {
     .set(u64::try_from(size).expect("Mempool size should fit into u64") as f64);
 }
 
+pub fn record_mempool_max_size(size: usize) {
+    gauge!(
+        description: "Configured maximum size of the mempool",
+        unit: Unit::Count,
+        names::MEMPOOL_MAX_SIZE
+    )
+    .set(u64::try_from(size).expect("Mempool max size should fit into u64") as f64);
+}
+
 pub fn record_mempool_transaction_application_time(
     origin: TransactionOrigin,
     kind: TxKind,

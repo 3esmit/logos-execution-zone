@@ -19,7 +19,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "block_count_total",
+          "expr": "block_count",
           "legendFormat": "height",
           "refId": "A"
         }
@@ -42,7 +42,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(block_count_total[1m]) * 60",
+          "expr": "rate(block_count[1m]) * 60",
           "legendFormat": "blocks/min",
           "refId": "A"
         }
@@ -73,31 +73,31 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "block_creation_time_seconds{quantile=\"0.5\"}",
+          "expr": "block_creation_time{quantile=\"0.5\"}",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "block_creation_time_seconds{quantile=\"0.9\"}",
+          "expr": "block_creation_time{quantile=\"0.9\"}",
           "legendFormat": "p90",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "block_creation_time_seconds{quantile=\"0.95\"}",
+          "expr": "block_creation_time{quantile=\"0.95\"}",
           "legendFormat": "p95",
           "refId": "C"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "block_creation_time_seconds{quantile=\"0.99\"}",
+          "expr": "block_creation_time{quantile=\"0.99\"}",
           "legendFormat": "p99",
           "refId": "D"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(block_creation_time_seconds_sum[1m]) / rate(block_creation_time_seconds_count[1m])",
+          "expr": "rate(block_creation_time_sum[1m]) / rate(block_creation_time_count[1m])",
           "legendFormat": "avg",
           "refId": "E"
         }
@@ -120,56 +120,30 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_transaction_application_time_seconds{quantile=\"0.5\"}",
+          "expr": "mempool_transaction_application_time{quantile=\"0.5\"}",
           "legendFormat": "p50 · {{kind}} · {{origin}}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_transaction_application_time_seconds{quantile=\"0.9\"}",
+          "expr": "mempool_transaction_application_time{quantile=\"0.9\"}",
           "legendFormat": "p90 · {{kind}} · {{origin}}",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_transaction_application_time_seconds{quantile=\"0.95\"}",
+          "expr": "mempool_transaction_application_time{quantile=\"0.95\"}",
           "legendFormat": "p95 · {{kind}} · {{origin}}",
           "refId": "C"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_transaction_application_time_seconds{quantile=\"0.99\"}",
+          "expr": "mempool_transaction_application_time{quantile=\"0.99\"}",
           "legendFormat": "p99 · {{kind}} · {{origin}}",
           "refId": "D"
         }
       ],
       "title": "Transaction application time",
-      "type": "timeseries"
-    },
-    {
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "fieldConfig": {
-        "defaults": {
-          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "spanNulls": true },
-          "unit": "short"
-        },
-        "overrides": [ ]
-      },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
-      "id": 5,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ "last", "max" ] },
-        "tooltip": { "mode": "single" }
-      },
-      "targets": [
-        {
-          "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "mempool_size",
-          "legendFormat": "mempool size",
-          "refId": "A"
-        }
-      ],
-      "title": "Mempool size",
       "type": "timeseries"
     },
     {
@@ -186,8 +160,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 25 },
-      "id": 6,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
+      "id": 5,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -230,7 +204,130 @@
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
-        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" },
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0.0,
+          "max": 100.0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 70.0 },
+              { "color": "red", "value": 90.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 25 },
+      "id": 6,
+      "options": {
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * mempool_size / mempool_max_size",
+          "legendFormat": "utilization",
+          "refId": "A"
+        }
+      ],
+      "title": "Mempool utilization",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10, "spanNulls": true },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "capacity" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [ 8, 4 ], "fill": "dash" } },
+              { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "queued" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 25 },
+      "id": 7,
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "mempool_size",
+          "legendFormat": "queued",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "mempool_max_size",
+          "legendFormat": "capacity",
+          "refId": "B"
+        }
+      ],
+      "title": "Mempool size vs capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "min": 0.0,
+          "max": 100.0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1.0 },
+              { "color": "red", "value": 5.0 }
+            ]
+          }
+        },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 33 },
+      "id": 8,
+      "options": {
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "100 * increase(failed_transaction_count[$__range]) / clamp_min(increase(submitted_transaction_count[$__range]), 1)",
+          "legendFormat": "failed",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed transactions share",
+      "type": "gauge"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
         "overrides": [
           {
             "matcher": { "id": "byName", "options": "failed" },
@@ -242,8 +339,8 @@
           }
         ]
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 25 },
-      "id": 7,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 33 },
+      "id": 9,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -251,18 +348,18 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(submitted_transaction_count_total[1m]) * 60",
+          "expr": "rate(submitted_transaction_count[1m]) * 60",
           "legendFormat": "submitted",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(failed_transaction_count_total[1m]) * 60",
+          "expr": "rate(failed_transaction_count[1m]) * 60",
           "legendFormat": "failed",
           "refId": "B"
         }
       ],
-      "title": "Transaction throughput (per minute)",
+      "title": "Submitted vs failed transactions (per minute)",
       "type": "timeseries"
     }
   ],
