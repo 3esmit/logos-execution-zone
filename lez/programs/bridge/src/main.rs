@@ -63,6 +63,13 @@ fn main() {
             // Replay protection: the receipt PDA exists iff this op id was
             // already minted. On replay it is non-default and the whole
             // instruction is a no-op.
+            //
+            // Observability note: a no-op replay and a real first mint are both
+            // successful txs, so an indexer cannot tell "credited here" from
+            // "already credited by a peer" without deriving the receipt id and
+            // checking whether it existed before this block — the receipt claim
+            // is the only on-chain signal. Relevant once the explorer surfaces
+            // deposits.
             if receipt.account != Account::default() {
                 (unchanged_post_states(&pre_states_clone), vec![])
             } else {
