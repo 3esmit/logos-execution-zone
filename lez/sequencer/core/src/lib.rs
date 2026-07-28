@@ -898,7 +898,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             );
             sequencer_core_metrics::record_mempool_transaction_application_time(
                 origin.into(),
-                tx.kind(),
+                tx.kind().into(),
                 before_tx_apply.elapsed(),
             );
 

@@ -1,4 +1,4 @@
-//! This crate provides all metrics exposed by the sequencer core crate.
+//! This crate provides all metrics exposed by the sequencer service crate.
 
 #[cfg(feature = "record")]
 pub use record::*;

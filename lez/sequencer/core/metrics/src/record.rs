@@ -6,16 +6,34 @@
 
 use std::time::Duration;
 
-use common::transaction::TxKind;
 use metrics::{Counter, Histogram, Unit, counter, gauge, histogram};
 use strum::IntoEnumIterator as _;
 
 use crate::names;
 
-#[derive(Clone, Copy, strum::IntoStaticStr, strum::EnumIter)]
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr, strum::EnumIter)]
+#[strum(serialize_all = "snake_case")]
 pub enum TransactionOrigin {
     User,
     Sequencer,
+}
+
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr, strum::EnumIter)]
+#[strum(serialize_all = "snake_case")]
+pub enum TxKind {
+    Public,
+    PrivacyPreserving,
+    ProgramDeployment,
+}
+
+impl From<common::transaction::TxKind> for TxKind {
+    fn from(kind: common::transaction::TxKind) -> Self {
+        match kind {
+            common::transaction::TxKind::Public => Self::Public,
+            common::transaction::TxKind::PrivacyPreserving => Self::PrivacyPreserving,
+            common::transaction::TxKind::ProgramDeployment => Self::ProgramDeployment,
+        }
+    }
 }
 
 /// Initialize metrics.
