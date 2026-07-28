@@ -1,9 +1,6 @@
-//! Generates the sequencer dashboard and prints it to stdout.
+//! The sequencer dashboard: chain progress, block timings, mempool and
+//! transaction outcomes.
 
-#![expect(
-    clippy::print_stdout,
-    reason = "CLI tool: emitting the dashboard JSON on stdout is the deliverable"
-)]
 #![expect(
     clippy::non_ascii_literal,
     reason = "legend separators use `·` intentionally, matching the rendered Grafana labels"
@@ -13,13 +10,11 @@ use dashboard_gen::{
     Color, Dashboard, FieldOverride, GradientMode, Panel, Target, Thresholds, Unit, avg,
     percentile_legend, percentile_variable, rate_per_min, selected_percentile,
 };
-use json_pretty_compact::PrettyCompactFormatter;
-use serde::Serialize as _;
 
 const PERCENTILES: &[u32] = &[50, 90, 95, 99];
 const DEFAULT_PERCENTILE: u32 = 95;
 
-fn sequencer_dashboard() -> Dashboard {
+pub fn dashboard() -> Dashboard {
     Dashboard::new("Sequencer", "sequencer")
         .tag("sequencer")
         .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
@@ -185,16 +180,4 @@ fn sequencer_dashboard() -> Dashboard {
                     ),
             ],
         )
-}
-
-fn main() {
-    let dashboard = sequencer_dashboard();
-
-    let formatter = PrettyCompactFormatter::new();
-    let mut output = Vec::new();
-    let mut ser = serde_json::Serializer::with_formatter(&mut output, formatter);
-    dashboard.serialize(&mut ser).unwrap();
-
-    let json = String::from_utf8(output).unwrap();
-    println!("{json}");
 }

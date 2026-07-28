@@ -1,12 +1,9 @@
 //! The serializable Grafana dashboard schema — the internal data model the
 //! public builders assemble into.
 //!
-//! Most types are `Serialize`-only, sized for what we *emit*. A handful of
-//! vocabularies (`PanelType`, `Color`, and the styling enums) additionally
-//! derive `Deserialize` because the lenient `input` model — which backs the
-//! panel→Rust transpiler — reuses them.
+//! Every type here is `Serialize`-only: the model is sized for what we emit.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{DATASOURCE_UID, FieldOverride, Target, unit::Unit};
 
@@ -88,8 +85,7 @@ pub enum SortOrder {
     Desc,
 }
 
-// Reused by the `input` model, hence `Deserialize`.
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PanelType {
     Stat,
@@ -97,7 +93,7 @@ pub enum PanelType {
     Gauge,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThresholdMode {
     Absolute,
@@ -108,14 +104,14 @@ pub enum ThresholdMode {
 
 /// One threshold step: the color values at or above `value` take. The base step
 /// carries `value: null` — Grafana's "everything below the first threshold".
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct ThresholdStep {
     pub color: String,
     pub value: Option<f64>,
 }
 
 /// A threshold ladder, driving gauge/stat coloring.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub struct Thresholds {
     pub mode: ThresholdMode,
     pub steps: Vec<ThresholdStep>,
@@ -145,10 +141,9 @@ impl Thresholds {
 }
 
 // Optional timeseries styling vocabularies. Each derives `PartialEq` so the
-// public setters can panic when handed the Grafana default (see `styling`), and
-// `Deserialize` because the `input` model reuses them.
+// public setters can panic when handed the Grafana default (see `styling`).
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LineInterpolation {
     Linear,
@@ -157,7 +152,7 @@ pub enum LineInterpolation {
     StepAfter,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ShowPoints {
     Auto,
@@ -165,7 +160,7 @@ pub enum ShowPoints {
     Always,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GradientMode {
     None,
@@ -174,7 +169,7 @@ pub enum GradientMode {
     Scheme,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StackingMode {
     None,
@@ -182,7 +177,7 @@ pub enum StackingMode {
     Percent,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AxisPlacement {
     Auto,
@@ -237,8 +232,7 @@ impl Datasource {
     }
 }
 
-// Reused by the `input` model, hence `Deserialize`.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[serde(tag = "mode")]
 pub enum Color {

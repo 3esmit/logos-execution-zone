@@ -13,7 +13,6 @@
 
 // Styling vocabularies passed to the optional `styling` setters are part of the
 // public API (and are used by this module's `Panel` fields and `finalize`).
-pub use codegen::panel_to_rust_source;
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
     Variable,
@@ -28,8 +27,6 @@ use schema::{
 use serde::Serialize;
 pub use unit::Unit;
 
-mod codegen;
-mod input;
 mod schema;
 mod styling;
 mod unit;

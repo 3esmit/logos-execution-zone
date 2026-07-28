@@ -60,44 +60,6 @@ impl Unit {
             Self::Custom(id) => id,
         }
     }
-
-    /// Reverse of [`Self::as_id`]: map a Grafana unit id back to a `Unit`,
-    /// falling back to [`Self::Custom`] for ids we don't name. Used by the
-    /// panel→Rust transpiler.
-    #[must_use]
-    pub(crate) fn from_id(id: &str) -> Self {
-        match id {
-            "short" => Self::Short,
-            "percent" => Self::Percent,
-            "percentunit" => Self::PercentUnit,
-            "s" => Self::Seconds,
-            "ms" => Self::Milliseconds,
-            "ns" => Self::Nanoseconds,
-            "bytes" => Self::Bytes,
-            "Bps" => Self::BytesPerSec,
-            "reqps" => Self::RequestsPerSec,
-            "ops" => Self::OpsPerSec,
-            other => Self::custom(other),
-        }
-    }
-
-    /// The Rust builder expression that reconstructs this unit, for codegen.
-    #[must_use]
-    pub(crate) fn to_rust_source(&self) -> String {
-        match self {
-            Self::Custom(id) => format!("Unit::custom({id:?})"),
-            named @ (Self::Short
-            | Self::Percent
-            | Self::PercentUnit
-            | Self::Seconds
-            | Self::Milliseconds
-            | Self::Nanoseconds
-            | Self::Bytes
-            | Self::BytesPerSec
-            | Self::RequestsPerSec
-            | Self::OpsPerSec) => format!("Unit::{named:?}"),
-        }
-    }
 }
 
 impl Serialize for Unit {

@@ -2296,6 +2296,7 @@ dependencies = [
 name = "dashboard_gen"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "json-pretty-compact",
  "sequencer_core_metrics",
  "sequencer_service_metrics",
