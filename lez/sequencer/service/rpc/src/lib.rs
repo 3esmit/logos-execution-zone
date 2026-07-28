@@ -23,11 +23,14 @@ compile_error!("At least one of `server` or `client` features must be enabled.")
 /// use common::transaction::LeeTransaction;
 /// use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 ///
-/// let url = "http://localhost:3040".parse()?;
-/// let client = SequencerClientBuilder::default().build(url)?;
+/// async fn example() -> Result<(), Box<dyn std::error::Error>> {
+///     let url = "http://localhost:3040";
+///     let client = SequencerClientBuilder::default().build(url)?;
 ///
-/// let tx: LeeTransaction = unimplemented!("Construct your transaction here");
-/// let tx_hash = client.send_transaction(tx).await?;
+///     let tx: LeeTransaction = unimplemented!("Construct your transaction here");
+///     let _tx_hash = client.send_transaction(tx).await?;
+///     Ok(())
+/// }
 /// ```
 #[cfg(feature = "client")]
 pub type SequencerClient = jsonrpsee::http_client::HttpClient;
@@ -64,11 +67,12 @@ pub trait Rpc {
     #[method(name = "getAccountBalance")]
     async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned>;
 
+    /// Returns the committed transaction payload. Block location is not part of the wire result.
     #[method(name = "getTransaction")]
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
+    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
@@ -96,4 +100,20 @@ pub trait Rpc {
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
 
     // =============================================================================================
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LeeTransaction;
+
+    #[test]
+    fn transaction_lookup_wire_result_is_a_single_transaction() -> Result<(), serde_json::Error> {
+        let expected = common::test_utils::produce_dummy_empty_transaction();
+        let wire = serde_json::to_value(&expected)?;
+        assert!(wire.is_string());
+
+        let decoded = serde_json::from_value::<Option<LeeTransaction>>(wire)?;
+        assert_eq!(decoded, Some(expected));
+        Ok(())
+    }
 }
