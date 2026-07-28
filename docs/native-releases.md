@@ -21,6 +21,7 @@ Both archives contain:
 - `explorer_service` and its web assets
 - the matching `r0vm`
 - wallet and indexer FFI shared libraries and C headers
+- the Python runtime required by the wallet and wallet FFI, plus its license
 - wallet shell completions
 - example wallet, sequencer, and indexer configuration
 - `release-manifest.json`, with the source commit and per-file checksums
@@ -64,10 +65,13 @@ them with a Testnet sequencer endpoint. This profile does not make the bundled
 local sequencer or indexer compatible with historical Testnet private state;
 run those services only with their separately supported network configuration.
 
-Linux binaries use the runtime ABI listed in
-`share/runtime-dependencies.txt`. Install any listed system libraries missing
-from the host. The macOS archive is unsigned; verify the checksum and source tag
-before approving it through macOS security controls.
+The wallet and wallet FFI load the bundled Python runtime rather than a system
+`libpython`. Other Linux system libraries remain listed in
+`share/runtime-dependencies.txt`; install any of those that are missing from the
+host. The bundled runtime does not include Keycard's virtual environment or
+Python packages, so Keycard commands still require the documented Keycard setup.
+The macOS archive is unsigned; verify the checksum and source tag before
+approving it through macOS security controls.
 
 ## Container images
 

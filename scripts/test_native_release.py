@@ -29,6 +29,10 @@ class NativeReleaseTest(unittest.TestCase):
         site = stage / "share/explorer/site/index.html"
         site.parent.mkdir(parents=True, exist_ok=True)
         site.write_text("<!doctype html>\n", encoding="utf-8")
+        python_runtime = stage / "lib" / (
+            "libpython3.14.so.1.0" if target == "linux-amd64" else "Python"
+        )
+        python_runtime.write_bytes(f"fixture:{target}:python-runtime\n".encode())
         for relative in native_release.REQUIRED_EXECUTABLES:
             (stage / relative).chmod(0o755)
         return stage
@@ -92,6 +96,17 @@ class NativeReleaseTest(unittest.TestCase):
                     "linux-amd64",
                     COMMIT,
                 )
+
+    def test_missing_bundled_python_runtime_is_rejected(self) -> None:
+        for target in sorted(native_release.TARGETS):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                stage = self.create_stage(root, target)
+                runtime = native_release.bundled_python_runtimes(stage, target)
+                self.assertEqual(len(runtime), 1)
+                runtime[0].unlink()
+                with self.assertRaisesRegex(native_release.ReleaseError, "Python runtime"):
+                    native_release.pack(stage, root / "output", VERSION, target, COMMIT)
 
     def test_tampered_published_archive_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
