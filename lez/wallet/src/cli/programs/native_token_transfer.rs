@@ -92,6 +92,7 @@ impl AuthTransferSubcommand {
         to_keys: Option<String>,
         to_identifier: Option<u128>,
         amount: u128,
+        submit_only: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         // Resolve --to-keys into --to-npk / --to-vpk equivalents.
@@ -107,6 +108,17 @@ impl AuthTransferSubcommand {
             .as_ref()
             .map(|m| m.resolve(wallet_core.storage()))
             .transpose()?;
+        if submit_only
+            && !matches!(
+                (&from, &to),
+                (
+                    AccountIdWithPrivacy::Public(_),
+                    Some(AccountIdWithPrivacy::Public(_))
+                )
+            )
+        {
+            anyhow::bail!("--submit-only currently supports public-to-public transfers");
+        }
         let underlying_subcommand = match (to, to_npk, to_vpk) {
             (None, None, None) => {
                 anyhow::bail!("Provide either account account_id of receiver or their public keys");
@@ -122,6 +134,16 @@ impl AuthTransferSubcommand {
             (Some(to), None, None) => match (from, to) {
                 (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
                     let to_mention = to_account.expect("matched Some branch");
+                    if submit_only {
+                        return NativeTokenTransferProgramSubcommand::handle_public(
+                            Some(from_account.into_public_identity(from)),
+                            Some(to_mention.into_public_identity(to)),
+                            amount,
+                            true,
+                            wallet_core,
+                        )
+                        .await;
+                    }
                     NativeTokenTransferProgramSubcommand::Public {
                         from: Some(from_account.into_public_identity(from)),
                         to: Some(to_mention.into_public_identity(to)),
@@ -178,14 +200,16 @@ impl AuthTransferSubcommand {
 
         underlying_subcommand.handle_subcommand(wallet_core).await
     }
-}
 
-impl WalletSubcommand for AuthTransferSubcommand {
-    async fn handle_subcommand(
+    pub(crate) async fn handle_subcommand_with_submit_only(
         self,
+        submit_only: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
+            Self::Init { .. } if submit_only => {
+                anyhow::bail!("--submit-only is only supported by `auth-transfer send`");
+            }
             Self::Init { account_id } => Self::handle_init(account_id, wallet_core).await,
             Self::Send {
                 from,
@@ -204,11 +228,22 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     to_keys,
                     to_identifier,
                     amount,
+                    submit_only,
                     wallet_core,
                 )
                 .await
             }
         }
+    }
+}
+
+impl WalletSubcommand for AuthTransferSubcommand {
+    async fn handle_subcommand(
+        self,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        self.handle_subcommand_with_submit_only(false, wallet_core)
+            .await
     }
 }
 
@@ -497,6 +532,7 @@ impl NativeTokenTransferProgramSubcommand {
         from: Option<AccountIdentity>,
         to: Option<AccountIdentity>,
         amount: u128,
+        submit_only: bool,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let tx_hash = NativeTokenTransfer(wallet_core)
@@ -507,9 +543,15 @@ impl NativeTokenTransferProgramSubcommand {
             )
             .await?;
 
-        wallet_core
-            .poll_and_finalize_public_transaction(tx_hash)
-            .await
+        if submit_only {
+            println!("Transaction hash is {tx_hash}");
+            println!("Transaction submitted without waiting for finalization.");
+            Ok(SubcommandReturnValue::Empty)
+        } else {
+            wallet_core
+                .poll_and_finalize_public_transaction(tx_hash)
+                .await
+        }
     }
 }
 
@@ -529,8 +571,58 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 Self::handle_deshielded(from, to, amount, wallet_core).await
             }
             Self::Public { from, to, amount } => {
-                Self::handle_public(from, to, amount, wallet_core).await
+                Self::handle_public(from, to, amount, false, wallet_core).await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser as _;
+
+    use super::*;
+    use crate::cli::{Args, Command};
+
+    fn parse_submit_only(args: &[&str]) -> bool {
+        let args = Args::try_parse_from(args).unwrap();
+        if !matches!(
+            &args.command,
+            Some(Command::AuthTransfer(AuthTransferSubcommand::Send { .. }))
+        ) {
+            panic!("expected an authenticated-transfer send command");
+        }
+        args.submit_only
+    }
+
+    #[test]
+    fn submit_only_is_an_additive_public_send_flag() {
+        assert!(parse_submit_only(&[
+            "wallet",
+            "auth-transfer",
+            "send",
+            "--from",
+            "sender",
+            "--to",
+            "recipient",
+            "--amount",
+            "1",
+            "--submit-only",
+        ]));
+    }
+
+    #[test]
+    fn public_send_keeps_blocking_finalization_by_default() {
+        assert!(!parse_submit_only(&[
+            "wallet",
+            "auth-transfer",
+            "send",
+            "--from",
+            "sender",
+            "--to",
+            "recipient",
+            "--amount",
+            "1",
+        ]));
     }
 }
