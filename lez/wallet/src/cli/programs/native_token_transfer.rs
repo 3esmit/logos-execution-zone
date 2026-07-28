@@ -49,9 +49,6 @@ pub enum AuthTransferSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        /// Submit a public transfer without waiting for finalization.
-        #[arg(long)]
-        submit_only: bool,
     },
 }
 
@@ -137,11 +134,20 @@ impl AuthTransferSubcommand {
             (Some(to), None, None) => match (from, to) {
                 (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
                     let to_mention = to_account.expect("matched Some branch");
+                    if submit_only {
+                        return NativeTokenTransferProgramSubcommand::handle_public(
+                            Some(from_account.into_public_identity(from)),
+                            Some(to_mention.into_public_identity(to)),
+                            amount,
+                            true,
+                            wallet_core,
+                        )
+                        .await;
+                    }
                     NativeTokenTransferProgramSubcommand::Public {
                         from: Some(from_account.into_public_identity(from)),
                         to: Some(to_mention.into_public_identity(to)),
                         amount,
-                        submit_only,
                     }
                 }
                 (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Private(to)) => {
@@ -194,14 +200,16 @@ impl AuthTransferSubcommand {
 
         underlying_subcommand.handle_subcommand(wallet_core).await
     }
-}
 
-impl WalletSubcommand for AuthTransferSubcommand {
-    async fn handle_subcommand(
+    pub(crate) async fn handle_subcommand_with_submit_only(
         self,
+        submit_only: bool,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
+            Self::Init { .. } if submit_only => {
+                anyhow::bail!("--submit-only is only supported by `auth-transfer send`");
+            }
             Self::Init { account_id } => Self::handle_init(account_id, wallet_core).await,
             Self::Send {
                 from,
@@ -211,7 +219,6 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to_keys,
                 to_identifier,
                 amount,
-                submit_only,
             } => {
                 Self::handle_send(
                     from,
@@ -230,6 +237,16 @@ impl WalletSubcommand for AuthTransferSubcommand {
     }
 }
 
+impl WalletSubcommand for AuthTransferSubcommand {
+    async fn handle_subcommand(
+        self,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        self.handle_subcommand_with_submit_only(false, wallet_core)
+            .await
+    }
+}
+
 /// Represents generic CLI subcommand for a wallet working with native token transfer program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum NativeTokenTransferProgramSubcommand {
@@ -244,8 +261,6 @@ pub enum NativeTokenTransferProgramSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(skip)]
-        submit_only: bool,
     },
     /// Private execution.
     #[command(subcommand)]
@@ -555,12 +570,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
             Self::Deshielded { from, to, amount } => {
                 Self::handle_deshielded(from, to, amount, wallet_core).await
             }
-            Self::Public {
-                from,
-                to,
-                amount,
-                submit_only,
-            } => Self::handle_public(from, to, amount, submit_only, wallet_core).await,
+            Self::Public { from, to, amount } => {
+                Self::handle_public(from, to, amount, false, wallet_core).await
+            }
         }
     }
 }
@@ -574,12 +586,13 @@ mod tests {
 
     fn parse_submit_only(args: &[&str]) -> bool {
         let args = Args::try_parse_from(args).unwrap();
-        let Some(Command::AuthTransfer(AuthTransferSubcommand::Send { submit_only, .. })) =
-            args.command
-        else {
+        if !matches!(
+            &args.command,
+            Some(Command::AuthTransfer(AuthTransferSubcommand::Send { .. }))
+        ) {
             panic!("expected an authenticated-transfer send command");
-        };
-        submit_only
+        }
+        args.submit_only
     }
 
     #[test]

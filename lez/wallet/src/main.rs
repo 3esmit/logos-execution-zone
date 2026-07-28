@@ -7,7 +7,10 @@ use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
     WalletCore,
-    cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
+    cli::{
+        Args, CommandExecutionOptions, execute_continuous_run, execute_subcommand_with_options,
+        read_password_from_stdin,
+    },
     helperfunctions::{fetch_config_path, fetch_persistent_storage_path, fetch_statistics_path},
 };
 
@@ -20,6 +23,7 @@ use wallet::{
 async fn main() -> Result<()> {
     let Args {
         continuous_run,
+        submit_only,
         command,
     } = Args::parse();
 
@@ -59,7 +63,12 @@ async fn main() -> Result<()> {
             wallet.store_persistent_data()?;
             wallet
         };
-        let _output = execute_subcommand(&mut wallet, command).await?;
+        let _output = execute_subcommand_with_options(
+            &mut wallet,
+            command,
+            CommandExecutionOptions { submit_only },
+        )
+        .await?;
         Ok(())
     } else if continuous_run {
         let mut wallet =

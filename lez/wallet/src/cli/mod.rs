@@ -108,9 +108,19 @@ pub struct Args {
     /// Continious run flag.
     #[arg(short, long)]
     pub continuous_run: bool,
+    /// Submit a public authenticated transfer without waiting for finalization.
+    #[arg(long, global = true)]
+    pub submit_only: bool,
     /// Wallet command.
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+/// Execution settings parsed alongside a wallet command.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CommandExecutionOptions {
+    /// Submit a public authenticated transfer without waiting for finalization.
+    pub submit_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -202,9 +212,28 @@ pub async fn execute_subcommand(
     wallet_core: &mut WalletCore,
     command: Command,
 ) -> Result<SubcommandReturnValue> {
+    execute_subcommand_with_options(wallet_core, command, CommandExecutionOptions::default()).await
+}
+
+/// Execute a wallet command with CLI-level execution settings.
+pub async fn execute_subcommand_with_options(
+    wallet_core: &mut WalletCore,
+    command: Command,
+    options: CommandExecutionOptions,
+) -> Result<SubcommandReturnValue> {
+    if options.submit_only
+        && !matches!(
+            &command,
+            Command::AuthTransfer(AuthTransferSubcommand::Send { .. })
+        )
+    {
+        anyhow::bail!("--submit-only is only supported by `auth-transfer send`");
+    }
     let subcommand_ret = match command {
         Command::AuthTransfer(transfer_subcommand) => {
-            transfer_subcommand.handle_subcommand(wallet_core).await?
+            transfer_subcommand
+                .handle_subcommand_with_submit_only(options.submit_only, wallet_core)
+                .await?
         }
         Command::ChainInfo(chain_subcommand) => {
             chain_subcommand.handle_subcommand(wallet_core).await?
