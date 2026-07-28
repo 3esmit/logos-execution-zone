@@ -9,8 +9,8 @@ workspace = true
 
 [features]
 default = []
-# Enable metrics writing
-writing = ["dep:metrics"]
+# Enable metrics record
+record = ["dep:metrics"]
 
 [dependencies]
 metrics = { workspace = true, optional = true }
