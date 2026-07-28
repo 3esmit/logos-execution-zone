@@ -27,17 +27,16 @@ impl IndexerStore {
     /// Creates files if necessary.
     pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
         #[cfg(not(feature = "testnet"))]
-        let mut initial_state = testnet_initial_state::initial_state();
+        let base = testnet_initial_state::initial_state();
 
         #[cfg(feature = "testnet")]
-        let mut initial_state = testnet_initial_state::initial_state_testnet();
+        let base = testnet_initial_state::initial_state_testnet();
 
-        // Seed any zone-specific genesis accounts (the cross-zone inbox config and
-        // bridge-lock holdings) so the indexer's replayed state matches the
-        // sequencer's; none are produced by a transaction.
-        for (account_id, account) in genesis_seed {
-            initial_state.insert_genesis_account(account_id, account);
-        }
+        // Seed any zone-specific genesis accounts (the bridge-lock holdings) so the
+        // indexer's replayed state matches the sequencer's; none are produced by a
+        // transaction. Cross-zone programs are base builtins, and their config
+        // accounts are reconstructed by replaying the genesis block's InitConfig txs.
+        let initial_state = base.with_public_accounts(genesis_seed);
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;

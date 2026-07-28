@@ -19,6 +19,12 @@ pub enum Instruction {
     /// Required accounts (2): the wrapped-token config PDA, then the recipient's
     /// holding PDA.
     Mint { recipient: [u8; 32], amount: u128 },
+    /// Pins `minter` (the cross-zone inbox) as the authorized minter, written once
+    /// into a default config PDA at genesis. The guest refuses a non-default
+    /// pre-state, so it cannot be re-run to hijack the minter.
+    ///
+    /// Required accounts (1): the wrapped-token config PDA.
+    InitConfig { minter: ProgramId },
 }
 
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at

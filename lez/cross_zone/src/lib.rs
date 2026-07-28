@@ -2,6 +2,12 @@
 //! machine (`lee`), kept out of the guest-pure cores. Mirrors `system_accounts`:
 //! it resolves builtin program ids and bakes them into transactions and genesis
 //! accounts for the watcher (sequencer) and verifier (indexer).
+//!
+//! This crate is the reference LEZ-to-LEZ adapter: it re-derives each delivery
+//! byte-for-byte from a peer LEZ zone's finalized blocks, valid only because the
+//! peer runs identical LEZ code. A non-LEZ peer needs a separate adapter with its
+//! own block-reading, emission-extraction, delivery-building, and trust model; a
+//! shared trait is best lifted from that first real adapter, not from this one.
 
 use std::collections::BTreeMap;
 
@@ -11,9 +17,10 @@ use cross_zone_inbox_core::{
     inbox_seen_shard_account_id,
 };
 use lee_core::{
-    account::{Account, AccountId},
+    account::{Account, AccountId, Balance},
     program::ProgramId,
 };
+use serde::Serialize;
 
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
@@ -136,54 +143,78 @@ pub fn build_dispatch_from_emission(
     build_inbox_dispatch_tx(programs::cross_zone_inbox().id(), &msg, target_ids)
 }
 
-/// Builds the inbox config account a zone seeds into genesis state.
-///
-/// Lets the inbox guest authorize inbound peer messages. The sequencer and
-/// indexer seed the same account from the same config, keeping their replayed
-/// state consistent.
-#[must_use]
-pub fn build_inbox_config_account(
-    self_zone: ZoneId,
-    cross_zone: &CrossZoneConfig,
-) -> (AccountId, Account) {
-    let inbox_id = programs::cross_zone_inbox().id();
-
+/// The inbox config a zone derives from its cross-zone config: the per-peer target
+/// allowlists plus its own zone id.
+fn inbox_config(self_zone: ZoneId, cross_zone: &CrossZoneConfig) -> InboxConfig {
     let mut allowed_targets = BTreeMap::new();
     for peer in &cross_zone.peers {
         allowed_targets.insert(peer.channel_id, peer.allowed_targets.clone());
     }
-    let config = InboxConfig {
+    InboxConfig {
         self_zone,
         allowed_peers: BTreeMap::new(),
         allowed_targets,
-    };
+    }
+}
 
-    let account = Account {
-        program_owner: inbox_id,
-        balance: 0,
-        data: config
-            .to_bytes()
-            .try_into()
-            .expect("inbox config fits in account data"),
-        nonce: 0_u128.into(),
-    };
-    (inbox_config_account_id(inbox_id), account)
+/// The genesis transaction that initializes this zone's inbox config PDA.
+///
+/// Lets the inbox guest authorize inbound peer messages; replaying it seeds the
+/// same account on every node, keeping their state consistent.
+#[must_use]
+pub fn build_inbox_init_config_tx(
+    self_zone: ZoneId,
+    cross_zone: &CrossZoneConfig,
+) -> lee::PublicTransaction {
+    let inbox_id = programs::cross_zone_inbox().id();
+    genesis_public_tx(
+        inbox_id,
+        vec![inbox_config_account_id(inbox_id)],
+        Instruction::InitConfig(inbox_config(self_zone, cross_zone)),
+    )
 }
 
 /// Builds the genesis holding account funding a holder's bridgeable balance.
 ///
-/// Owned by `bridge_lock`, data is the LE balance. Not produced by any
-/// transaction, so the sequencer and indexer both seed it through this one
-/// builder.
+/// A real native balance owned by `bridge_lock`, which can debit it on a lock; it
+/// is conserved like any other balance. Not produced by any transaction, so the
+/// sequencer and indexer both seed it through this one builder.
 #[must_use]
-pub fn build_holding_account(holder: AccountId, amount: u128) -> (AccountId, Account) {
+pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
         program_owner: programs::bridge_lock().id(),
-        data: bridge_lock_core::balance_bytes(amount)
-            .to_vec()
-            .try_into()
-            .expect("balance fits in account data"),
+        balance: amount,
         ..Default::default()
     };
     (holder, account)
+}
+
+/// The genesis transaction that pins the cross-zone inbox as the wrapped-token
+/// minter, without importing the inbox id into the guest.
+#[must_use]
+pub fn build_wrapped_token_init_config_tx() -> lee::PublicTransaction {
+    let wrapped_token_id = programs::wrapped_token().id();
+    genesis_public_tx(
+        wrapped_token_id,
+        vec![wrapped_token_core::config_account_id(wrapped_token_id)],
+        wrapped_token_core::Instruction::InitConfig {
+            minter: programs::cross_zone_inbox().id(),
+        },
+    )
+}
+
+/// Builds an unsigned, sequencer-origin genesis transaction invoking `instruction`
+/// on `program_id` over `account_ids`.
+fn genesis_public_tx<I: Serialize>(
+    program_id: ProgramId,
+    account_ids: Vec<AccountId>,
+    instruction: I,
+) -> lee::PublicTransaction {
+    let message =
+        lee::public_transaction::Message::try_new(program_id, account_ids, vec![], instruction)
+            .expect("genesis instruction must serialize");
+    lee::PublicTransaction::new(
+        message,
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
 }

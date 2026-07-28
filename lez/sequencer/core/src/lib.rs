@@ -217,15 +217,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // Before producing, verify our local state still belongs to the chain
         // the channel serves and replay any channel blocks we are missing
         // (e.g. from other sequencers).
-        let channel_was_empty =
+        let channel_absent =
             Self::verify_and_reconstruct(&block_publisher, &store, &chain, is_fresh_start)
                 .await
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
-        // Publish our blocks only when bootstrapping an empty channel. If the
-        // channel already has blocks (another sequencer bootstrapped it), we
-        // adopted them during reconstruction instead.
-        if is_fresh_start && channel_was_empty {
+        // Publish our blocks only when we are bootstrapping a channel that does
+        // not exist yet (no channel tip). If the channel already exists (another
+        // sequencer created it), we adopted its blocks during reconstruction
+        // instead; republishing then would fork the channel with our own copies.
+        if is_fresh_start && channel_absent {
             let mut pending_blocks = store
                 .get_all_blocks()
                 .filter_ok(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
@@ -269,7 +270,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// `state`/`store`, recording each block's L1 inscription slot as the new
     /// anchor. Fails (never parks) on any divergence.
     ///
-    /// Returns whatever channel was empty or not.
+    /// Returns whether the channel does not exist yet (has no tip), i.e. whether
+    /// this sequencer is the one that must bootstrap-publish its own blocks.
     async fn verify_and_reconstruct(
         publisher: &BP,
         store: &SequencerStore,
@@ -351,7 +353,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .await
             .context("Failed to read channel history for reconstruction")?;
         let mut messages = std::pin::pin!(messages);
-        let mut channel_is_empty = true;
         while let Some((message, slot)) = messages.next().await {
             if let Some(check) = &mut consistency_check
                 && let Some(ChainConsistency::Inconsistent(mismatch)) =
@@ -369,7 +370,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     slot.into_inner()
                 )
             })?;
-            channel_is_empty = false;
             // Locked per message (not across the stream `await`): concurrent
             // follow events interleave safely — both paths apply idempotently
             // and persist under this same lock.
@@ -377,7 +377,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::apply_reconstructed_block(store, &mut chain, &block, slot)?;
         }
 
-        Ok(channel_is_empty)
+        // The channel exists once it has a tip; only when it has none is this
+        // sequencer the one bootstrapping it. This is deliberately not the
+        // reconstruction scan's view above, which reads only finalized history
+        // (up to LIB) and so reports "empty" while finality lags even though the
+        // channel already holds unfinalized blocks from another sequencer.
+        Ok(channel_tip_slot.is_none())
     }
 
     /// Applies a single channel block during reconstruction: idempotent for
@@ -1088,33 +1093,22 @@ fn replay_unfulfilled_deposit_events(
     });
 }
 
-/// The pre-genesis state: `testnet_initial_state` plus accounts seeded outside
-/// any transaction (bridge-lock holdings, the cross-zone inbox config).
+/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
+/// the only accounts seeded outside any transaction. Cross-zone config is seeded
+/// by genesis `InitConfig` transactions and reconstructed by replaying them.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
-    let mut state = testnet_initial_state::initial_state();
+    let base = testnet_initial_state::initial_state();
 
     #[cfg(feature = "testnet")]
-    let mut state = testnet_initial_state::initial_state_testnet();
+    let base = testnet_initial_state::initial_state_testnet();
 
-    // Seed bridge-lock holder balances directly: they are not produced by any tx.
-    for action in &config.genesis {
-        if let GenesisAction::SupplyBridgeLockHolding { holder, amount } = action {
-            let (holder_id, account) = cross_zone::build_holding_account(*holder, *amount);
-            state.insert_genesis_account(holder_id, account);
-        }
-    }
-
-    // Seed this zone's cross-zone inbox config so the inbox guest can authorize
-    // inbound peer messages (zone-specific config, not produced by any tx).
-    if let Some(cross_zone) = &config.cross_zone {
-        let self_zone = *config.bedrock_config.channel_id.as_ref();
-        let (config_id, config_account) =
-            cross_zone::build_inbox_config_account(self_zone, cross_zone);
-        state.insert_genesis_account(config_id, config_account);
-    }
-
-    state
+    // Bridge-lock holder balances belong to the source side and are not produced by
+    // any transaction, so seed them directly. Cross-zone config is seeded by genesis
+    // InitConfig transactions in `build_genesis_state`, not here.
+    let holdings = bridge_lock_holdings(&config.genesis)
+        .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
+    base.with_public_accounts(holdings)
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1124,22 +1118,42 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
-    let genesis_txs = config
-        .genesis
-        .iter()
-        .filter_map(|genesis_tx| match genesis_tx {
-            GenesisAction::SupplyAccount {
-                account_id,
-                balance,
-            } => Some(build_supply_account_genesis_transaction(
-                account_id, *balance,
-            )),
-            GenesisAction::SupplyBridgeAccount { balance } => {
-                Some(build_supply_bridge_account_genesis_transaction(*balance))
-            }
-            // Force-inserted in `build_initial_state`: bridge_lock has no mint transaction.
-            GenesisAction::SupplyBridgeLockHolding { .. } => None,
-        })
+    // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
+    info!(
+        "Genesis fingerprint: {}",
+        hex::encode(state.genesis_fingerprint())
+    );
+
+    // Config txs seed the config accounts by transaction, so every node
+    // reconstructs them by replaying the genesis block. The wrapped-token minter is
+    // initialized on every zone (wrapped_token is a builtin), since its InitConfig
+    // is user-callable and a config PDA left default would be claimable by anyone as
+    // the first initializer (a minter hijack). The inbox allowlist is initialized
+    // only on receiving zones; the inbox is sequencer-only, so its default config
+    // PDA is not user-claimable, merely unused until the zone receives.
+    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx());
+    let inbox_config_tx = config.cross_zone.as_ref().map(|cross_zone| {
+        let self_zone = *config.bedrock_config.channel_id.as_ref();
+        cross_zone::build_inbox_init_config_tx(self_zone, cross_zone)
+    });
+    let supply_txs = config.genesis.iter().filter_map(|action| match action {
+        GenesisAction::SupplyAccount {
+            account_id,
+            balance,
+        } => Some(build_supply_account_genesis_transaction(
+            account_id, *balance,
+        )),
+        GenesisAction::SupplyBridgeAccount { balance } => {
+            Some(build_supply_bridge_account_genesis_transaction(*balance))
+        }
+        // Seeded directly in `build_initial_state` (holdings via `build_holding_account`), not a
+        // genesis tx.
+        GenesisAction::SupplyBridgeLockHolding { .. } => None,
+    });
+
+    let genesis_txs = wrapped_token_config_tx
+        .chain(inbox_config_tx)
+        .chain(supply_txs)
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -1150,6 +1164,16 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         .collect();
 
     (state, genesis_txs)
+}
+
+/// Bridge-lock holder balances configured for this zone's genesis.
+fn bridge_lock_holdings(
+    genesis: &[GenesisAction],
+) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
+    genesis.iter().filter_map(|action| match action {
+        GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
+        GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
+    })
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.

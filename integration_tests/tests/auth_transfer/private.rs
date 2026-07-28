@@ -83,7 +83,6 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
@@ -124,6 +123,47 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     assert_eq!(acc_2_balance, 20100);
 
     info!("Successfully deshielded transfer to public account");
+
+    Ok(())
+}
+
+/// A deshielded transfer's public recipient must not be asked to sign the transaction: the
+/// sender's private-side proof is the only authorization the protocol requires, and signing
+/// with the recipient's key (when the wallet happens to hold it) would leak a link between
+/// the two accounts.
+#[test]
+async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let from: AccountId = ctx.existing_private_accounts()[0];
+    let to: AccountId = ctx.existing_public_accounts()[1];
+
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: private_mention(from),
+        to: Some(public_mention(to)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: 100,
+    });
+
+    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = result else {
+        anyhow::bail!("Expected TransactionExecuted return value");
+    };
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
+
+    assert!(
+        tx.witness_set().signatures_and_public_keys().is_empty(),
+        "deshielded transfer must not carry any signature, in particular not the recipient's"
+    );
+
+    info!("Deshielded transfer correctly did not sign with the recipient's key");
 
     Ok(())
 }
@@ -172,7 +212,6 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .context("Failed to get private account commitment for sender")?;
     assert_eq!(tx.message.new_commitments[0], sender_commitment);
 
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
@@ -303,7 +342,6 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify commitments are in state
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }

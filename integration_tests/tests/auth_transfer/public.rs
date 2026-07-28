@@ -1,19 +1,19 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
-    public_mention, send,
+    public_mention, send, send_claiming_new_account,
 };
-use lee::public_transaction;
+use lee::{PublicKey, public_transaction};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
     account::Label,
     cli::{
-        CliAccountMention, Command, account::AccountSubcommand,
+        CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
 };
@@ -24,13 +24,20 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
 
     let sender = ctx.existing_public_accounts()[0];
     let receiver = ctx.existing_public_accounts()[1];
-    send(
-        &mut ctx,
-        public_mention(sender),
-        public_mention(receiver),
-        100,
-    )
-    .await?;
+
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: public_mention(sender),
+        to: Some(public_mention(receiver)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: 100,
+    });
+    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } = result else {
+        anyhow::bail!("Expected TransactionExecuted return value");
+    };
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -45,6 +52,34 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
 
+    // The recipient already exists, so the protocol doesn't require its signature, and the
+    // wallet must never sign with a key it doesn't need to use. Assert the transfer's witness
+    // set contains exactly the sender's signature, not the recipient's.
+    let (tx, _block_id) = ctx
+        .sequencer_client()
+        .get_transaction(tx_hash)
+        .await?
+        .context("transfer transaction should be included in a block")?;
+    let LeeTransaction::Public(tx) = tx else {
+        anyhow::bail!("Expected a public transaction");
+    };
+    let sender_public_key = PublicKey::new_from_private_key(
+        ctx.wallet()
+            .get_account_public_signing_key(sender)
+            .context("sender should have a signing key")?,
+    );
+    let signers: Vec<_> = tx
+        .witness_set()
+        .signatures_and_public_keys()
+        .iter()
+        .map(|(_, public_key)| public_key)
+        .collect();
+    assert_eq!(
+        signers,
+        vec![&sender_public_key],
+        "only the sender should sign a transfer to an existing account"
+    );
+
     Ok(())
 }
 
@@ -55,16 +90,9 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     let new_persistent_account_id = new_account(&mut ctx, false, None).await?;
 
     let sender = ctx.existing_public_accounts()[0];
-    send(
-        &mut ctx,
-        public_mention(sender),
-        public_mention(new_persistent_account_id),
-        100,
-    )
-    .await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    // The wallet CLI never signs with the recipient's key, but claiming this fresh account
+    // requires it, so bypass the CLI for this one send.
+    send_claiming_new_account(&mut ctx, sender, new_persistent_account_id, 100).await?;
 
     info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;

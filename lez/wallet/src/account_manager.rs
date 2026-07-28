@@ -4,11 +4,13 @@ use anyhow::Result;
 use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
-    NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
-    account::{AccountWithMetadata, Nonce},
+    Commitment, CommitmentSetDigest, DummyInput, Identifier, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
-    encryption::{ViewTag, ViewingPublicKey},
+    encryption::{
+        Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
+    },
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -192,6 +194,14 @@ pub struct AccountManager {
 }
 
 impl AccountManager {
+    /// The private-account count that every privacy-preserving transaction is padded up to with
+    /// dummy inputs via the default interface.
+    ///
+    /// The value is selected based on the largest account number per-tx currently supported
+    /// (it is 7 for AMM). It is recommended to reassess this value per new actively supported
+    /// application and that all users share the value for a larger anonymity set.
+    const MAX_PRIVATE_ACCOUNTS: usize = 7;
+
     pub async fn new(
         wallet: &WalletCore,
         accounts: Vec<AccountIdentity>,
@@ -257,8 +267,7 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, true, (&npk, &vpk, identifier));
-                    let mut random_seed: [u8; 32] = [0; 32];
-                    OsRng.fill_bytes(&mut random_seed);
+                    let random_seed = random_bytes();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -284,8 +293,7 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
-                    let mut random_seed: [u8; 32] = [0; 32];
-                    OsRng.fill_bytes(&mut random_seed);
+                    let random_seed = random_bytes();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -389,6 +397,37 @@ impl AccountManager {
                 }
             })
             .collect()
+    }
+
+    /// Given a count, generate that many dummy inputs with randomized seeds and notes.
+    /// Uses the given commitment root from the account.
+    pub fn dummy_inputs(&self, count: usize) -> Vec<DummyInput> {
+        std::iter::repeat_with(|| DummyInput {
+            nullifier_seed: random_bytes(),
+            commitment_seed: random_bytes(),
+            note: random_dummy_note(),
+            commitment_root: self.dummy_commitment_root,
+        })
+        .take(count)
+        .collect()
+    }
+
+    /// Generate the dummy inputs that pad this transaction's private-account count up to
+    /// `MAX_PRIVATE_ACCOUNTS`.
+    pub fn dummy_inputs_default(&self) -> Vec<DummyInput> {
+        let private_count = self
+            .states
+            .iter()
+            .filter(|state| matches!(state, State::Private(_)))
+            .count();
+        if private_count > Self::MAX_PRIVATE_ACCOUNTS {
+            log::warn!(
+                "private account count {private_count} exceeds MAX_PRIVATE_ACCOUNTS ({}); \
+                 padding saturates and the private-input count is not hidden",
+                Self::MAX_PRIVATE_ACCOUNTS
+            );
+        }
+        self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 
     /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
@@ -536,8 +575,7 @@ fn private_key_tree_acc_preparation(
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
-    let mut random_seed: [u8; 32] = [0; 32];
-    OsRng.fill_bytes(&mut random_seed);
+    let random_seed = random_bytes();
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -569,8 +607,7 @@ fn private_shared_acc_preparation(
 
     let pre_state = AccountWithMetadata::new(acc, true, account_id);
 
-    let mut random_seed: [u8; 32] = [0; 32];
-    OsRng.fill_bytes(&mut random_seed);
+    let random_seed = random_bytes();
 
     AccountPreparedData {
         nsk: Some(nsk),
@@ -646,6 +683,34 @@ fn random_view_tag() -> ViewTag {
     byte[0]
 }
 
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+fn random_vec(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Generates a dummy note: random bytes sized to a default-account ciphertext, a real
+/// ML-KEM ciphertext epk toward a throwaway key, and a random view tag.
+fn random_dummy_note() -> EncryptedAccountData {
+    // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
+    let ciphertext_len = PrivateAccountKind::HEADER_LEN
+        .checked_add(Account::default().to_bytes().len())
+        .expect("dummy ciphertext length fits in usize");
+    let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
+    let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
+    EncryptedAccountData {
+        ciphertext: Ciphertext::from_inner(random_vec(ciphertext_len)),
+        epk,
+        view_tag: random_view_tag(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,5 +725,67 @@ mod tests {
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
+    }
+
+    fn private_state() -> State {
+        let npk = NullifierPublicKey([0; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
+        State::Private(AccountPreparedData {
+            nsk: None,
+            npk,
+            identifier: 0,
+            vpk,
+            pre_state,
+            proof: None,
+            random_seed: [0; 32],
+            is_pda: false,
+        })
+    }
+
+    fn public_state() -> State {
+        let npk = NullifierPublicKey([0; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
+        let account = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
+        State::Public { account, sk: None }
+    }
+
+    fn manager(states: Vec<State>) -> AccountManager {
+        AccountManager {
+            states,
+            pin: None,
+            dummy_commitment_root: [0; 32],
+        }
+    }
+
+    #[test]
+    fn dummy_inputs_default_pads_private_count_to_max() {
+        let max = AccountManager::MAX_PRIVATE_ACCOUNTS;
+
+        // Empty txs get padded to the max.
+        assert_eq!(manager(vec![]).dummy_inputs_default().len(), max);
+        // In a padded transaction, the padding amount depends on
+        // the amount of private accounts used.
+        assert_eq!(
+            manager(vec![private_state(), private_state()])
+                .dummy_inputs_default()
+                .len(),
+            max - 2
+        );
+        assert_eq!(
+            manager(vec![private_state(), public_state(), private_state()])
+                .dummy_inputs_default()
+                .len(),
+            max - 2
+        );
+
+        // If the private accounts in the transaction exceed the max, no padding
+        // is done.
+        let full: Vec<State> = std::iter::repeat_with(private_state).take(max).collect();
+        assert_eq!(manager(full).dummy_inputs_default().len(), 0);
+        let over: Vec<State> = std::iter::repeat_with(private_state)
+            .take(max + 2)
+            .collect();
+        assert_eq!(manager(over).dummy_inputs_default().len(), 0);
     }
 }

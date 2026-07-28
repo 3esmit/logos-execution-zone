@@ -776,12 +776,14 @@ impl WalletCore {
         )?;
 
         let private_account_keys = acc_manager.private_account_keys();
-        let (output, proof) = lee::privacy_preserving_transaction::circuit::execute_and_prove(
-            pre_states,
-            instruction_data,
-            acc_manager.account_identities(),
-            &program.to_owned(),
-        )?;
+        let (output, proof) =
+            lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
+                pre_states,
+                instruction_data,
+                acc_manager.account_identities(),
+                acc_manager.dummy_inputs_default(),
+                &program.to_owned(),
+            )?;
 
         let message =
             lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(

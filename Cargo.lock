@@ -1952,6 +1952,8 @@ dependencies = [
  "ping_core",
  "programs",
  "risc0-zkvm",
+ "serde",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -10282,7 +10284,6 @@ dependencies = [
  "programs",
  "serde",
  "system_accounts",
- "wrapped_token_core",
 ]
 
 [[package]]
