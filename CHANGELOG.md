@@ -4,6 +4,14 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+## 0.4.0-alpha.3 - 2026-07-28
+
+### Added
+
+- `wallet auth-transfer send --submit-only` submits public-to-public transfers
+  and returns the transaction hash without waiting for finalization. Private
+  and mixed-privacy transfers remain explicitly unsupported in this mode.
+
 ## 0.4.0-alpha.2 - 2026-07-27
 
 ### Fixed
