@@ -67,6 +67,8 @@ pub struct Defaults {
 #[serde(rename_all = "camelCase")]
 pub struct Custom {
     #[serde(default)]
+    pub fill_opacity: Option<u32>,
+    #[serde(default)]
     pub span_nulls: Option<bool>,
     #[serde(default)]
     pub line_interpolation: Option<LineInterpolation>,

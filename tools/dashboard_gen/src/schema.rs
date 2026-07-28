@@ -364,6 +364,43 @@ pub enum Options {
 }
 
 #[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VariableKind {
+    /// A fixed list of choices, spelled out in the dashboard itself.
+    Custom,
+}
+
+/// One choice in a [`Variable`] dropdown: `text` is displayed, `value` is what
+/// `$name` interpolates to in a query.
+#[derive(Clone, Serialize)]
+pub struct VariableOption {
+    pub selected: bool,
+    pub text: String,
+    pub value: String,
+}
+
+/// A dashboard-level dropdown, rendered in the top bar.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Variable {
+    pub current: VariableOption,
+    pub include_all: bool,
+    pub label: String,
+    pub multi: bool,
+    pub name: String,
+    pub options: Vec<VariableOption>,
+    /// Grafana's own encoding of `options`, as `text : value` pairs.
+    pub query: String,
+    #[serde(rename = "type")]
+    pub kind: VariableKind,
+}
+
+#[derive(Serialize, Default)]
+pub struct Templating {
+    pub list: Vec<Variable>,
+}
+
+#[derive(Clone, Copy, Serialize)]
 pub struct GridPos {
     pub h: u32,
     pub w: u32,

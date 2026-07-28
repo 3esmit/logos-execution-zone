@@ -219,6 +219,7 @@ impl From<lee::ProgramDeploymentTransaction> for LeeTransaction {
     BorshSerialize,
     BorshDeserialize,
     strum::IntoStaticStr,
+    strum::EnumIter,
 )]
 pub enum TxKind {
     Public,

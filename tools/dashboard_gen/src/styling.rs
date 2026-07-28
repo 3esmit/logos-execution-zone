@@ -11,7 +11,7 @@
 //! not emitted, so the value is silently dropped.
 
 use crate::{
-    Panel,
+    DEFAULT_FILL_OPACITY, Panel,
     schema::{AxisPlacement, GradientMode, LineInterpolation, ShowPoints, StackingMode},
 };
 
@@ -20,6 +20,24 @@ use crate::{
     reason = "styling setters intentionally live in their own file, so `Panel` has a second inherent impl here"
 )]
 impl Panel {
+    /// Area fill under the line, as a percentage. Builder default:
+    /// [`DEFAULT_FILL_OPACITY`].
+    ///
+    /// Panics if passed that default, or a value above 100.
+    #[must_use]
+    pub fn fill_opacity(mut self, opacity: u32) -> Self {
+        assert!(
+            opacity <= 100,
+            "fill_opacity({opacity}) is not a percentage"
+        );
+        assert_ne!(
+            opacity, DEFAULT_FILL_OPACITY,
+            "fill_opacity({DEFAULT_FILL_OPACITY}) is redundant: it is the builder's default. Omit the call.",
+        );
+        self.fill_opacity = Some(opacity);
+        self
+    }
+
     /// Interpolation between points. Grafana default: `Linear`.
     ///
     /// Panics if passed `Linear` — that's the default and would be redundant.

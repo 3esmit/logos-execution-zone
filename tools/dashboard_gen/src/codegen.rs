@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 
 use crate::{
-    Unit,
+    DEFAULT_FILL_OPACITY, Unit,
     input::{Defaults, PanelInput},
     schema::{
         AxisPlacement, Color, GradientMode, LineInterpolation, PanelType, ShowPoints, StackingMode,
@@ -42,6 +42,11 @@ fn panel_expr_inner(panel: &PanelInput) -> Result<String, std::fmt::Error> {
     write_defaults(&mut expr, defaults)?;
 
     if let Some(custom) = &defaults.custom {
+        // Emitted against the builder's default, not Grafana's (which is 0), so
+        // a genuinely unfilled panel still round-trips.
+        if let Some(opacity) = custom.fill_opacity.filter(|&o| o != DEFAULT_FILL_OPACITY) {
+            write!(expr, "\n    .fill_opacity({opacity})")?;
+        }
         if custom.span_nulls == Some(true) {
             expr.push_str("\n    .span_nulls()");
         }

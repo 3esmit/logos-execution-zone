@@ -10,17 +10,19 @@
 )]
 
 use dashboard_gen::{
-    Color, Dashboard, FieldOverride, Panel, Target, Thresholds, Unit, avg, percentiles,
-    percentiles_labeled, rate_per_min,
+    Color, Dashboard, FieldOverride, GradientMode, Panel, Target, Thresholds, Unit, avg,
+    percentile_legend, percentile_variable, rate_per_min, selected_percentile,
 };
 use json_pretty_compact::PrettyCompactFormatter;
 use serde::Serialize as _;
 
 const PERCENTILES: &[u32] = &[50, 90, 95, 99];
+const DEFAULT_PERCENTILE: u32 = 95;
 
 fn sequencer_dashboard() -> Dashboard {
     Dashboard::new("Sequencer", "sequencer")
         .tag("sequencer")
+        .variable(percentile_variable(PERCENTILES, DEFAULT_PERCENTILE))
         .row(
             7,
             [
@@ -30,13 +32,13 @@ fn sequencer_dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("blue"))
                     .target(
-                        Target::new(sequencer_core_metrics::names::BLOCK_COUNT).legend("height"),
+                        Target::new(sequencer_core_metrics::names::BLOCKS_TOTAL).legend("height"),
                     ),
                 Panel::timeseries("Block production rate")
                     .width(18)
                     .unit(Unit::Short)
                     .target(rate_per_min(
-                        sequencer_core_metrics::names::BLOCK_COUNT,
+                        sequencer_core_metrics::names::BLOCKS_TOTAL,
                         "blocks/min",
                     )),
             ],
@@ -46,9 +48,10 @@ fn sequencer_dashboard() -> Dashboard {
             [Panel::timeseries("Block creation time")
                 .width(24)
                 .unit(Unit::Seconds)
-                .targets(percentiles(
+                .target(selected_percentile(
                     sequencer_core_metrics::names::BLOCK_CREATION_TIME,
-                    PERCENTILES,
+                    &[],
+                    &percentile_legend(),
                 ))
                 .target(avg(sequencer_core_metrics::names::BLOCK_CREATION_TIME))
                 .with_override(
@@ -63,17 +66,18 @@ fn sequencer_dashboard() -> Dashboard {
                 Panel::timeseries("Transaction application time")
                     .width(12)
                     .unit(Unit::Seconds)
-                    .targets(percentiles_labeled(
+                    .target(selected_percentile(
                         sequencer_core_metrics::names::MEMPOOL_TRANSACTION_APPLICATION_TIME,
-                        PERCENTILES,
-                        " · {{kind}} · {{origin}}",
+                        &["kind", "origin"],
+                        "{{kind}} · {{origin}}",
                     )),
                 Panel::timeseries("Transactions per block")
                     .width(12)
                     .unit(Unit::Short)
-                    .targets(percentiles(
+                    .target(selected_percentile(
                         sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK,
-                        PERCENTILES,
+                        &[],
+                        &percentile_legend(),
                     ))
                     .target(avg(sequencer_core_metrics::names::TRANSACTIONS_PER_BLOCK))
                     .with_override(
@@ -141,11 +145,13 @@ fn sequencer_dashboard() -> Dashboard {
                     )
                     .target(
                         Target::new(format!(
+                            // Both failure stages against the same submission base;
                             // `clamp_min` keeps an idle window (nothing submitted)
                             // reading as 0% instead of a division by zero.
-                            "100 * increase({failed}[$__range]) / clamp_min(increase({submitted}[$__range]), 1)",
-                            failed = sequencer_core_metrics::names::FAILED_TRANSACTION_COUNT,
-                            submitted = sequencer_service_metrics::names::SUBMITTED_TRANSACTION_COUNT,
+                            "100 * (increase({before_mempool}[$__range]) + increase({in_mempool}[$__range])) / clamp_min(increase({submitted}[$__range]), 1)",
+                            before_mempool = sequencer_service_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                            in_mempool = sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                            submitted = sequencer_service_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
                         ))
                         .legend("failed"),
                     ),
@@ -153,17 +159,29 @@ fn sequencer_dashboard() -> Dashboard {
                     .width(18)
                     .unit(Unit::Short)
                     .min(0.0)
+                    .fill_opacity(35)
+                    .gradient_mode(GradientMode::Opacity)
                     .target(rate_per_min(
-                        sequencer_service_metrics::names::SUBMITTED_TRANSACTION_COUNT,
+                        sequencer_service_metrics::names::SUBMITTED_TRANSACTIONS_TOTAL,
                         "submitted",
                     ))
                     .target(rate_per_min(
-                        sequencer_core_metrics::names::FAILED_TRANSACTION_COUNT,
-                        "failed",
+                        sequencer_service_metrics::names::BEFORE_MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                        "failed · before mempool",
                     ))
-                    .with_override(FieldOverride::by_name("failed").color(Color::fixed("red")))
+                    .target(rate_per_min(
+                        sequencer_core_metrics::names::MEMPOOL_FAILED_TRANSACTIONS_TOTAL,
+                        "failed · in mempool",
+                    ))
                     .with_override(
                         FieldOverride::by_name("submitted").color(Color::fixed("green")),
+                    )
+                    .with_override(
+                        FieldOverride::by_name("failed · before mempool")
+                            .color(Color::fixed("orange")),
+                    )
+                    .with_override(
+                        FieldOverride::by_name("failed · in mempool").color(Color::fixed("red")),
                     ),
             ],
         )

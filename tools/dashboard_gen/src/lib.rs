@@ -16,13 +16,14 @@
 pub use codegen::panel_to_rust_source;
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
+    Variable,
 };
 use schema::{
     Calc, Custom, Datasource, Defaults, DrawStyle, EmptyList, FieldConfig, Fill, GaugeOptions,
     GraphMode, GridPos, Legend, LegendDisplay, LineStyle, Matcher, MatcherKind, Options,
     OverrideProperty, PanelModel, PanelType, Placement, PropertyId, PropertyValue, ReduceOptions,
-    SortOrder, Stacking, StatColorMode, StatOptions, TimeRange, TimeSeriesOptions, Tooltip,
-    TooltipMode,
+    SortOrder, Stacking, StatColorMode, StatOptions, Templating, TimeRange, TimeSeriesOptions,
+    Tooltip, TooltipMode, VariableKind, VariableOption,
 };
 use serde::Serialize;
 pub use unit::Unit;
@@ -37,6 +38,18 @@ mod unit;
 /// environments because they reference the datasource by this stable uid rather
 /// than by a per-environment URL.
 pub const DATASOURCE_UID: &str = "prometheus";
+
+/// Window every histogram query rates over. `$__rate_interval` tracks the
+/// panel's zoom, so a percentile covers the range you are actually looking at,
+/// and an idle window yields no value rather than a zero.
+const RATE_WINDOW: &str = "$__rate_interval";
+
+/// Dashboard variable holding the quantile every percentile query reads.
+const PERCENTILE_VAR: &str = "percentile";
+
+/// Area fill under a timeseries line, as a percentage. Enough to read a series'
+/// shape at a glance without drowning the ones stacked behind it.
+pub(crate) const DEFAULT_FILL_OPACITY: u32 = 10;
 
 /// A single Prometheus query within a panel.
 #[derive(Clone, Serialize)]
@@ -129,6 +142,7 @@ pub struct Panel {
     span_nulls: bool,
     overrides: Vec<FieldOverride>,
     // Optional timeseries styling, set via the `styling` setters.
+    fill_opacity: Option<u32>,
     line_interpolation: Option<LineInterpolation>,
     show_points: Option<ShowPoints>,
     gradient_mode: Option<GradientMode>,
@@ -152,6 +166,7 @@ impl Panel {
             thresholds: None,
             span_nulls: false,
             overrides: Vec::new(),
+            fill_opacity: None,
             line_interpolation: None,
             show_points: None,
             gradient_mode: None,
@@ -308,7 +323,7 @@ impl Panel {
                     custom: Some(Custom {
                         draw_style: DrawStyle::Line,
                         line_width: 1,
-                        fill_opacity: 10,
+                        fill_opacity: self.fill_opacity.unwrap_or(DEFAULT_FILL_OPACITY),
                         span_nulls: self.span_nulls.then_some(true),
                         line_interpolation: self.line_interpolation,
                         show_points: self.show_points,
@@ -327,8 +342,11 @@ impl Panel {
                     thresholds: self.thresholds,
                 };
                 // Panels with several series read better as a sortable table with
-                // a multi-series tooltip; single-series panels stay compact.
-                let multi = targets.len() > 1;
+                // a multi-series tooltip; single-series panels stay compact. A
+                // `{{label}}` legend fans one target out into a series per label
+                // value, so it counts as several too.
+                let multi =
+                    targets.len() > 1 || targets.iter().any(|target| target.legend.contains("{{"));
                 let options = Options::TimeSeries(TimeSeriesOptions {
                     legend: Legend {
                         display_mode: if multi {
@@ -382,7 +400,7 @@ pub struct Dashboard {
     refresh: String,
     schema_version: u32,
     tags: Vec<String>,
-    templating: EmptyList,
+    templating: Templating,
     time: TimeRange,
     timezone: String,
     title: String,
@@ -405,7 +423,7 @@ impl Dashboard {
             refresh: "5s".to_owned(),
             schema_version: 39,
             tags: Vec::new(),
-            templating: EmptyList::default(),
+            templating: Templating::default(),
             time: TimeRange {
                 from: "now-15m".to_owned(),
                 to: "now".to_owned(),
@@ -427,6 +445,13 @@ impl Dashboard {
     #[must_use]
     pub fn refresh(mut self, refresh: impl Into<String>) -> Self {
         self.refresh = refresh.into();
+        self
+    }
+
+    /// Add a dropdown to the dashboard's top bar, e.g. [`percentile_variable`].
+    #[must_use]
+    pub fn variable(mut self, variable: Variable) -> Self {
+        self.templating.list.push(variable);
         self
     }
 
@@ -468,34 +493,89 @@ impl Dashboard {
     }
 }
 
-/// Percentile line targets for a summary metric: `p50`, `p90`, … each querying
-/// the matching `quantile="0.x"` series.
+/// The dropdown driving every [`selected_percentile`] query, offering
+/// `percentiles` (e.g. `[50, 90, 95, 99]`) with `default` pre-selected.
+///
+/// Panics if `default` is not one of `percentiles`.
 #[must_use]
-pub fn percentiles(metric: &str, percentiles: &[u32]) -> Vec<Target> {
-    percentiles_labeled(metric, percentiles, "")
-}
+pub fn percentile_variable(percentiles: &[u32], default: u32) -> Variable {
+    assert!(
+        percentiles.contains(&default),
+        "default p{default} is not one of the offered percentiles {percentiles:?}",
+    );
 
-/// Like [`percentiles`], but appends `legend_suffix` to every legend — handy
-/// when the metric carries labels (e.g. ` · {{kind}} · {{origin}}`).
-#[must_use]
-pub fn percentiles_labeled(metric: &str, percentiles: &[u32], legend_suffix: &str) -> Vec<Target> {
-    percentiles
+    let options: Vec<VariableOption> = percentiles
         .iter()
-        .map(|&p| {
-            // `quantile="0.x"` label, derived without float math: zero-pad to two
-            // digits then drop trailing zeros (50 → "0.5", 95 → "0.95").
-            let quantile = format!("0.{p:02}");
-            let quantile = quantile.trim_end_matches('0');
-            Target::new(format!("{metric}{{quantile=\"{quantile}\"}}"))
-                .legend(format!("p{p}{legend_suffix}"))
+        .map(|&p| VariableOption {
+            selected: p == default,
+            text: format!("p{p}"),
+            value: quantile(p),
         })
-        .collect()
+        .collect();
+    let current = options
+        .iter()
+        .find(|option| option.selected)
+        .cloned()
+        .expect("`default` is one of `percentiles`, asserted above");
+    let query = options
+        .iter()
+        .map(|option| format!("{} : {}", option.text, option.value))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Variable {
+        current,
+        include_all: false,
+        label: "Percentile".to_owned(),
+        // A quantile is a scalar argument to `histogram_quantile`, so exactly
+        // one may be selected.
+        multi: false,
+        name: PERCENTILE_VAR.to_owned(),
+        options,
+        query,
+        kind: VariableKind::Custom,
+    }
 }
 
-/// An `avg` target for a summary metric: `rate(sum) / rate(count)` over 1m.
+/// The legend fragment that renders the dropdown's current choice, e.g. `p95`.
+#[must_use]
+pub fn percentile_legend() -> String {
+    format!("${{{PERCENTILE_VAR}:text}}")
+}
+
+/// A [`histogram_quantile`] line over `metric`'s buckets, at whatever quantile
+/// [`percentile_variable`] currently holds. `labels` stay split out into their
+/// own series; every other label is summed away.
+///
+/// [`histogram_quantile`]: https://prometheus.io/docs/prometheus/latest/querying/functions/#histogram_quantile
+#[must_use]
+pub fn selected_percentile(metric: &str, labels: &[&str], legend: &str) -> Target {
+    // `le` carries the bucket boundary, so it must survive the aggregation.
+    let grouping = std::iter::once("le")
+        .chain(labels.iter().copied())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    Target::new(format!(
+        "histogram_quantile(${{{PERCENTILE_VAR}}}, sum by ({grouping}) (rate({metric}_bucket[{RATE_WINDOW}])))"
+    ))
+    .legend(legend)
+}
+
+/// A percentile as its `histogram_quantile` argument, derived without float
+/// math: zero-pad to two digits then drop trailing zeros (50 → `0.5`).
+fn quantile(percentile: u32) -> String {
+    let quantile = format!("0.{percentile:02}");
+    quantile.trim_end_matches('0').to_owned()
+}
+
+/// An `avg` target for a histogram metric: `rate(sum) / rate(count)`.
 #[must_use]
 pub fn avg(metric: &str) -> Target {
-    Target::new(format!("rate({metric}_sum[1m]) / rate({metric}_count[1m])")).legend("avg")
+    Target::new(format!(
+        "rate({metric}_sum[{RATE_WINDOW}]) / rate({metric}_count[{RATE_WINDOW}])"
+    ))
+    .legend("avg")
 }
 
 /// A per-minute rate target for a counter metric.

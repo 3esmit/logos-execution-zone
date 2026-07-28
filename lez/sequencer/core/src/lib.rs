@@ -204,6 +204,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        sequencer_core_metrics::init();
+
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
@@ -309,7 +311,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             watchers,
         };
 
-        sequencer_core_metrics::set_block_count(sequencer_core.chain_height());
+        sequencer_core_metrics::set_blocks_total(sequencer_core.chain_height());
 
         (sequencer_core, mempool_handle)
     }
@@ -903,7 +905,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             if applied {
                 valid_transactions.push(tx);
             } else {
-                sequencer_core_metrics::increment_failed_transaction_count();
+                sequencer_core_metrics::increment_mempool_failed_transactions_total();
                 // A failed transaction is simply left out of the block, except a
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
@@ -939,7 +941,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         );
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
-        sequencer_core_metrics::increment_block_count();
+        sequencer_core_metrics::increment_blocks_total();
 
         Ok(BlockWithMeta { block, withdrawals })
     }

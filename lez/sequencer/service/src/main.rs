@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use log::{error, info};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
@@ -34,10 +35,7 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    metrics_exporter_prometheus::PrometheusBuilder::new()
-        .with_recommended_naming(true)
-        .install()
-        .context("Failed to install Prometheus recorder")?;
+    install_prometheus_recorder()?;
 
     let Args {
         config_path,
@@ -74,6 +72,36 @@ async fn main() -> Result<()> {
     info!("Sequencer shutdown complete");
 
     Ok(())
+}
+
+/// Installs the recorder with explicit buckets, which makes every histogram
+/// export as a Prometheus histogram (`_bucket`/`_sum`/`_count`) rather than the
+/// default rolling-window summary. Summary quantiles reset to zero once their
+/// window drains, so an idle period reads as "took 0s" instead of "no data".
+///
+/// Ladders are picked by name suffix, so a new timing metric is covered without
+/// touching this function. The matcher sees the name as registered, *before*
+/// [`PrometheusBuilder::with_recommended_naming`] appends a unit suffix of its
+/// own — a duration metric whose name omits `_seconds` silently falls through to
+/// [`COUNT_BUCKETS`].
+fn install_prometheus_recorder() -> Result<()> {
+    /// Ladder for `*_seconds` histograms, densest across the 1–100 ms band where
+    /// block production and transaction application actually land.
+    const LATENCY_BUCKETS: &[f64] = &[
+        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ];
+
+    /// Fallback ladder for histograms that count things rather than measure time.
+    const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+
+    PrometheusBuilder::new()
+        .with_recommended_naming(true)
+        .set_buckets(COUNT_BUCKETS)
+        .context("Failed to set default histogram buckets")?
+        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
+        .context("Failed to set latency histogram buckets")?
+        .install()
+        .context("Failed to install Prometheus recorder")
 }
 
 /// Cancelled on Ctrl-C or `SIGTERM`.
