@@ -451,15 +451,29 @@ impl UserKeyChain {
         Some(new_nullifier)
     }
 
+    /// Constructs the next nullifier based on current account state
+    /// of the ID.
+    fn next_update_nullifier(&self, account_id: AccountId) -> Option<Nullifier> {
+        if let Some(entry) = self.shared_private_account(account_id) {
+            let keys = self.derive_shared_account_keys(entry)?;
+            return Some(NullifierIndex::next_update_nullifier(
+                account_id,
+                &entry.account,
+                &keys.nullifier_secret_key,
+            ));
+        }
+        let acc = self.private_account(account_id)?;
+        Some(NullifierIndex::next_update_nullifier(
+            account_id,
+            acc.account,
+            &acc.key_chain.private_key_holder.nullifier_secret_key,
+        ))
+    }
+
     #[must_use]
     pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
         let init = Nullifier::for_account_initialization(&account_id);
-        let update = self.private_account(account_id).map(|acc| {
-            Nullifier::for_account_update(
-                &Commitment::new(&account_id, acc.account),
-                &acc.key_chain.private_key_holder.nullifier_secret_key,
-            )
-        });
+        let update = self.next_update_nullifier(account_id);
         message
             .new_nullifiers
             .iter()

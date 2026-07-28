@@ -29,7 +29,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
     program::InstructionData,
 };
-use log::info;
+use log::{info, warn};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -691,6 +691,9 @@ impl WalletCore {
                         .key_chain()
                         .locate_spend(*acc_account_id, &tx.message)
                     else {
+                        warn!(
+                            "No note located for {acc_account_id}; cached state stays stale until the next sync"
+                        );
                         continue;
                     };
                     let (kind, res_acc) =
