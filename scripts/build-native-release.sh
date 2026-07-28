@@ -138,6 +138,13 @@ bundle_python_runtime() {
       done
       install_name_tool -add_rpath @loader_path/../lib "$wallet"
       install_name_tool -add_rpath @loader_path "$wallet_ffi"
+      # Relocating Mach-O load commands invalidates any signature inherited
+      # from the host Python framework. Re-sign all modified artifacts so
+      # dyld accepts the archive-local runtime on a clean machine.
+      for artifact in "$stage/lib/$bundled_python_runtime_name" "$wallet" "$wallet_ffi"; do
+        codesign --force --sign - "$artifact"
+        codesign --verify --strict "$artifact"
+      done
       ;;
   esac
 

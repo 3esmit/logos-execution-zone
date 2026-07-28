@@ -103,6 +103,8 @@ def check_native_build_profile() -> None:
         "link-arg=-Wl,-rpath,$ORIGIN/../lib",
         "link-arg=-Wl,-rpath,$ORIGIN",
         "install_name_tool -change",
+        "codesign --force --sign -",
+        "codesign --verify --strict",
         "@loader_path/../lib",
         "@loader_path",
     ):
