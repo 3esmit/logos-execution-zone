@@ -98,6 +98,15 @@ def check_native_build_profile() -> None:
     for needle in (
         "--package wallet --bin wallet --features testnet-v0-2",
         "--package wallet-ffi --features testnet-v0-2",
+        "bundle_python_runtime",
+        "verify_extracted_wallet_runtime",
+        "link-arg=-Wl,-rpath,$ORIGIN/../lib",
+        "link-arg=-Wl,-rpath,$ORIGIN",
+        "install_name_tool -change",
+        "codesign --force --sign -",
+        "codesign --verify --strict",
+        "@loader_path/../lib",
+        "@loader_path",
     ):
         require(build_text, needle, build_script)
 
