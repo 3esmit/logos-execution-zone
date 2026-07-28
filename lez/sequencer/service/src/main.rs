@@ -25,6 +25,10 @@ struct Args {
     /// so multiple instances can share one config file.
     #[clap(long)]
     home: Option<PathBuf>,
+    /// Override the config's `metrics_address`, so multiple instances can share
+    /// one config file without fighting over the exporter port.
+    #[clap(long)]
+    metrics_address: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -35,13 +39,12 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    install_prometheus_recorder()?;
-
     let Args {
         config_path,
         port,
         listen_address,
         home,
+        metrics_address,
     } = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
@@ -50,6 +53,11 @@ async fn main() -> Result<()> {
     if let Some(home) = home {
         config.home = home;
     }
+    if let Some(metrics_address) = metrics_address {
+        config.metrics_address = metrics_address;
+    }
+
+    install_prometheus_recorder(config.metrics_address)?;
     let mut sequencer_handle =
         sequencer_service::run(config, SocketAddr::new(listen_address, port)).await?;
 
@@ -74,17 +82,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Installs the recorder with explicit buckets, which makes every histogram
-/// export as a Prometheus histogram (`_bucket`/`_sum`/`_count`) rather than the
-/// default rolling-window summary. Summary quantiles reset to zero once their
-/// window drains, so an idle period reads as "took 0s" instead of "no data".
-///
-/// Ladders are picked by name suffix, so a new timing metric is covered without
-/// touching this function. The matcher sees the name as registered, *before*
-/// [`PrometheusBuilder::with_recommended_naming`] appends a unit suffix of its
-/// own — a duration metric whose name omits `_seconds` silently falls through to
-/// [`COUNT_BUCKETS`].
-fn install_prometheus_recorder() -> Result<()> {
+/// Installs the recorder on `metrics_address`.
+fn install_prometheus_recorder(metrics_address: SocketAddr) -> Result<()> {
     /// Ladder for `*_seconds` histograms, densest across the 1–100 ms band where
     /// block production and transaction application actually land.
     const LATENCY_BUCKETS: &[f64] = &[
@@ -95,6 +94,7 @@ fn install_prometheus_recorder() -> Result<()> {
     const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
 
     PrometheusBuilder::new()
+        .with_http_listener(metrics_address)
         .with_recommended_naming(true)
         .set_buckets(COUNT_BUCKETS)
         .context("Failed to set default histogram buckets")?

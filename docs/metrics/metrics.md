@@ -65,7 +65,7 @@ For histograms, creating the handle publishes zeroed buckets without recording a
 
 ## Exporter setup
 
-`sequencer_service`'s `main.rs` installs the Prometheus recorder on `:9000` with **explicit histogram buckets**. This matters: without buckets, `metrics-exporter-prometheus` renders histograms as rolling-window summaries whose quantiles **reset to `0`** once the window (default 60 s) drains — an idle period reads as "took 0 s" rather than "no data". With buckets you get real `_bucket`/`_sum`/`_count` counters that never decay, are aggregatable, and honour the dashboard's time range.
+`sequencer_service`'s `main.rs` installs the Prometheus recorder on the config's `metrics_address` (default `0.0.0.0:9000`) with **explicit histogram buckets**. This matters: without buckets, `metrics-exporter-prometheus` renders histograms as rolling-window summaries whose quantiles **reset to `0`** once the window (default 60 s) drains — an idle period reads as "took 0 s" rather than "no data". With buckets you get real `_bucket`/`_sum`/`_count` counters that never decay, are aggregatable, and honour the dashboard's time range.
 
 Ladders are matched by name suffix, so a new timing metric is covered automatically:
 

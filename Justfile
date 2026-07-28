@@ -79,19 +79,17 @@ run-monitoring:
     @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
     docker compose up
 
-# Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
-# Optional home/port let a second instance run off the same config, e.g.
-# `just run-sequencer "" "$TMPDIR/lez-sequencer2" 3041` for the multi-sequencer demo.
+# Run Sequencer. Extra args are forwarded to the binary. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/sequencer/service']
-run-sequencer standalone="" home="" port="3040":
+run-sequencer *args:
     @echo "🧠 Running sequencer"
-    @if [ "{{standalone}}" = "standalone" ]; then \
-        echo "🧪 Running in standalone mode"; \
-        RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
-    else \
-        echo "🚀 Running in normal mode"; \
-        RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
-    fi
+    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+
+# Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
+[working-directory: 'lez/sequencer/service']
+run-sequencer-standalone *args:
+    @echo "🧪 Running sequencer in standalone mode"
+    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
