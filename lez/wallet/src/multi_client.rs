@@ -10,13 +10,18 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use common::{HashType, transaction::LeeTransaction};
+use itertools::Itertools as _;
 use lee_core::BlockId;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinSet};
 use url::Url;
 
-use crate::config::{MultiSequencerClientConfig, SequencerConnectionData};
+use crate::{
+    ExecutionFailureKind,
+    config::{MultiSequencerClientConfig, SequencerConnectionData},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Statistics {
@@ -93,7 +98,17 @@ impl MultiSequencerClient {
         statistics: &mut HashMap<Url, Statistics>,
         multi_sequencer_client_config: &MultiSequencerClientConfig,
     ) -> Result<Vec<(SequencerClient, Url)>> {
-        let mut client_list = HashMap::new();
+        if !conn_data
+            .iter()
+            .map(|conn| &conn.sequencer_addr)
+            .all_unique()
+        {
+            anyhow::bail!("All addresses must be unique");
+        }
+
+        let mut actualization_list = vec![];
+        let mut calibration_list = vec![];
+        let mut client_list = vec![];
 
         for SequencerConnectionData {
             sequencer_addr,
@@ -118,35 +133,40 @@ impl MultiSequencerClient {
                     .context("Failed to create sequencer client")?
             };
 
-            // If there is statistics for client, actualize it
-            if let Some(statistic_mut) = statistics.get_mut(sequencer_addr) {
-                let statistic_updates = actualize_client(&sequencer_client).await;
-
-                log::debug!(
-                    "Metered call for {sequencer_addr:?}, statistic updates is {statistic_updates:?}"
-                );
-
-                statistic_mut.apply_updates(&[statistic_updates]);
-
-                client_list.insert(sequencer_addr.clone(), sequencer_client);
-            // Otherwise calibrate client data
-            } else if let Some(client_statistics) = calibrate_client(
-                &sequencer_client,
-                multi_sequencer_client_config.calibration_limit,
-            )
-            .await
-            {
-                statistics.insert(sequencer_addr.clone(), client_statistics);
-                client_list.insert(sequencer_addr.clone(), sequencer_client);
-            // There is no point in adding uncalibrated client
+            if statistics.contains_key(sequencer_addr) {
+                actualization_list.push((sequencer_addr.clone(), sequencer_client.clone()));
             } else {
-                log::warn!("Client {sequencer_addr:?} failed all {} calibration attempts, it may be unhealthy.
-                    \n Consider bumping calibration_limit or remove this client altogether", multi_sequencer_client_config.calibration_limit);
+                calibration_list.push((sequencer_addr.clone(), sequencer_client.clone()));
+            }
+
+            client_list.push((sequencer_addr.clone(), sequencer_client));
+        }
+
+        // This actually starts in one thread, but each exact future produces more tasks.
+        let (actualization_res, callibration_res) = tokio::join!(
+            multi_actualize_clients(actualization_list),
+            multi_calibrate_clients(
+                calibration_list,
+                multi_sequencer_client_config.calibration_limit
+            )
+        );
+
+        for (addr, statistic_opt) in callibration_res {
+            if let Some(statistic) = statistic_opt {
+                statistics.insert(addr, statistic);
+            }
+        }
+
+        for (addr, statistic_update_opt) in actualization_res {
+            if let Some(statistic_mut) = statistics.get_mut(&addr)
+                && let Some(statistic_update) = statistic_update_opt
+            {
+                statistic_mut.apply_updates(&[statistic_update]);
             }
         }
 
         let leader_list = choose_leaders(
-            &client_list,
+            client_list,
             statistics,
             multi_sequencer_client_config.distribution_limit,
         )
@@ -158,7 +178,10 @@ impl MultiSequencerClient {
             );
         }
 
-        log::info!("Chosen leaders is {leader_list:?}");
+        log::info!(
+            "Chosen leaders is {:?}",
+            leader_list.iter().map(|(_, addr)| addr).collect::<Vec<_>>()
+        );
 
         Ok(leader_list)
     }
@@ -187,7 +210,10 @@ impl MultiSequencerClient {
     ) -> Result<()> {
         let leader_list = Self::setup(conn_data, statistics, multi_sequencer_client_config).await?;
 
-        log::info!("Chosen leaders is {leader_list:#?}");
+        log::info!(
+            "Chosen leaders is {:?}",
+            leader_list.iter().map(|(_, addr)| addr).collect::<Vec<_>>()
+        );
 
         self.leader_list = leader_list;
 
@@ -219,7 +245,8 @@ impl MultiSequencerClient {
         leader_url: &Url,
         statistic_map: &mut HashMap<Url, Vec<StatisticsUpdate>>,
     ) -> Result<R, E> {
-        let (resp, statistics_update) = tokio::join!(call(leader), actualize_client(leader));
+        let (resp, statistics_update) =
+            tokio::join!(call(leader), actualize_client(leader.clone()));
 
         log::debug!("Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",);
 
@@ -280,31 +307,56 @@ impl MultiSequencerClient {
         resp
     }
 
-    /// Metered call for `distribution_limit` amount of leaders for sending data, usually
-    /// transaction.
-    pub async fn metered_send<R, E, I: AsyncFn(&SequencerClient) -> Result<R, E>>(
+    /// Metered `send_transaction` for `distribution_limit` amount of leaders.
+    ///
+    /// Less abstract than it could be, clean way to implement it in a more general way is
+    /// "return-type notation".
+    ///
+    /// `ToDo`: Return to it, when "return-type notation" is stable.
+    pub async fn metered_send_transaction(
         &self,
-        call: I,
-    ) -> Vec<Result<R, E>> {
-        let leaders = self.leaders().iter().take(self.config().distribution_limit);
-
+        tx: LeeTransaction,
+    ) -> Vec<Result<HashType, ExecutionFailureKind>> {
         // Collecting all statistics into one map to lock updates only once
         let mut statistic_map: HashMap<Url, Vec<StatisticsUpdate>> = HashMap::new();
 
         let mut results = vec![];
+        let mut join_set = JoinSet::new();
 
-        for (leader, leader_url) in leaders {
-            let (resp, statistics_update) = tokio::join!(call(leader), actualize_client(leader));
+        for (leader, leader_url) in self.leaders() {
+            let curr_leader = leader.clone();
+            let curr_tx = tx.clone();
+            let curr_url = leader_url.clone();
 
-            log::debug!(
-                "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
-            );
+            join_set.spawn(async move {
+                (
+                    tokio::join!(
+                        curr_leader.send_transaction(curr_tx),
+                        actualize_client(curr_leader.clone())
+                    ),
+                    curr_url,
+                )
+            });
+        }
 
-            statistic_map
-                .entry(leader_url.clone())
-                .or_default()
-                .push(statistics_update);
-            results.push(resp);
+        while let Some(resp) = join_set.join_next().await {
+            let res = resp
+                .inspect_err(|j_err| log::warn!("Task failed with join error: {j_err:?}"))
+                .map_err(Into::into)
+                .and_then(|((resp, statistics_update), leader_url)| {
+                    log::debug!(
+                        "Metered call for {leader_url:?}, statistic updates is {statistics_update:?}",
+                    );
+
+                    statistic_map
+                        .entry(leader_url)
+                        .or_default()
+                        .push(statistics_update);
+
+                    resp.map_err(Into::into)
+                });
+
+            results.push(res);
         }
 
         {
@@ -420,17 +472,16 @@ async fn measure_request_duration(client: &SequencerClient) -> (u128, Option<Blo
     )
 }
 
-pub async fn calibrate_client(
-    client: &SequencerClient,
-    calibration_limit: usize,
-) -> Option<Statistics> {
+/// Calibrate statistics for one client. Takes `client` by value deliberately, cloning
+/// `SequencerClient` is cheap.
+async fn calibrate_client(client: SequencerClient, calibration_limit: usize) -> Option<Statistics> {
     let mut latencies = vec![];
     let mut latest_block_id = 0;
     let mut errors: u64 = 0;
 
     // ToDo: Add some DDoS adaptation
     for _ in 0..calibration_limit {
-        let (latency, block_id) = measure_request_duration(client).await;
+        let (latency, block_id) = measure_request_duration(&client).await;
 
         let Some(block_id) = block_id else {
             errors = errors.saturating_add(1);
@@ -464,8 +515,10 @@ pub async fn calibrate_client(
     })
 }
 
-pub async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
-    let (latency, block_id) = measure_request_duration(client).await;
+/// Actualize statistics for one client. Takes `client` by value deliberately, cloning
+/// `SequencerClient` is cheap.
+async fn actualize_client(client: SequencerClient) -> StatisticsUpdate {
+    let (latency, block_id) = measure_request_duration(&client).await;
 
     #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
     let latency = latency as f32;
@@ -478,16 +531,86 @@ pub async fn actualize_client(client: &SequencerClient) -> StatisticsUpdate {
     })
 }
 
+// Next 2 functions can be done in uniform way right now, but it will be incredibly cursed.
+// ToDo: Return to it when "return-type notation" is stable
+
+async fn multi_actualize_clients(
+    clients: Vec<(Url, SequencerClient)>,
+) -> Vec<(Url, Option<StatisticsUpdate>)> {
+    let mut handle_map = HashMap::new();
+
+    for (url, client) in clients {
+        // `client` here must have 'static lifetime, so we can not use reference
+        let actualization_task = tokio::task::spawn(actualize_client(client));
+        handle_map.insert(url, actualization_task);
+    }
+
+    let mut statistic_updates = vec![];
+
+    // We anyhow need results of each one
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "Ordering of map updates is not important"
+    )]
+    for (url, task) in handle_map {
+        let task_opt = task.await.ok();
+        statistic_updates.push((url, task_opt));
+    }
+
+    statistic_updates
+}
+
+async fn multi_calibrate_clients(
+    clients: Vec<(Url, SequencerClient)>,
+    calibration_limit: usize,
+) -> Vec<(Url, Option<Statistics>)> {
+    let mut handle_map = HashMap::new();
+
+    for (url, client) in clients {
+        // `client` here must have 'static lifetime, so we can not use reference
+        let calibration_task = tokio::task::spawn(calibrate_client(client, calibration_limit));
+        handle_map.insert(url, calibration_task);
+    }
+
+    let mut statistics = vec![];
+
+    // We anyhow need results of each one
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "Ordering of map updates is not important"
+    )]
+    for (url, task) in handle_map {
+        let task_opt = task
+            .await
+            .ok()
+            .inspect(|val| {
+                if val.is_none() {
+                    log::warn!(
+                        "Client {url:?} failed all {calibration_limit} calibration attempts, it may be unhealthy.
+                    \n Consider bumping calibration_limit or remove this client altogether"
+                    );
+                }
+            })
+            .flatten();
+        statistics.push((url, task_opt));
+    }
+
+    statistics
+}
+
+/// Choosing leaders up to a `distribution_limit`.
+///
+/// Assumes that all clients have their statistics in `statistics`.
 #[must_use]
-pub fn choose_leaders(
-    client_list: &HashMap<Url, SequencerClient>,
+fn choose_leaders(
+    client_vec: Vec<(Url, SequencerClient)>,
     statistics: &HashMap<Url, Statistics>,
     distribution_limit: usize,
 ) -> Option<Vec<(SequencerClient, Url)>> {
     // Sort out all unmetered clients
-    let mut client_vec: Vec<_> = client_list
-        .keys()
-        .filter(|item| statistics.contains_key(*item))
+    let client_vec: Vec<_> = client_vec
+        .into_iter()
+        .filter(|item| statistics.contains_key(&item.0))
         .collect();
 
     if client_vec.is_empty() {
@@ -495,45 +618,50 @@ pub fn choose_leaders(
     }
 
     // Considering the nature of our requests, the latest_block_id is the dominant characteristic
-    let max_block_id_addr = client_vec.iter().fold(client_vec[0], |acc, x| {
-        let old_latest_block_id = statistics.get(acc).unwrap().latest_block_id;
-        let new_latest_block_id = statistics.get(*x).unwrap().latest_block_id;
-        if new_latest_block_id > old_latest_block_id {
-            *x
-        } else {
-            acc
-        }
-    });
+    let max_block_id_addr = client_vec
+        .iter()
+        .fold(client_vec.first().unwrap(), |acc, x| {
+            let old_latest_block_id = statistics.get(&acc.0).unwrap().latest_block_id;
+            let new_latest_block_id = statistics.get(&x.0).unwrap().latest_block_id;
+            if new_latest_block_id > old_latest_block_id {
+                x
+            } else {
+                acc
+            }
+        });
 
-    let max_block_id = statistics.get(max_block_id_addr).unwrap().latest_block_id;
+    let max_block_id = statistics
+        .get(&max_block_id_addr.0)
+        .unwrap()
+        .latest_block_id;
 
     // Sort out all clients running late
-    client_vec = client_vec
-        .iter()
-        .filter_map(|x| {
-            let latest_block_id = statistics.get(*x).unwrap().latest_block_id;
+    let mut res_vec: Vec<_> = client_vec
+        .into_iter()
+        .filter(|x| {
+            let latest_block_id = statistics.get(&x.0).unwrap().latest_block_id;
 
-            (latest_block_id == max_block_id).then_some(*x)
+            latest_block_id == max_block_id
         })
         .collect();
 
     // Get the clients with lesser or equal to average error ratio
     #[expect(clippy::as_conversions, reason = "int to float conversion is safe")]
-    let avg_err_ratio = client_vec.iter().fold(0_f32, |acc, x| {
+    let avg_err_ratio = res_vec.iter().fold(0_f32, |acc, x| {
         acc + error_ratio(
-            statistics.get(*x).unwrap().errors,
-            statistics.get(*x).unwrap().sample_size,
+            statistics.get(&x.0).unwrap().errors,
+            statistics.get(&x.0).unwrap().sample_size,
         )
-    }) / (client_vec.len() as f32);
+    }) / (res_vec.len() as f32);
 
-    client_vec.sort_by(|a, b| {
+    res_vec.sort_by(|a, b| {
         let err_ratio_a = error_ratio(
-            statistics.get(*a).unwrap().errors,
-            statistics.get(*a).unwrap().sample_size,
+            statistics.get(&a.0).unwrap().errors,
+            statistics.get(&a.0).unwrap().sample_size,
         );
         let err_ratio_b = error_ratio(
-            statistics.get(*b).unwrap().errors,
-            statistics.get(*b).unwrap().sample_size,
+            statistics.get(&b.0).unwrap().errors,
+            statistics.get(&b.0).unwrap().sample_size,
         );
 
         err_ratio_a
@@ -541,56 +669,38 @@ pub fn choose_leaders(
             .expect("Ratios must be a valid numbers")
     });
 
-    let mut client_vec = client_vec[..(client_vec
-        .iter()
-        .position(|item| {
-            error_ratio(
-                statistics.get(*item).unwrap().errors,
-                statistics.get(*item).unwrap().sample_size,
-            ) > avg_err_ratio
-        })
-        .unwrap_or(client_vec.len()))]
-        .to_vec();
+    res_vec.truncate(
+        res_vec
+            .iter()
+            .position(|item| {
+                error_ratio(
+                    statistics.get(&item.0).unwrap().errors,
+                    statistics.get(&item.0).unwrap().sample_size,
+                ) > avg_err_ratio
+            })
+            .unwrap_or(res_vec.len()),
+    );
 
     // Choose clients with least latency and variance
-    client_vec.sort_by(|a, b| {
-        let left = statistics.get(*a).unwrap();
+    res_vec.sort_by(|a, b| {
+        let left = statistics.get(&a.0).unwrap();
         let (left_lat, left_var) = (left.latency_avg, left.latency_var);
-        let right = statistics.get(*b).unwrap();
+        let right = statistics.get(&b.0).unwrap();
         let (right_lat, right_var) = (right.latency_avg, right.latency_var);
 
         let right_std = right_var.sqrt();
         let left_std = left_var.sqrt();
 
-        // Client is better if its average is better and variance does not make it worse
-        // So basically we want this:
-        // [-right_std < left_lat < right_lat < +left_std < +right_std]
-        //
-        // However one can argue that this:
-        //
-        // [-right_std < right_lat < left_lat < +left_std < +right_std]
-        //
-        // is still better, but it is up to discussion
-        let first_ordering = left_lat.total_cmp(&right_lat);
-        match first_ordering {
-            std::cmp::Ordering::Greater => first_ordering,
-            std::cmp::Ordering::Less | std::cmp::Ordering::Equal => {
-                (left_lat + left_std).total_cmp(&(right_lat + right_std))
-            }
-        }
+        // Client is better if its average + std is lesser:
+        // [-right_std < right_lat < +left_std < +right_std]
+        (left_lat + left_std).total_cmp(&(right_lat + right_std))
     });
 
     Some(
-        client_vec
-            .iter()
+        res_vec
+            .into_iter()
+            .map(|(a, b)| (b, a))
             .take(distribution_limit)
-            .map(|addr| {
-                let client = client_list
-                    .get(*addr)
-                    .expect("Missing clients already sorted out");
-
-                (client.clone(), (*addr).clone())
-            })
             .collect(),
     )
 }
@@ -697,7 +807,7 @@ mod tests {
         builder.build(url).unwrap()
     }
 
-    fn four_client_list() -> (HashMap<Url, SequencerClient>, [Url; 4]) {
+    fn four_client_list() -> (Vec<(Url, SequencerClient)>, [Url; 4]) {
         let addr_leader = Url::parse("http://127.0.0.1:3040").unwrap();
         let addr_1 = Url::parse("http://127.0.0.1:3041").unwrap();
         let addr_2 = Url::parse("http://127.0.0.1:3042").unwrap();
@@ -708,12 +818,12 @@ mod tests {
         let client_2 = client_from_url_unchecked(&addr_2);
         let client_3 = client_from_url_unchecked(&addr_3);
 
-        let mut client_list = HashMap::new();
-
-        client_list.insert(addr_leader.clone(), leader);
-        client_list.insert(addr_1.clone(), client_1);
-        client_list.insert(addr_2.clone(), client_2);
-        client_list.insert(addr_3.clone(), client_3);
+        let client_list = vec![
+            (addr_leader.clone(), leader),
+            (addr_1.clone(), client_1),
+            (addr_2.clone(), client_2),
+            (addr_3.clone(), client_3),
+        ];
 
         (client_list, [addr_leader, addr_1, addr_2, addr_3])
     }
@@ -948,7 +1058,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1005,7 +1115,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1062,7 +1172,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1119,7 +1229,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 1).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 1).unwrap();
 
         let (_, leader_url) = leaders.first().unwrap();
 
@@ -1176,7 +1286,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let mut url_set_origin = HashSet::new();
         let mut url_set_res = HashSet::new();
@@ -1244,7 +1354,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, helm) = leaders.first().unwrap();
 
@@ -1302,7 +1412,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();
@@ -1362,7 +1472,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();
@@ -1422,7 +1532,7 @@ mod tests {
             },
         );
 
-        let leaders = choose_leaders(&client_list, &statistics, 2).unwrap();
+        let leaders = choose_leaders(client_list, &statistics, 2).unwrap();
 
         let (_, leader_url_first) = leaders[0].clone();
         let (_, leader_url_second) = leaders[1].clone();
