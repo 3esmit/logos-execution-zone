@@ -26,7 +26,7 @@ use lee::{
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
+    Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
     program::InstructionData,
 };
 use log::info;
@@ -528,10 +528,7 @@ impl WalletCore {
             .await?)
     }
 
-    pub async fn get_transaction(
-        &self,
-        hash: HashType,
-    ) -> Result<Option<(LeeTransaction, BlockId)>> {
+    pub async fn get_transaction(&self, hash: HashType) -> Result<Option<LeeTransaction>> {
         Ok(self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| client.get_transaction(hash).await)
@@ -586,10 +583,7 @@ impl WalletCore {
     }
 
     /// Poll transactions.
-    pub async fn poll_native_token_transfer(
-        &self,
-        hash: HashType,
-    ) -> Result<(LeeTransaction, BlockId)> {
+    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
         self.optimal_poller().poll_tx(hash).await
     }
 
@@ -651,8 +645,8 @@ impl WalletCore {
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
-        println!("Transaction is included in block {block_id}");
+        let tx = self.optimal_poller().poll_tx(tx_hash).await?;
+        println!("Transaction was committed to the Sequencer");
         println!("Transaction data is {tx:?}");
         self.store_persistent_data()?;
         Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
@@ -665,8 +659,8 @@ impl WalletCore {
         acc_decode_data: &[AccDecodeData],
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");
-        let (tx, block_id) = self.optimal_poller().poll_tx(tx_hash).await?;
-        println!("Transaction is included in block {block_id}");
+        let tx = self.optimal_poller().poll_tx(tx_hash).await?;
+        println!("Transaction was committed to the Sequencer");
         println!("Transaction data is {tx:?}");
         if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
             self.decode_insert_privacy_preserving_transaction_results(

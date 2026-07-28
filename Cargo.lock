@@ -9096,8 +9096,10 @@ dependencies = [
 name = "sequencer_service_rpc"
 version = "0.1.0"
 dependencies = [
+ "common",
  "jsonrpsee",
  "sequencer_service_protocol",
+ "serde_json",
 ]
 
 [[package]]
