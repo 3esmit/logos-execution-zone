@@ -135,7 +135,7 @@ impl EncryptionScheme {
     }
 
     fn kdf(shared_secret: &SharedSecretKey, nullifier: &Nullifier) -> [u8; 32] {
-        const PREFIX: &[u8; 20] = b"LEE/v0.2/KDF-SHA256/";
+        const PREFIX: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
         let mut bytes = [0_u8; 20 + 32 + 32];
         bytes[0..20].copy_from_slice(PREFIX);
         bytes[20..52].copy_from_slice(&shared_secret.0);
