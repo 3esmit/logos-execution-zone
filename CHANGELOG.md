@@ -4,6 +4,13 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+## 0.4.0-alpha.4 - 2026-07-28
+
+### Fixed
+
+- Native Linux and macOS wallet bundles now include the CPython shared runtime
+  required by the wallet and wallet FFI binaries.
+
 ## 0.4.0-alpha.3 - 2026-07-28
 
 ### Added
