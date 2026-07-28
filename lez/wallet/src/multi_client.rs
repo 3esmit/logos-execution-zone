@@ -103,7 +103,7 @@ impl MultiSequencerClient {
             .map(|conn| &conn.sequencer_addr)
             .all_unique()
         {
-            anyhow::bail!("All adresses must be unique");
+            anyhow::bail!("All addresses must be unique");
         }
 
         let mut actualization_list = vec![];
@@ -669,16 +669,17 @@ fn choose_leaders(
             .expect("Ratios must be a valid numbers")
     });
 
-    res_vec = res_vec[..(res_vec
-        .iter()
-        .position(|item| {
-            error_ratio(
-                statistics.get(&item.0).unwrap().errors,
-                statistics.get(&item.0).unwrap().sample_size,
-            ) > avg_err_ratio
-        })
-        .unwrap_or(res_vec.len()))]
-        .to_vec();
+    res_vec.truncate(
+        res_vec
+            .iter()
+            .position(|item| {
+                error_ratio(
+                    statistics.get(&item.0).unwrap().errors,
+                    statistics.get(&item.0).unwrap().sample_size,
+                ) > avg_err_ratio
+            })
+            .unwrap_or(res_vec.len()),
+    );
 
     // Choose clients with least latency and variance
     res_vec.sort_by(|a, b| {
