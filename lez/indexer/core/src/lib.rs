@@ -16,7 +16,7 @@ use retry::ApplyRetryGate;
 use crate::{
     block_store::IndexerStore,
     config::IndexerConfig,
-    cross_zone_verifier::CrossZoneVerifier,
+    cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError},
     status::{IndexerStatus, IndexerSyncStatus},
 };
 
@@ -300,15 +300,27 @@ impl IndexerCore {
                     let verified_keys = match &self.verifier {
                         Some(verifier) => match verifier.verify_block(&block).await {
                             Ok(keys) => keys,
-                            Err(err) => {
+                            Err(err @ CrossZoneVerifyError::Forged(_)) => {
                                 error!(
-                                    "Cross-zone verification failed for block {}: {err:#}. Halting indexer ingestion.",
+                                    "Cross-zone verification failed for block {}: {err}. Halting indexer ingestion.",
                                     block.header.block_id
                                 );
                                 self.set_status(IndexerSyncStatus::error(format!(
-                                    "cross-zone verification failed: {err:#}"
+                                    "cross-zone verification failed: {err}"
                                 )));
                                 return;
+                            }
+                            // Not judged either way yet, so retry rather than halt.
+                            Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
+                                error!(
+                                    "Cross-zone verification of block {} stalled: {err}. Holding the cursor and retrying.",
+                                    block.header.block_id
+                                );
+                                self.set_status(IndexerSyncStatus::error(format!(
+                                    "cross-zone peer unavailable: {err}"
+                                )));
+                                had_cycle_error = true;
+                                break;
                             }
                         },
                         None => Vec::new(),
