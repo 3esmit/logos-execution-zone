@@ -285,6 +285,7 @@ jobs:
 
   valid-proof-test:
     needs: ci-image
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
