@@ -853,7 +853,7 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
     let receipt_id =
         bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
     state
-        .get_public_account(receipt_id)
+        .get_account_by_id_ref(receipt_id)
         .is_some_and(|receipt| *receipt != lee::Account::default())
 }
 
