@@ -4,6 +4,13 @@ All notable changes to this fork are recorded here.
 
 ## Unreleased
 
+## 0.4.0-alpha.5 - 2026-07-28
+
+### Fixed
+
+- Native wallet transaction lookup now decodes the canonical serialized
+  `getTransaction` response returned by Testnet sequencers.
+
 ## 0.4.0-alpha.4 - 2026-07-28
 
 ### Fixed
