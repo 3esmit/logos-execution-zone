@@ -57,6 +57,31 @@ pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
+const SYNC_PERSIST_CHECKPOINT_BLOCKS: u64 = 100;
+
+#[derive(Default)]
+struct SyncPersistenceCheckpoint {
+    blocks_since_last_persist: u64,
+}
+
+impl SyncPersistenceCheckpoint {
+    #[must_use]
+    const fn record_block(&mut self) -> bool {
+        self.blocks_since_last_persist = self.blocks_since_last_persist.saturating_add(1);
+        if self.blocks_since_last_persist < SYNC_PERSIST_CHECKPOINT_BLOCKS {
+            return false;
+        }
+
+        self.blocks_since_last_persist = 0;
+        true
+    }
+
+    #[must_use]
+    const fn has_unpersisted_blocks(&self) -> bool {
+        self.blocks_since_last_persist != 0
+    }
+}
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -857,6 +882,7 @@ impl WalletCore {
         // Get the latest nullifiers for all owned accounts.
         let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
         while let Some(block) = blocks.try_next().await? {
             for tx in block.body.transactions {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
@@ -872,8 +898,13 @@ impl WalletCore {
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
-            self.store_persistent_data()?;
+            if checkpoint.record_block() {
+                self.store_persistent_data()?;
+            }
             bar.inc(1);
+        }
+        if checkpoint.has_unpersisted_blocks() {
+            self.store_persistent_data()?;
         }
         bar.finish();
 
@@ -1036,6 +1067,11 @@ mod tests {
 
     use bip39::Mnemonic;
 
+    use super::{
+        AccountIdWithPrivacy, Label, SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage,
+        SyncPersistenceCheckpoint,
+    };
+
     #[test]
     fn mnemonic_roundtrip() {
         let mnemonic =
@@ -1050,5 +1086,97 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
+    }
+
+    #[test]
+    fn sync_persistence_checkpoint_bounds_full_chunks() {
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let persisted_after = (1..=201)
+            .filter(|_| checkpoint.record_block())
+            .collect::<Vec<_>>();
+
+        assert_eq!(persisted_after, vec![100, 200]);
+        assert!(checkpoint.has_unpersisted_blocks());
+    }
+
+    #[test]
+    fn sync_checkpoint_keeps_persisted_cursor_and_accounts_together() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+
+        let (checkpoint_account, _) = storage
+            .key_chain_mut()
+            .generate_new_public_transaction_private_key(None);
+        let checkpoint_label = Label::new("checkpoint");
+        storage
+            .add_label(
+                checkpoint_label.clone(),
+                AccountIdWithPrivacy::Public(checkpoint_account),
+            )
+            .unwrap();
+
+        for block_id in 1..=SYNC_PERSIST_CHECKPOINT_BLOCKS {
+            storage.set_last_synced_block(block_id);
+            if checkpoint.record_block() {
+                storage.save_to_path(&storage_path).unwrap();
+            }
+        }
+
+        let (tail_account, _) = storage
+            .key_chain_mut()
+            .generate_new_public_transaction_private_key(None);
+        let tail_label = Label::new("unpersisted-tail");
+        storage
+            .add_label(
+                tail_label.clone(),
+                AccountIdWithPrivacy::Public(tail_account),
+            )
+            .unwrap();
+        storage.set_last_synced_block(SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1));
+        assert!(!checkpoint.record_block());
+
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(
+            recovered.last_synced_block(),
+            SYNC_PERSIST_CHECKPOINT_BLOCKS
+        );
+        assert_eq!(
+            recovered.resolve_label(&checkpoint_label),
+            Some(AccountIdWithPrivacy::Public(checkpoint_account))
+        );
+        assert!(
+            recovered
+                .key_chain()
+                .pub_account_signing_key(checkpoint_account)
+                .is_some()
+        );
+        assert_eq!(recovered.resolve_label(&tail_label), None);
+        assert!(
+            recovered
+                .key_chain()
+                .pub_account_signing_key(tail_account)
+                .is_none()
+        );
+
+        if checkpoint.has_unpersisted_blocks() {
+            storage.save_to_path(&storage_path).unwrap();
+        }
+        let completed = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(
+            completed.last_synced_block(),
+            SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1)
+        );
+        assert_eq!(
+            completed.resolve_label(&tail_label),
+            Some(AccountIdWithPrivacy::Public(tail_account))
+        );
+        assert!(
+            completed
+                .key_chain()
+                .pub_account_signing_key(tail_account)
+                .is_some()
+        );
     }
 }
