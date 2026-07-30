@@ -10,8 +10,11 @@ use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivacyPreservingTransaction};
 use lee_core::Commitment;
 use log::{debug, error};
-use sequencer_core::config::GenesisAction;
-use sequencer_service::SequencerHandle;
+use sequencer_core::{
+    block_publisher::{Ed25519Key, post_channel_config},
+    config::GenesisAction,
+};
+use sequencer_service::{BedrockConfig, CrossZoneConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
@@ -83,7 +86,6 @@ pub struct TestContextZone {
     wallet: WalletCore,
     wallet_password: String,
     temp_wallet_dir: TempDir,
-    config: MultiNodeTestContextConfig,
     /// Each sequencer component is mapped from sequencer `SocketAddr`.
     sequencer_components: HashMap<SocketAddr, SequencerComponent>,
     indexer_components: Option<IndexerComponents>,
@@ -102,27 +104,42 @@ pub struct TestContext {
 
 impl TestContext {
     /// Create new test context.
-    pub async fn new_custom(configs: Vec<MultiNodeTestContextConfig>) -> Result<Self> {
-        Self::builder(configs).build().await
+    pub async fn new_custom(
+        configs: Vec<MultiNodeTestContextConfig>,
+        cross_zone_config: Option<&CrossZoneConfig>,
+    ) -> Result<Self> {
+        Self::builder(configs, cross_zone_config).build().await
     }
 
     /// Create new test context with default config(1 zone).
     pub async fn new() -> Result<Self> {
-        Self::builder(vec![MultiNodeTestContextConfig::default()])
+        Self::builder(vec![MultiNodeTestContextConfig::default()], None)
             .build()
             .await
     }
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder(configs: Vec<MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
+    pub fn builder(
+        configs: Vec<MultiNodeTestContextConfig>,
+        cross_zone_config: Option<&CrossZoneConfig>,
+    ) -> MultiZoneTestContextBuilder {
         MultiZoneTestContextBuilder {
-            zone_builders: configs.into_iter().map(TestContextBuilder::new).collect(),
+            zone_builders: configs
+                .into_iter()
+                .map(|mn_config| {
+                    let z_ctx_b =
+                        ZoneTestContextBuilder::new(mn_config, cross_zone_config.cloned());
+
+                    (z_ctx_b.mn_config.bedrock_channel, z_ctx_b)
+                })
+                .collect(),
         }
     }
 
     /// Reference for the default zone(in case if only one present).
-    fn default_zone(&self) -> &TestContextZone {
+    #[must_use]
+    pub fn default_zone(&self) -> &TestContextZone {
         self.zones
             .values()
             .next()
@@ -131,7 +148,8 @@ impl TestContext {
 
     /// Reference for the default sequencer component(in case, if only one zone exists and only
     /// one sequencer exists).
-    fn default_sequencer_component(&self) -> &SequencerComponent {
+    #[must_use]
+    pub fn default_sequencer_component(&self) -> &SequencerComponent {
         self.default_zone()
             .sequencer_components
             .values()
@@ -140,7 +158,7 @@ impl TestContext {
     }
 
     /// Mutable reference for the default zone(in case if only one present).
-    fn default_zone_mut(&mut self) -> &mut TestContextZone {
+    pub fn default_zone_mut(&mut self) -> &mut TestContextZone {
         self.zones
             .values_mut()
             .next()
@@ -149,7 +167,7 @@ impl TestContext {
 
     /// Mutable reference for the default sequencer component(in case, if only one zone exists and
     /// only one sequencer exists).
-    fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
+    pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
         self.default_zone_mut()
             .sequencer_components
             .values_mut()
@@ -206,14 +224,10 @@ impl TestContext {
         channel_id: ChannelId,
         addr: &SocketAddr,
     ) -> Option<&SequencerClient> {
-        self.zones
-            .get(&channel_id)
-            .map(|val| {
-                val.sequencer_components
-                    .get(addr)
-                    .map(|vall| &vall.sequencer_client)
-            })
-            .flatten()
+        let val = self.zones.get(&channel_id)?;
+        val.sequencer_components
+            .get(addr)
+            .map(|vall| &vall.sequencer_client)
     }
 
     /// Get the Bedrock Node address.
@@ -227,7 +241,7 @@ impl TestContext {
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
-    /// [`TestContextBuilder::disable_indexer()`].
+    /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer(&self) -> &IndexerHandle {
         &self
@@ -253,7 +267,7 @@ impl TestContext {
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
-    /// [`TestContextBuilder::disable_indexer()`].
+    /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
         &self
@@ -269,17 +283,13 @@ impl TestContext {
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
-    /// [`TestContextBuilder::disable_indexer()`].
+    /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer_getter(&self, channel_id: ChannelId) -> Option<&IndexerHandle> {
-        self.zones
-            .get(&channel_id)
-            .map(|val| {
-                val.indexer_components
-                    .as_ref()
-                    .map(|val| &val.indexer_handle)
-            })
-            .flatten()
+        let val = self.zones.get(&channel_id)?;
+        val.indexer_components
+            .as_ref()
+            .map(|val| &val.indexer_handle)
     }
 
     /// Get the default indexer's bound socket address.
@@ -289,7 +299,8 @@ impl TestContext {
     /// Panics if the indexer is not enabled in the test context.
     #[must_use]
     pub fn indexer_addr_getter(&self, channel_id: ChannelId) -> Option<SocketAddr> {
-        self.indexer_getter(channel_id).map(|val| val.addr())
+        self.indexer_getter(channel_id)
+            .map(indexer_service::IndexerHandle::addr)
     }
 
     /// Get reference to the indexer client.
@@ -297,23 +308,13 @@ impl TestContext {
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
-    /// [`TestContextBuilder::disable_indexer()`].
+    /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
     pub fn indexer_client_getter(&self, channel_id: ChannelId) -> Option<&IndexerClient> {
-        self.zones
-            .get(&channel_id)
-            .map(|val| {
-                val.indexer_components
-                    .as_ref()
-                    .map(|val| &val.indexer_client)
-            })
-            .flatten()
-    }
-
-    #[must_use]
-    /// Get the multi-node config.
-    pub fn config(&self, channel_id: ChannelId) -> Option<&MultiNodeTestContextConfig> {
-        self.zones.get(&channel_id).map(|val| &val.config)
+        let val = self.zones.get(&channel_id)?;
+        val.indexer_components
+            .as_ref()
+            .map(|val| &val.indexer_client)
     }
 
     /// Recursively-sized bytes on disk for sequencer + indexer + wallet tempdirs.
@@ -402,15 +403,22 @@ impl Drop for TestContext {
             bedrock_addr: _,
         } = self;
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Zones can be stopped in any order"
+        )]
         for TestContextZone {
             wallet: _,
             wallet_password: _,
             temp_wallet_dir: _,
-            config: _,
             sequencer_components,
             indexer_components: _,
         } in zones.values_mut()
         {
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "Sequencers can be stopped in any order"
+            )]
             for SequencerComponent {
                 sequencer_handle,
                 temp_sequencer_dir: _,
@@ -453,28 +461,29 @@ impl Drop for TestContext {
     }
 }
 
-pub struct TestContextBuilder {
+pub struct ZoneTestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
-    config: MultiNodeTestContextConfig,
+    mn_config: MultiNodeTestContextConfig,
+    cross_zone_config: Option<CrossZoneConfig>,
 }
 
-pub struct MultiZoneTestContextBuilder {
-    zone_builders: Vec<TestContextBuilder>,
-}
-
-impl TestContextBuilder {
-    fn new(config: MultiNodeTestContextConfig) -> Self {
+impl ZoneTestContextBuilder {
+    fn new(
+        mn_config: MultiNodeTestContextConfig,
+        cross_zone_config: Option<CrossZoneConfig>,
+    ) -> Self {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
             enable_indexer: true,
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
-            config,
+            mn_config,
+            cross_zone_config,
         }
     }
 
@@ -529,7 +538,8 @@ impl TestContextBuilder {
             enable_indexer,
             wallet_config_overrides,
             from_scratch,
-            config,
+            mn_config,
+            cross_zone_config,
         } = self;
 
         // Ensure logger is initialized only once
@@ -543,7 +553,7 @@ impl TestContextBuilder {
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) =
-                setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
+                setup_indexer(bedrock_addr, mn_config.bedrock_channel, cross_zone_config)
                     .await
                     .context("Failed to setup Indexer")?;
             let indexer_client = setup::indexer_client(indexer_handle.addr())
@@ -563,11 +573,42 @@ impl TestContextBuilder {
 
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
-        let mut sequencer_handles = vec![];
-        let mut temp_sequencer_dirs = vec![];
-        let mut sequencer_clients = HashMap::new();
+        let mut sequencer_addrs = vec![];
+        let mut sequencer_components = HashMap::new();
 
-        for _ in 0..config.num_nodes {
+        let sequencer_keys = (0..mn_config.num_nodes)
+            .map(|root| {
+                config::sequencer_signing_key_from_root(
+                    u32::try_from(root).expect("Not being able to fit is realistically impossible"),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        post_channel_config(
+            &BedrockConfig {
+                channel_id: mn_config.bedrock_channel,
+                node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+                auth: None,
+            },
+            &Ed25519Key::from_bytes(
+                sequencer_keys
+                    .first()
+                    .expect("Must be at least one sequencer"),
+            ),
+            sequencer_keys
+                .clone()
+                .into_iter()
+                .map(|key| Ed25519Key::from_bytes(&key).public_key())
+                .collect(),
+            20,
+            30,
+            1,
+            1,
+        )
+        .await
+        .context("Failed to configure the channel committee")?;
+
+        for sequencer_key in sequencer_keys {
             let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
             if !use_prebuilt {
                 // Wallet genesis must always be present so that
@@ -586,6 +627,8 @@ impl TestContextBuilder {
                 };
                 sequencer_setup = sequencer_setup.with_genesis(genesis);
             }
+            sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
+
             let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
                 .setup()
                 .await
@@ -594,17 +637,19 @@ impl TestContextBuilder {
             let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
                 .context("Failed to create sequencer client")?;
 
-            sequencer_clients.insert(sequencer_handle.addr(), sequencer_client);
-
-            sequencer_handles.push(sequencer_handle);
-            temp_sequencer_dirs.push(temp_sequencer_dir);
+            sequencer_addrs.push(sequencer_handle.addr());
+            sequencer_components.insert(
+                sequencer_handle.addr(),
+                SequencerComponent {
+                    sequencer_handle: Some(sequencer_handle),
+                    temp_sequencer_dir,
+                    sequencer_client,
+                },
+            );
         }
 
         let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
-            &sequencer_handles
-                .iter()
-                .map(sequencer_service::SequencerHandle::addr)
-                .collect::<Vec<_>>(),
+            &sequencer_addrs,
             &initial_public_accounts,
             &initial_private_accounts,
             wallet_config_overrides,
@@ -627,18 +672,123 @@ impl TestContextBuilder {
                 .context("Failed to initialize private accounts in wallet")?;
         }
 
-        Ok(TestContext {
-            sequencer_clients,
+        Ok(TestContextZone {
             wallet,
             wallet_password,
+            temp_wallet_dir,
+            sequencer_components,
+            indexer_components,
+        })
+    }
+
+    pub fn build_blocking(self, bedrock_addr: SocketAddr) -> Result<BlockingTestContextZone> {
+        let runtime = tokio::runtime::Runtime::new().context("Failed to create Tokio runtime")?;
+
+        let ctx = runtime.block_on(self.build(bedrock_addr))?;
+
+        Ok(BlockingTestContextZone {
+            ctx: Some(ctx),
+            runtime,
+        })
+    }
+}
+
+pub struct MultiZoneTestContextBuilder {
+    zone_builders: HashMap<ChannelId, ZoneTestContextBuilder>,
+}
+
+impl MultiZoneTestContextBuilder {
+    pub async fn build(self) -> Result<TestContext> {
+        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
+            .await
+            .context("Failed to setup Bedrock node")?;
+
+        let mut zones = HashMap::new();
+
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Zones can be started in any order"
+        )]
+        for (channel_id, zone_builder) in self.zone_builders {
+            let zone_ctx = zone_builder.build(bedrock_addr).await?;
+
+            zones.insert(channel_id, zone_ctx);
+        }
+
+        Ok(TestContext {
+            zones,
             bedrock_compose,
             bedrock_addr,
-            sequencer_handles: Some(sequencer_handles),
-            indexer_components,
-            temp_sequencer_dirs,
-            temp_wallet_dir,
-            config,
         })
+    }
+
+    #[must_use]
+    pub fn default_channel_id(&self) -> ChannelId {
+        *self
+            .zone_builders
+            .keys()
+            .next()
+            .expect("Must be at least one channel")
+    }
+
+    /// Override wallet config fields (e.g. polling timeouts) for the wallet built by this context.
+    #[must_use]
+    pub fn with_wallet_config_overrides(
+        mut self,
+        channel_id: ChannelId,
+        wallet_config_overrides: WalletConfigOverrides,
+    ) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.wallet_config_overrides = wallet_config_overrides);
+        self
+    }
+
+    #[must_use]
+    pub fn with_genesis(
+        mut self,
+        channel_id: ChannelId,
+        genesis_transactions: Vec<GenesisAction>,
+    ) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.genesis_transactions = Some(genesis_transactions));
+        self
+    }
+
+    #[must_use]
+    pub fn with_sequencer_partial_config(
+        mut self,
+        channel_id: ChannelId,
+        sequencer_partial_config: config::SequencerPartialConfig,
+    ) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.sequencer_partial_config = Some(sequencer_partial_config));
+        self
+    }
+
+    /// Build from genesis live instead of loading the prebuilt fixture. Implied by
+    /// [`Self::with_genesis`].
+    #[must_use]
+    pub fn from_scratch(mut self, channel_id: ChannelId) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.from_scratch = true);
+        self
+    }
+
+    /// Exclude Indexer from test context.
+    /// Indexer is enabled by default.
+    ///
+    /// Methods like [`TestContext::indexer()`] and [`TestContext::indexer_client()`] will panic if
+    /// called when indexer is disabled.
+    #[must_use]
+    pub fn disable_indexer(mut self, channel_id: ChannelId) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.enable_indexer = false);
+        self
     }
 
     pub fn build_blocking(self) -> Result<BlockingTestContext> {
@@ -653,15 +803,64 @@ impl TestContextBuilder {
     }
 }
 
-impl MultiZoneTestContextBuilder {
-    pub async fn build(self) -> Result<TestContext> {
-        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
-            .await
-            .context("Failed to setup Bedrock node")?;
+/// A test context to be used in normal #[test] tests.
+pub struct BlockingTestContextZone {
+    ctx: Option<TestContextZone>,
+    runtime: tokio::runtime::Runtime,
+}
 
-        self.zone_builders
-            .into_iter()
-            .map(|ctxb| TestContextBuilder::build(ctxb, bedrock_addr.clone()))
+impl BlockingTestContextZone {
+    pub fn new(
+        config: MultiNodeTestContextConfig,
+        cross_zone_config: Option<CrossZoneConfig>,
+        bedrock_addr: SocketAddr,
+    ) -> Result<Self> {
+        ZoneTestContextBuilder::new(config, cross_zone_config).build_blocking(bedrock_addr)
+    }
+
+    pub const fn ctx(&self) -> &TestContextZone {
+        self.ctx.as_ref().expect("TestContext is set")
+    }
+
+    pub const fn ctx_mut(&mut self) -> &mut TestContextZone {
+        self.ctx.as_mut().expect("TestContext is set")
+    }
+
+    pub const fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
+    pub fn block_on<'ctx, F>(&'ctx self, f: impl FnOnce(&'ctx TestContextZone) -> F) -> F::Output
+    where
+        F: std::future::Future + 'ctx,
+    {
+        let future = f(self.ctx());
+        self.runtime.block_on(future)
+    }
+
+    pub fn block_on_mut<'ctx, F>(
+        &'ctx mut self,
+        f: impl FnOnce(&'ctx mut TestContextZone) -> F,
+    ) -> F::Output
+    where
+        F: std::future::Future + 'ctx,
+    {
+        let ctx_mut = self.ctx.as_mut().expect("TestContext is set");
+        let future = f(ctx_mut);
+        self.runtime.block_on(future)
+    }
+}
+
+impl Drop for BlockingTestContextZone {
+    fn drop(&mut self) {
+        let Self { ctx, runtime } = self;
+
+        // Ensure async cleanup of TestContext by blocking on its drop in the runtime.
+        runtime.block_on(async {
+            if let Some(ctx) = ctx.take() {
+                drop(ctx);
+            }
+        });
     }
 }
 
@@ -672,8 +871,16 @@ pub struct BlockingTestContext {
 }
 
 impl BlockingTestContext {
-    pub fn new(config: MultiNodeTestContextConfig) -> Result<Self> {
-        TestContext::builder(config).build_blocking()
+    /// For now, only one zone and one sequecner is supported for blocking operations.
+    pub fn new_default() -> Result<Self> {
+        let mut zone_builders = HashMap::new();
+
+        zone_builders.insert(
+            config::bedrock_channel_id(),
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default(), None),
+        );
+
+        MultiZoneTestContextBuilder { zone_builders }.build_blocking()
     }
 
     pub const fn ctx(&self) -> &TestContext {

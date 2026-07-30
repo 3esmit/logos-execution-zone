@@ -19,13 +19,18 @@ use tokio::test;
 
 #[test]
 async fn reject_oversized_transaction() -> Result<()> {
-    let ctx = TestContext::builder(MultiNodeTestContextConfig::default())
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: ByteSize::mib(1),
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-        })
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let default_channel_id = ctx_b.default_channel_id();
+    let ctx = ctx_b
+        .with_sequencer_partial_config(
+            default_channel_id,
+            SequencerPartialConfig {
+                max_num_tx_in_block: 100,
+                max_block_size: ByteSize::mib(1),
+                mempool_max_size: 1000,
+                block_create_timeout: Duration::from_secs(10),
+            },
+        )
         .build()
         .await?;
 
@@ -62,13 +67,18 @@ async fn reject_oversized_transaction() -> Result<()> {
 
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
-    let ctx = TestContext::builder(MultiNodeTestContextConfig::default())
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: ByteSize::mib(1),
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-        })
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let default_channel_id = ctx_b.default_channel_id();
+    let ctx = ctx_b
+        .with_sequencer_partial_config(
+            default_channel_id,
+            SequencerPartialConfig {
+                max_num_tx_in_block: 100,
+                max_block_size: ByteSize::mib(1),
+                mempool_max_size: 1000,
+                block_create_timeout: Duration::from_secs(10),
+            },
+        )
         .build()
         .await?;
 
@@ -103,13 +113,18 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let max_program_size = claimer.elf().len().max(chain_caller.elf().len());
     let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
 
-    let ctx = TestContext::builder(MultiNodeTestContextConfig::default())
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: block_size,
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-        })
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let default_channel_id = ctx_b.default_channel_id();
+    let ctx = ctx_b
+        .with_sequencer_partial_config(
+            default_channel_id,
+            SequencerPartialConfig {
+                max_num_tx_in_block: 100,
+                max_block_size: block_size,
+                mempool_max_size: 1000,
+                block_create_timeout: Duration::from_secs(10),
+            },
+        )
         .build()
         .await?;
 

@@ -10,6 +10,8 @@ use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, Sequ
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
+use crate::config;
+
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
@@ -81,11 +83,15 @@ impl std::fmt::Display for UrlProtocol {
 /// For now have only one field: `num_nodes`.
 pub struct MultiNodeTestContextConfig {
     pub num_nodes: usize,
+    pub bedrock_channel: ChannelId,
 }
 
 impl Default for MultiNodeTestContextConfig {
     fn default() -> Self {
-        Self { num_nodes: 1 }
+        Self {
+            num_nodes: 1,
+            bedrock_channel: config::bedrock_channel_id(),
+        }
     }
 }
 
@@ -132,6 +138,41 @@ pub fn sequencer_config_with_channel(
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
         signing_key: SEQUENCER_SIGNING_KEY,
+        bedrock_config: BedrockConfig {
+            channel_id,
+            node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
+                .context("Failed to convert bedrock addr to URL")?,
+            auth: None,
+        },
+        cross_zone,
+    })
+}
+
+pub fn sequencer_config_with_channel_and_signing_key(
+    partial: SequencerPartialConfig,
+    home: PathBuf,
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    genesis_transactions: Vec<GenesisAction>,
+    cross_zone: Option<CrossZoneConfig>,
+    signing_key: [u8; 32],
+) -> Result<SequencerConfig> {
+    let SequencerPartialConfig {
+        max_num_tx_in_block,
+        max_block_size,
+        mempool_max_size,
+        block_create_timeout,
+    } = partial;
+
+    Ok(SequencerConfig {
+        home,
+        max_num_tx_in_block,
+        max_block_size,
+        mempool_max_size,
+        block_create_timeout,
+        retry_pending_blocks_timeout: Duration::from_secs(5),
+        genesis: genesis_transactions,
+        signing_key,
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -299,4 +340,12 @@ pub fn bedrock_channel_id_b() -> ChannelId {
         .try_into()
         .unwrap_or_else(|_| unreachable!());
     ChannelId::from(channel_id)
+}
+
+#[must_use]
+pub fn sequencer_signing_key_from_root(root: u32) -> [u8; 32] {
+    root.to_le_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
 }

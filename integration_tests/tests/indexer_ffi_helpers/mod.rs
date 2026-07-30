@@ -84,9 +84,11 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
 }
 
 pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
-    let ctx = TestContext::builder(MultiNodeTestContextConfig::default())
-        .disable_indexer()
-        .build_blocking()?;
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let default_channel_id = ctx_b.default_channel_id();
+
+    let ctx = ctx_b.disable_indexer(default_channel_id).build_blocking()?;
+
     // Don't borrow `ctx.runtime()`: `ctx` (and its by-value tokio runtime) is
     // moved into the returned tuple, which would leave any pointer into it
     // dangling. Pass a null runtime so the FFI owns its own — the same path the
