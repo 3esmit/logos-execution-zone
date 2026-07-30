@@ -10,8 +10,7 @@ use key_protocol::key_management::{
 };
 use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
 use lee_core::{
-    Commitment, EncryptionScheme, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind,
-    SharedSecretKey,
+    Commitment, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -418,8 +417,6 @@ impl UserKeyChain {
         i: usize,
     ) -> Option<Nullifier> {
         let encrypted = &message.encrypted_private_post_states[i];
-        let commitment = &message.new_commitments[i];
-        let ciph_id = u32::try_from(i).ok()?;
 
         let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
         {
@@ -442,8 +439,7 @@ impl UserKeyChain {
             )
         };
 
-        let (kind, new_account) =
-            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, commitment, ciph_id)?;
+        let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
         if is_shared {
@@ -453,6 +449,35 @@ impl UserKeyChain {
                 .ok()?;
         }
         Some(new_nullifier)
+    }
+
+    /// Constructs the next nullifier based on current account state
+    /// of the ID.
+    fn next_update_nullifier(&self, account_id: AccountId) -> Option<Nullifier> {
+        if let Some(entry) = self.shared_private_account(account_id) {
+            let keys = self.derive_shared_account_keys(entry)?;
+            return Some(NullifierIndex::next_update_nullifier(
+                account_id,
+                &entry.account,
+                &keys.nullifier_secret_key,
+            ));
+        }
+        let acc = self.private_account(account_id)?;
+        Some(NullifierIndex::next_update_nullifier(
+            account_id,
+            acc.account,
+            &acc.key_chain.private_key_holder.nullifier_secret_key,
+        ))
+    }
+
+    #[must_use]
+    pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
+        let init = Nullifier::for_account_initialization(&account_id);
+        let update = self.next_update_nullifier(account_id);
+        message
+            .new_nullifiers
+            .iter()
+            .position(|(nullifier, _)| *nullifier == init || Some(nullifier) == update.as_ref())
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
@@ -865,7 +890,7 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::encryption::EncryptedAccountData;
+    use lee_core::{EncryptionScheme, encryption::EncryptedAccountData};
 
     use super::*;
 
@@ -900,8 +925,7 @@ mod tests {
             &new_account,
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
-            &new_commitment,
-            0,
+            &old_nullifier,
         );
         let note = EncryptedAccountData::new(
             ciphertext,
@@ -971,8 +995,7 @@ mod tests {
             &new_account,
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
-            &new_commitment,
-            0,
+            &old_nullifier,
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
@@ -1034,8 +1057,7 @@ mod tests {
                 next,
                 &PrivateAccountKind::Regular(identifier),
                 &sender_ss,
-                &commitment,
-                0,
+                &spent,
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {

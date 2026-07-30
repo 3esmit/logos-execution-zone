@@ -29,7 +29,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
     program::InstructionData,
 };
-use log::info;
+use log::{info, warn};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -683,21 +683,21 @@ impl WalletCore {
             "Decode mask has {} entries but the transaction has {note_count} notes",
             acc_decode_mask.len(),
         );
-        for (output_index, acc_decode_data) in acc_decode_mask.iter().enumerate() {
+        for acc_decode_data in acc_decode_mask {
             match acc_decode_data {
                 AccDecodeData::Decode(secret, acc_account_id) => {
-                    let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
-                    let acc_comm = tx.message.new_commitments[output_index];
-
-                    let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(
-                        &acc_ead.ciphertext,
-                        secret,
-                        &acc_comm,
-                        output_index
-                            .try_into()
-                            .expect("Output index is expected to fit in u32"),
-                    )
-                    .unwrap();
+                    let Some(output_index) = self
+                        .storage
+                        .key_chain()
+                        .locate_spend(*acc_account_id, &tx.message)
+                    else {
+                        warn!(
+                            "No note located for {acc_account_id}; cached state stays stale until the next sync"
+                        );
+                        continue;
+                    };
+                    let (kind, res_acc) =
+                        decrypt_note_at(&tx.message, output_index, secret).unwrap();
 
                     println!("Received new acc {res_acc:#?}");
 
@@ -971,8 +971,6 @@ impl WalletCore {
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
-                let new_commitments = &message.new_commitments;
-
                 message
                     .encrypted_private_post_states
                     .iter()
@@ -984,20 +982,10 @@ impl WalletCore {
                         !handled.contains(ciph_id) && encrypted_data.view_tag == view_tag
                     })
                     .filter_map(move |(ciph_id, encrypted_data)| {
-                        let ciphertext = &encrypted_data.ciphertext;
-                        let commitment = &new_commitments[ciph_id];
                         let shared_secret =
                             key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
-                        lee_core::EncryptionScheme::decrypt(
-                            ciphertext,
-                            &shared_secret,
-                            commitment,
-                            ciph_id
-                                .try_into()
-                                .expect("Ciphertext ID is expected to fit in u32"),
-                        )
-                        .map(|(kind, res_acc)| {
+                        decrypt_note_at(message, ciph_id, &shared_secret).map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(
                                 npk,
@@ -1065,16 +1053,7 @@ impl WalletCore {
                 else {
                     continue;
                 };
-                let commitment = &message.new_commitments[ciph_id];
-
-                if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
-                    &encrypted_data.ciphertext,
-                    &shared_secret,
-                    commitment,
-                    ciph_id
-                        .try_into()
-                        .expect("Ciphertext ID is expected to fit in u32"),
-                ) {
+                if let Some((_kind, new_acc)) = decrypt_note_at(message, ciph_id, &shared_secret) {
                     info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
                     index.track(account_id, &new_acc, &nsk);
                     self.storage
@@ -1099,6 +1078,18 @@ impl WalletCore {
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
+}
+
+fn decrypt_note_at(
+    message: &Message,
+    i: usize,
+    secret: &SharedSecretKey,
+) -> Option<(lee_core::PrivateAccountKind, Account)> {
+    lee_core::EncryptionScheme::decrypt(
+        &message.encrypted_private_post_states[i].ciphertext,
+        secret,
+        &message.new_nullifiers[i].0,
+    )
 }
 
 #[cfg(test)]
