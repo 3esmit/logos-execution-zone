@@ -295,7 +295,6 @@ fn deposit_event_record(
             recipient_id: recipient,
         })
         .unwrap(),
-        submitted_in_block_id: None,
     }
 }
 
@@ -321,11 +320,11 @@ fn build_public_withdraw_tx(
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }
 
-/// The cold-start backfill re-delivers an already-finalized deposit into the
-/// mempool before reconstruction applies the same deposit block, and the queued
-/// mint cannot be pulled back out. Since the bridge program does not dedup on
-/// `l1_deposit_op_id`, block production must skip the already-submitted deposit
-/// so the vault is minted exactly once.
+/// Cold-start backfill re-records an already-finalized deposit event as a
+/// pending record before reconstruction replays the same deposit block.
+/// Reconstruction must drop that record — its mint is permanently reflected in
+/// the reconstructed state (the receipt PDA) — so the next production neither
+/// re-mints the vault nor emits a stray deposit tx.
 #[tokio::test]
 async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let recipient = initial_public_user_accounts()[0].account_id;
@@ -343,7 +342,7 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let deposit_tx =
         crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
     mempool_a
-        .push((TransactionOrigin::Sequencer, deposit_tx.clone()))
+        .push((TransactionOrigin::Sequencer, deposit_tx))
         .await
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
@@ -367,10 +366,11 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let channel_id = config_a.bedrock_config.channel_id;
 
     let config_b = bridge_funded_config();
-    let (mut seq_b, mempool_b) = SequencerCoreWithMockClients::start_from_config(config_b).await;
+    let (mut seq_b, _mempool_b) = SequencerCoreWithMockClients::start_from_config(config_b).await;
 
-    // Backfill re-delivery: persist the pending record and queue the mint, as
-    // `on_deposit_event` does, before reconstruction runs.
+    // Backfill re-delivery: the deposit event is re-recorded as a pending record
+    // before reconstruction runs. The mint no longer flows through the mempool
+    // (that sink was removed); the store drain is the only source.
     assert!(
         seq_b
             .block_store()
@@ -378,10 +378,6 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
             .add_pending_deposit_event(deposit_record.clone())
             .unwrap()
     );
-    mempool_b
-        .push((TransactionOrigin::Sequencer, deposit_tx))
-        .await
-        .unwrap();
 
     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
@@ -396,6 +392,20 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
     assert_eq!(tip_b.id, tip_a.id);
     assert_eq!(tip_b.hash, tip_a.hash);
+
+    // Reconstruction replays the finalized deposit block, minting the receipt
+    // into state and dropping the re-recorded pending event — so the drain has
+    // nothing left to re-mint. This is the mechanism that protects against the
+    // re-delivery, in place of the removed mempool sink.
+    assert!(
+        seq_b
+            .block_store()
+            .dbio()
+            .get_pending_deposit_events()
+            .unwrap()
+            .is_empty(),
+        "reconstruction must drop the re-delivered pending deposit record"
+    );
 
     seq_b.produce_new_block().await.unwrap();
 
@@ -525,7 +535,6 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .await
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
-    let deposit_block_id = seq_a.block_store().latest_block_meta().unwrap().unwrap().id;
 
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -561,18 +570,19 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         "already-finished deposit must be applied exactly once"
     );
 
-    // The pending event is now marked submitted in the reconstructed block, so the
-    // startup replay would not re-queue it — no double mint on restart.
-    let record = store_b
-        .get_unfulfilled_deposit_events()
-        .unwrap()
-        .into_iter()
-        .find(|event| event.deposit_op_id == HashType(deposit_op_id))
-        .expect("pending deposit event should still be recorded");
-    assert_eq!(
-        record.submitted_in_block_id,
-        Some(deposit_block_id),
-        "reconstruction must reconcile the already-finished deposit against its channel block"
+    // The mint's receipt PDA is in the reconstructed state, and reconstruction
+    // dropped the pending record backfill had re-delivered — so the production
+    // drain sees the deposit as minted and never re-emits it.
+    assert!(
+        crate::deposit_already_minted(
+            chain_b.lock().unwrap().head_state(),
+            HashType(deposit_op_id)
+        ),
+        "the reconstructed deposit's receipt marks it minted"
+    );
+    assert!(
+        store_b.get_pending_deposit_events().unwrap().is_empty(),
+        "reconstruction drops the finalized deposit's pending record"
     );
 }
 

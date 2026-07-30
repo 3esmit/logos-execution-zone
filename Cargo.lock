@@ -1193,6 +1193,7 @@ name = "bridge_core"
 version = "0.1.0"
 dependencies = [
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 
@@ -4155,6 +4156,7 @@ dependencies = [
  "storage",
  "tempfile",
  "testnet_initial_state",
+ "thiserror 2.0.18",
  "tokio",
  "url",
 ]
