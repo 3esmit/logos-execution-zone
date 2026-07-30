@@ -156,6 +156,9 @@ impl InputAccountIdentity {
 pub struct PrivateAction {
     pub nullifier: Nullifier,
     pub root: CommitmentSetDigest,
+    // IMPORTANT: The commitment in the action is not necessarily connected
+    // to the nullifier in content. That is, the commitment's plaintext is
+    // not necessarily the updated account state of the nullifier's plaintext.
     pub commitment: Commitment,
     pub encrypted_post_state: EncryptedAccountData,
 }
