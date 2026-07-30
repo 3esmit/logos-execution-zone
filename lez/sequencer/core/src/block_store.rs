@@ -155,13 +155,13 @@ impl SequencerStore {
     pub(crate) fn update(
         &mut self,
         block: &Block,
-        deposit_event_ids: &[HashType],
-        withdrawals: Vec<WithdrawalReconciliationKey>,
+        withdrawals: &[WithdrawalReconciliationKey],
         state: &V03State,
+        checkpoint: Option<&[u8]>,
     ) -> DbResult<()> {
         let new_transactions_map = block_to_transactions_map(block);
         self.dbio
-            .atomic_update(block, deposit_event_ids, withdrawals, state)?;
+            .atomic_update(block, withdrawals, state, checkpoint)?;
         self.tx_hash_to_block_map.extend(new_transactions_map);
         Ok(())
     }
@@ -194,10 +194,12 @@ impl SequencerStore {
         Ok(Some(checkpoint))
     }
 
+    /// Persists `checkpoint` on its own. Only valid when the effects it covers
+    /// are already durable — otherwise it must ride in the same write as them,
+    /// via [`storage::sequencer::StoreUpdate`].
     pub fn set_zone_checkpoint(&self, checkpoint: &SequencerCheckpoint) -> Result<()> {
-        let bytes =
-            serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")?;
-        self.dbio.put_zone_sdk_checkpoint_bytes(&bytes)?;
+        self.dbio
+            .put_zone_sdk_checkpoint_bytes(&checkpoint_bytes(checkpoint)?)?;
         Ok(())
     }
 
@@ -211,23 +213,15 @@ impl SequencerStore {
         self.dbio.put_zone_anchor(anchor)
     }
 
-    pub fn get_unfulfilled_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
+    pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
         self.dbio.get_pending_deposit_events()
     }
+}
 
-    pub fn is_deposit_event_submitted(&self, deposit_op_id: HashType) -> DbResult<bool> {
-        self.dbio.is_deposit_event_submitted(deposit_op_id)
-    }
-
-    /// Marks the given deposit events submitted in `block_id`, in one write.
-    pub fn mark_deposit_events_submitted(
-        &self,
-        deposit_op_ids: &[HashType],
-        submitted_block_id: u64,
-    ) -> DbResult<()> {
-        self.dbio
-            .mark_deposit_events_submitted(deposit_op_ids, submitted_block_id)
-    }
+/// The checkpoint's on-disk encoding. `serde_json` because `SequencerCheckpoint`
+/// derives serde but not borsh; paired with `get_zone_checkpoint`'s decode.
+pub(crate) fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
+    serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")
 }
 
 pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64> {
@@ -278,9 +272,7 @@ mod tests {
         assert_eq!(None, retrieved_tx);
         // Add the block with the transaction
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
         // Try again
         let output = node_store.get_transaction_by_hash(tx.hash());
         assert_eq!(Some((tx, 1)), output);
@@ -345,9 +337,7 @@ mod tests {
         let block_hash = block.header.hash;
 
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
         let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
@@ -383,9 +373,7 @@ mod tests {
         let block_id = block.header.block_id;
 
         let dummy_state = V03State::new();
-        node_store
-            .update(&block, &[], vec![], &dummy_state)
-            .unwrap();
+        node_store.update(&block, &[], &dummy_state, None).unwrap();
 
         // Verify initial status is Pending
         let retrieved_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
@@ -434,7 +422,7 @@ mod tests {
             // Add a new block
             let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
             node_store
-                .update(&block, &[], vec![], &V03State::new())
+                .update(&block, &[], &V03State::new(), None)
                 .unwrap();
         }
 

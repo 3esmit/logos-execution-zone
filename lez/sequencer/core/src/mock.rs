@@ -3,16 +3,16 @@ use std::time::Duration;
 use anyhow::Result;
 use common::block::Block;
 use futures::Stream;
-use logos_blockchain_core::mantle::ops::channel::{ChannelId, MsgId};
+use logos_blockchain_core::{
+    header::HeaderId,
+    mantle::ops::channel::{ChannelId, MsgId},
+};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::{Slot, ZoneMessage, sequencer::WithdrawArg};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    block_publisher::{
-        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink, OnFollowSink,
-        OnWithdrawEventSink, SequencerCheckpoint,
-    },
+    block_publisher::{BlockPublisherTrait, OnFollowSink, SequencerCheckpoint},
     config::BedrockConfig,
 };
 
@@ -54,16 +54,15 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _bedrock_signing_key: Ed25519Key,
         _resubmit_interval: Duration,
         _initial_checkpoint: Option<SequencerCheckpoint>,
-        _on_checkpoint: CheckpointSink,
-        _on_finalized_block: FinalizedBlockSink,
-        _on_deposit_event: OnDepositEventSink,
-        _on_withdraw_event: OnWithdrawEventSink,
         _on_follow: OnFollowSink,
     ) -> Result<Self> {
         Ok(Self {
             channel_id: config.channel_id,
             driver_cancellation: CancellationToken::new(),
-            tip_slot: None,
+            // An existing but empty channel: `None` means *missing*, which the
+            // startup guard reads as a wiped Bedrock. Tests that want that say
+            // so via [`Self::with_canned_channel`].
+            tip_slot: Some(Slot::from(0)),
             messages: Vec::new(),
         })
     }
@@ -72,11 +71,11 @@ impl BlockPublisherTrait for MockBlockPublisher {
         &self,
         block: &Block,
         _bridge_withdrawals: Vec<WithdrawArg>,
-    ) -> Result<MsgId> {
+    ) -> Result<(MsgId, SequencerCheckpoint)> {
         // Deterministic per-block id so head dedup behaves in tests.
         //
         // TODO: should we allow more "mockability" here?
-        Ok(MsgId::from(block.header.hash.0))
+        Ok((MsgId::from(block.header.hash.0), mock_checkpoint()))
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -106,5 +105,18 @@ impl BlockPublisherTrait for MockBlockPublisher {
             .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
             .cloned();
         Ok(futures::stream::iter(messages))
+    }
+}
+
+/// A zeroed checkpoint, for [`MockBlockPublisher::publish_block`] and for tests
+/// building a [`crate::block_publisher::FollowUpdate`]. Tests only assert *that*
+/// a checkpoint was persisted alongside its effects, never what is in it.
+#[must_use]
+pub(crate) fn mock_checkpoint() -> SequencerCheckpoint {
+    SequencerCheckpoint {
+        last_msg_id: MsgId::from([0; 32]),
+        pending_txs: Vec::new(),
+        lib: HeaderId::from([0; 32]),
+        lib_slot: Slot::from(0),
     }
 }

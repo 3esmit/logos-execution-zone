@@ -47,10 +47,11 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let bridge_account_id = system_accounts::bridge_account_id();
     let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+    let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_vault_id],
+        vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -95,10 +96,11 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let bridge_account_id = system_accounts::bridge_account_id();
     let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+    let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
     let message = public_transaction::Message::try_new(
         programs::bridge().id(),
-        vec![bridge_account_id, recipient_vault_id],
+        vec![bridge_account_id, recipient_vault_id, receipt_id],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -155,8 +157,10 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let bridge_account_id = system_accounts::bridge_account_id();
     let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient_id);
+    let receipt_id = bridge_core::deposit_receipt_account_id(programs::bridge().id(), [0_u8; 32]);
 
-    // Get pre-state of bridge and vault accounts
+    // Get pre-state of bridge and vault accounts; the receipt is unminted (a
+    // default account), so the program would create it on a first mint.
     let bridge_pre = AccountWithMetadata::new(
         get_account(&ctx, bridge_account_id).await?,
         false,
@@ -167,6 +171,8 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         false,
         recipient_vault_id,
     );
+    let receipt_pre =
+        AccountWithMetadata::new(lee_core::account::Account::default(), false, receipt_id);
 
     // Create program with dependencies
     let program_with_deps =
@@ -193,17 +199,25 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     // Execute and prove the bridge deposit
     let (output, proof) = execute_and_prove(
-        vec![bridge_pre.clone(), vault_pre.clone()],
+        vec![bridge_pre.clone(), vault_pre.clone(), receipt_pre.clone()],
         instruction,
-        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Public,
+        ],
         &program_with_deps,
     )
     .context("Failed to execute/prove bridge deposit")?;
 
     // Create privacy-preserving transaction from circuit output
     let message = privacy_preserving_transaction::Message::try_from_circuit_output(
-        vec![bridge_account_id, recipient_vault_id],
-        vec![bridge_pre.account.nonce, vault_pre.account.nonce],
+        vec![bridge_account_id, recipient_vault_id, receipt_id],
+        vec![
+            bridge_pre.account.nonce,
+            vault_pre.account.nonce,
+            receipt_pre.account.nonce,
+        ],
         output,
     )
     .context("Failed to build privacy-preserving bridge deposit message")?;

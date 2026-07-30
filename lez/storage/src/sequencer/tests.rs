@@ -28,6 +28,15 @@ fn dbio_with_genesis(path: &Path) -> (RocksDBIO, Block) {
     (dbio, genesis)
 }
 
+fn deposit_record(seed: u8) -> PendingDepositEventRecord {
+    PendingDepositEventRecord {
+        deposit_op_id: HashType([seed; 32]),
+        source_tx_hash: HashType([seed; 32]),
+        amount: u64::from(seed),
+        metadata: vec![seed],
+    }
+}
+
 fn stored_balance(dbio: &RocksDBIO) -> u128 {
     dbio.get_lee_state()
         .unwrap()
@@ -106,12 +115,11 @@ fn store_followed_blocks_batch_lands_meta_and_state_on_last_block() {
         id: 3,
         hash: block3.header.hash,
     };
-    dbio.store_followed_blocks(
-        &[(&block2, true), (&block3, false)],
-        Some(&head_tip),
-        &state_with_balance(300),
-        None,
-    )
+    dbio.store_update(&StoreUpdate {
+        blocks: &[(&block2, true), (&block3, false)],
+        head_tip: Some(&head_tip),
+        ..StoreUpdate::new(&state_with_balance(300))
+    })
     .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");
@@ -140,12 +148,12 @@ fn final_snapshot_round_trips_and_is_absent_on_fresh_store() {
         id: 2,
         hash: block2.header.hash,
     };
-    dbio.store_followed_blocks(
-        &[(&block2, true)],
-        Some(&final_meta),
-        &state_with_balance(300),
-        Some((&state_with_balance(200), &final_meta)),
-    )
+    dbio.store_update(&StoreUpdate {
+        blocks: &[(&block2, true)],
+        head_tip: Some(&final_meta),
+        final_snapshot: Some((&state_with_balance(200), &final_meta)),
+        ..StoreUpdate::new(&state_with_balance(300))
+    })
     .unwrap();
 
     let (final_state, meta) = dbio
@@ -204,12 +212,11 @@ fn net_shortening_reorg_drops_stale_blocks() {
         id: 2,
         hash: block2b.header.hash,
     };
-    dbio.store_followed_blocks(
-        &[(&block2b, false)],
-        Some(&head_tip),
-        &state_with_balance(400),
-        None,
-    )
+    dbio.store_update(&StoreUpdate {
+        blocks: &[(&block2b, false)],
+        head_tip: Some(&head_tip),
+        ..StoreUpdate::new(&state_with_balance(400))
+    })
     .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");
@@ -241,8 +248,11 @@ fn shrink_only_reorg_rewinds_tip_meta() {
         id: 2,
         hash: block2.header.hash,
     };
-    dbio.store_followed_blocks(&[], Some(&head_tip), &state_with_balance(200), None)
-        .unwrap();
+    dbio.store_update(&StoreUpdate {
+        head_tip: Some(&head_tip),
+        ..StoreUpdate::new(&state_with_balance(200))
+    })
+    .unwrap();
 
     assert!(
         dbio.get_block(3).unwrap().is_none(),
@@ -252,6 +262,232 @@ fn shrink_only_reorg_rewinds_tip_meta() {
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2.header.hash);
     assert_eq!(stored_balance(&dbio), 200);
+}
+
+#[test]
+fn checkpoint_lands_with_an_orphan_only_update() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.store_followed_block(&block2, &state_with_balance(200), false)
+        .unwrap();
+    let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+    dbio.store_followed_block(&block3, &state_with_balance(300), false)
+        .unwrap();
+
+    // Orphan-only update: no payload to write, but the checkpoint covering it
+    // must still land, or a restart resumes past the orphan.
+    let head_tip = BlockMeta {
+        id: 2,
+        hash: block2.header.hash,
+    };
+    dbio.store_update(&StoreUpdate {
+        checkpoint: Some(b"cp-orphan"),
+        head_tip: Some(&head_tip),
+        ..StoreUpdate::new(&state_with_balance(200))
+    })
+    .unwrap();
+
+    assert_eq!(
+        dbio.get_zone_sdk_checkpoint_bytes().unwrap().as_deref(),
+        Some(b"cp-orphan".as_slice())
+    );
+    assert!(dbio.get_block(3).unwrap().is_none());
+}
+
+#[test]
+fn checkpoint_only_update_does_not_rewrite_the_head_state() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.store_followed_block(&block2, &state_with_balance(200), false)
+        .unwrap();
+
+    // An event carrying nothing but a checkpoint (the common case) must not
+    // drag a full state serialization along with it — the caller's state is
+    // ignored while the chain stands still.
+    let head_tip = BlockMeta::from(&block2);
+    dbio.store_update(&StoreUpdate {
+        checkpoint: Some(b"cp-idle"),
+        head_tip: Some(&head_tip),
+        ..StoreUpdate::new(&state_with_balance(999))
+    })
+    .unwrap();
+
+    assert_eq!(
+        dbio.get_zone_sdk_checkpoint_bytes().unwrap().as_deref(),
+        Some(b"cp-idle".as_slice())
+    );
+    assert_eq!(stored_balance(&dbio), 200);
+}
+
+#[test]
+fn several_deposits_in_one_update_are_all_recorded() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    // The records live in one whole-vector cell: staged per event against a
+    // fresh disk read, the second would clobber the first.
+    let first = deposit_record(1);
+    let second = deposit_record(2);
+    let already_known = dbio.get_pending_deposit_events().unwrap();
+    assert!(already_known.is_empty());
+
+    let outcome = dbio
+        .store_update(&StoreUpdate {
+            new_deposit_events: &[first.clone(), second.clone()],
+            ..StoreUpdate::new(&state_with_balance(100))
+        })
+        .unwrap();
+
+    assert_eq!(outcome.accepted_deposits, 2);
+    let stored = dbio.get_pending_deposit_events().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(stored.contains(&first));
+    assert!(stored.contains(&second));
+}
+
+#[test]
+fn redelivered_deposit_is_not_accepted_twice() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = deposit_record(1);
+    dbio.store_update(&StoreUpdate {
+        new_deposit_events: std::slice::from_ref(&record),
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    let outcome = dbio
+        .store_update(&StoreUpdate {
+            new_deposit_events: &[record],
+            ..StoreUpdate::new(&state_with_balance(100))
+        })
+        .unwrap();
+
+    assert_eq!(
+        outcome.accepted_deposits, 0,
+        "a re-delivered deposit is already owed, not newly accepted"
+    );
+    assert_eq!(dbio.get_pending_deposit_events().unwrap().len(), 1);
+}
+
+#[test]
+fn finalized_deposit_records_are_removed_by_op_id() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let first = deposit_record(1);
+    let second = deposit_record(2);
+    dbio.store_update(&StoreUpdate {
+        new_deposit_events: &[first.clone(), second.clone()],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    // Only the finalized op id is dropped; the other record stays.
+    dbio.store_update(&StoreUpdate {
+        remove_deposit_records: &[first.deposit_op_id],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    let stored = dbio.get_pending_deposit_events().unwrap();
+    assert_eq!(stored, vec![second]);
+}
+
+#[test]
+fn repeated_withdrawal_key_in_one_update_folds_once_per_occurrence() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let key = WithdrawalReconciliationKey {
+        amount: 7,
+        bedrock_account_pk: [3; 32],
+    };
+
+    // Two local intents for the same key in one update — two withdrawals of the
+    // same amount to the same L1 key. A per-occurrence disk read would miss the
+    // staged increment and record the pair as one.
+    dbio.store_update(&StoreUpdate {
+        new_withdraw_intents: &[key, key],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+    let recorded = dbio
+        .get_opt::<UnseenWithdrawCountCell>(key)
+        .unwrap()
+        .map(|cell| cell.0);
+    assert_eq!(recorded, Some(2));
+
+    // Both L1 events arrive in one update; a per-occurrence disk read would
+    // miss the staged decrement and consume only one.
+    let outcome = dbio
+        .store_update(&StoreUpdate {
+            consumed_withdrawals: &[key, key],
+            ..StoreUpdate::new(&state_with_balance(100))
+        })
+        .unwrap();
+
+    assert!(outcome.unmatched_withdrawals.is_empty());
+    // Both decrements landed; a per-occurrence disk read would leave `Some(1)`.
+    // (The absolute value trails the intent count by one — `consume` still
+    // treats a stored 0 as consumable — but that predates the batching and is
+    // replicated as-is.)
+    let remaining = dbio
+        .get_opt::<UnseenWithdrawCountCell>(key)
+        .unwrap()
+        .map(|cell| cell.0);
+    assert_eq!(remaining, Some(0));
+}
+
+#[test]
+fn unmatched_withdrawal_is_reported_and_writes_nothing() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let key = WithdrawalReconciliationKey {
+        amount: 5,
+        bedrock_account_pk: [4; 32],
+    };
+    let outcome = dbio
+        .store_update(&StoreUpdate {
+            consumed_withdrawals: &[key],
+            ..StoreUpdate::new(&state_with_balance(100))
+        })
+        .unwrap();
+
+    assert_eq!(outcome.unmatched_withdrawals.len(), 1);
+    assert!(
+        dbio.get_opt::<UnseenWithdrawCountCell>(key)
+            .unwrap()
+            .is_none(),
+        "an unmatched withdraw must not leave a counter behind"
+    );
+}
+
+#[test]
+fn produced_block_persists_its_publish_checkpoint() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.atomic_update(&block2, &[], &state_with_balance(200), Some(b"cp-produced"))
+        .unwrap();
+
+    // Storing the block without the checkpoint would let a restart restore a
+    // pending set that no longer holds the inscription we just published.
+    assert_eq!(
+        dbio.get_zone_sdk_checkpoint_bytes().unwrap().as_deref(),
+        Some(b"cp-produced".as_slice())
+    );
+    assert_eq!(
+        dbio.get_block(2).unwrap().unwrap().header.hash,
+        block2.header.hash
+    );
 }
 
 #[test]
@@ -270,7 +506,7 @@ fn produced_block_below_disk_head_pins_meta_and_prunes() {
     // pins the tip meta to the produced block and drops the stale suffix in
     // the same write, mirroring the follow path.
     let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    dbio.atomic_update(&block2b, &[], vec![], &state_with_balance(400))
+    dbio.atomic_update(&block2b, &[], &state_with_balance(400), None)
         .unwrap();
 
     let stored2 = dbio.get_block(2).unwrap().expect("block 2 is stored");
