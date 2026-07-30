@@ -37,6 +37,7 @@ async-stream.workspace = true
 tokio.workspace = true
 risc0-zkvm.workspace = true
 hex.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
