@@ -4,3 +4,5 @@
 //! p2p is a latency optimization, never a source of truth: gossip being
 //! down degrades to L1-only behavior, and a gossip failure after startup
 //! never halts the node.
+
+pub mod announcement;
