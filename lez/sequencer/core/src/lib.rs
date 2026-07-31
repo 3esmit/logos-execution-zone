@@ -41,7 +41,7 @@ use storage::sequencer::{
 };
 
 use crate::{
-    block_publisher::{BlockPublisherTrait, MsgId, ZoneSdkPublisher},
+    block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
     task_group::{StoreRelease, TaskGroup},
 };
@@ -268,7 +268,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
             let mut last_checkpoint = None;
             for block in &pending_blocks {
-                let (_msg, checkpoint) = block_publisher
+                let outcome = block_publisher
                     .publish_block(block, vec![])
                     .await
                     .unwrap_or_else(|err| {
@@ -277,7 +277,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                             block.header.block_id
                         )
                     });
-                last_checkpoint = Some(checkpoint);
+                last_checkpoint = Some(outcome.checkpoint);
             }
 
             // These blocks are already stored, so only the sdk's pending set
@@ -542,17 +542,20 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .build_block_from_mempool()
             .context("Failed to build block from mempool transactions")?;
 
-        let withdrawal_reconciliation_keys: Vec<_> = withdrawals
-            .iter()
-            .map(|withdraw| withdraw_event_reconciliation_key(&withdraw.outputs))
-            .collect::<Result<Vec<_>>>()
-            .context("Failed to build reconciliation keys for block withdrawals")?;
-
-        let (this_msg, checkpoint) = self
+        let block_publisher::PublishOutcome {
+            this_msg,
+            checkpoint,
+            released_notes,
+        } = self
             .block_publisher
             .publish_block(&block, withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
+
+        let withdrawal_reconciliation_keys: Vec<_> = released_notes
+            .iter()
+            .map(withdrawal_reconciliation_key)
+            .collect();
 
         self.record_produced_block(
             this_msg,
@@ -1146,32 +1149,18 @@ fn apply_follow_update(
     let deposit_records: Vec<PendingDepositEventRecord> =
         deposits.iter().map(pending_deposit_event_record).collect();
 
-    // A withdraw whose outputs we cannot read has no counter to reconcile
-    // against; log and drop it rather than fail the whole update.
+    // One reconciliation unit per released note, matching how the intents were
+    // recorded at publish time.
     let consumed_withdrawals: Vec<WithdrawalReconciliationKey> = withdrawals
         .iter()
-        .filter_map(|withdraw| {
-            withdraw_event_reconciliation_key(&withdraw.op.outputs)
-                .inspect_err(|err| {
-                    error!(
-                        "Failed to build reconciliation key for Bedrock Withdraw event with tx_hash {}: {err:#}",
-                        hex::encode(withdraw.tx_hash.as_ref())
-                    );
-                })
-                .ok()
-        })
+        .flat_map(|withdraw| withdraw.op.inputs.iter())
+        .map(withdrawal_reconciliation_key)
         .collect();
 
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
     let (resubmit_txs, outcome) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
-
-        // User txs of orphaned blocks, returned to the mempool below.
-        let resubmit_txs: Vec<LeeTransaction> = orphaned
-            .iter()
-            .flat_map(|(_, block)| resubmittable_txs(block))
-            .collect();
 
         // Outcomes align with `adopted`.
         let outcomes = chain.apply_channel_update(&orphaned, &adopted);
@@ -1206,6 +1195,22 @@ fn apply_follow_update(
                 AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
             }
         }
+
+        // User txs of orphaned blocks, returned to the mempool below.
+        //
+        // Computed after the finalized tier has advanced, and only for blocks
+        // above it: the zone-sdk reports a block as orphaned once LIB pruning
+        // drops its inscription from the channel lineage, so every block of
+        // ours is orphaned a poll or two after it finalizes. Those transactions
+        // are irreversibly included, and returning them to the mempool puts
+        // them back in every block we produce from then on.
+        let final_height = chain.final_tip().map(|tip| tip.block_id);
+        let resubmit_txs: Vec<LeeTransaction> = orphaned
+            .iter()
+            .filter(|(_, block)| final_height.is_none_or(|id| block.header.block_id > id))
+            .flat_map(|(_, block)| resubmittable_txs(block))
+            .collect();
+
         // Snapshot the advanced final tier so a restart re-anchors on it.
         let final_meta = final_advanced.then(|| {
             let tip = chain.final_tip().expect("advanced final tier has a tip");
@@ -1265,9 +1270,8 @@ fn apply_follow_update(
     }
     for withdrawal in &outcome.unmatched_withdrawals {
         warn!(
-            "Unexpected Bedrock Withdraw event of {} to {}: no matching unseen withdraw found",
-            withdrawal.amount,
-            hex::encode(withdrawal.bedrock_account_pk)
+            "Unexpected Bedrock Withdraw event releasing channel note {}: no matching unseen withdraw found",
+            hex::encode(withdrawal.released_note_id)
         );
     }
 
@@ -1643,35 +1647,21 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     })
 }
 
-fn withdraw_event_reconciliation_key(
-    outputs: &logos_blockchain_core::mantle::ledger::Outputs,
-) -> Result<WithdrawalReconciliationKey> {
-    let [note] = outputs.as_ref().as_slice() else {
-        return Err(anyhow!(
-            "Unsupported withdraw output count for reconciliation: {}",
-            outputs.len()
-        ));
-    };
-
-    // `extract_bridge_withdraw_data` maps [u8;32] LE -> BigUint -> ZkPublicKey.
-    // Reconcile by reversing that direction here.
-    let mut bedrock_account_pk = BigUint::from(note.pk.into_inner()).to_bytes_le();
-    if bedrock_account_pk.len() > 32 {
-        return Err(anyhow!(
-            "Withdraw recipient public key is too large: {} bytes",
-            bedrock_account_pk.len()
-        ));
-    }
-    bedrock_account_pk.resize(32, 0);
-
-    let bedrock_account_pk: [u8; 32] = bedrock_account_pk
+/// The reconciliation identity of one released channel note.
+///
+/// A `ChannelWithdrawOp` releases notes the channel already owns and carries
+/// only their ids — the recipient key and value live in the note itself, which
+/// neither the op nor the Bedrock Withdraw event reports. The note id is
+/// therefore the one handle both sides share, and it is unique: a note is spent
+/// once.
+fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKey {
+    let released_note_id: [u8; 32] = note_id
+        .as_bytes()
+        .as_ref()
         .try_into()
-        .expect("Public key bytes were padded/truncated to 32 bytes");
+        .expect("`NoteId` is a 32-byte field element");
 
-    Ok(WithdrawalReconciliationKey {
-        amount: note.value,
-        bedrock_account_pk,
-    })
+    WithdrawalReconciliationKey { released_note_id }
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.
