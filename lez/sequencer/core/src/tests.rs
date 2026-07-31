@@ -30,6 +30,7 @@ use logos_blockchain_core::{
         ops::channel::{ChannelId, MsgId, deposit::Metadata},
     },
 };
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda};
@@ -91,6 +92,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
+            funding_key: ZkPublicKey::zero(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
