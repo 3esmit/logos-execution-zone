@@ -76,9 +76,9 @@ pub struct DiskSizes {
 
 pub struct SequencerComponent {
     /// In fact, not optional, just for Drop implementation.
-    sequencer_handle: Option<SequencerHandle>,
-    temp_sequencer_dir: TempDir,
-    sequencer_client: SequencerClient,
+    pub sequencer_handle: Option<SequencerHandle>,
+    pub temp_sequencer_dir: TempDir,
+    pub sequencer_client: SequencerClient,
 }
 
 pub struct TestContextZone {
@@ -155,6 +155,24 @@ impl TestContext {
             .values()
             .next()
             .expect("Must be at least one integration component")
+    }
+
+    /// Reference for the default sequencer component(in case, if only one zone exists and only
+    /// one sequencer exists).
+    pub fn zones_iter(&self) -> impl Iterator<Item = (&ChannelId, &TestContextZone)> {
+        self.zones.iter()
+    }
+
+    /// Reference for the default sequencer component(in case, if only one zone exists and only
+    /// one sequencer exists).
+    #[must_use]
+    pub fn sequencer_components_iter(
+        &self,
+        channel_id: ChannelId,
+    ) -> Option<impl Iterator<Item = (&SocketAddr, &SequencerComponent)>> {
+        self.zones
+            .get(&channel_id)
+            .map(|zone| zone.sequencer_components.iter())
     }
 
     /// Mutable reference for the default zone(in case if only one present).
@@ -461,6 +479,7 @@ impl Drop for TestContext {
     }
 }
 
+#[derive(Debug)]
 pub struct ZoneTestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
@@ -541,9 +560,6 @@ impl ZoneTestContextBuilder {
             mn_config,
             cross_zone_config,
         } = self;
-
-        // Ensure logger is initialized only once
-        *LOGGER;
 
         debug!("Test context setup");
 
@@ -628,6 +644,7 @@ impl ZoneTestContextBuilder {
                 sequencer_setup = sequencer_setup.with_genesis(genesis);
             }
             sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
+            sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
 
             let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
                 .setup()
@@ -699,6 +716,9 @@ pub struct MultiZoneTestContextBuilder {
 
 impl MultiZoneTestContextBuilder {
     pub async fn build(self) -> Result<TestContext> {
+        // Ensure logger is initialized only once
+        *LOGGER;
+
         let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
             .await
             .context("Failed to setup Bedrock node")?;
@@ -710,6 +730,8 @@ impl MultiZoneTestContextBuilder {
             reason = "Zones can be started in any order"
         )]
         for (channel_id, zone_builder) in self.zone_builders {
+            log::info!("##########################Trying to build {zone_builder:#?} \n at {channel_id:#?}");
+
             let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
             zones.insert(channel_id, zone_ctx);

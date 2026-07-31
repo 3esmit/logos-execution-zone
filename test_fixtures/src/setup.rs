@@ -28,6 +28,7 @@ use crate::{
     private_mention, public_mention,
 };
 
+#[derive(Debug)]
 pub struct SequencerSetup {
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
@@ -86,6 +87,8 @@ impl SequencerSetup {
     /// Set up the sequencer in a fresh temporary home directory, returning the
     /// owning [`TempDir`] alongside the handle.
     pub async fn setup(self) -> Result<(SequencerHandle, TempDir)> {
+        log::info!("##################################Setting up sequecner with setup {self:#?}");
+
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 

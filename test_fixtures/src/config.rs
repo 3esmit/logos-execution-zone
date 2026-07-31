@@ -349,3 +349,17 @@ pub fn sequencer_signing_key_from_root(root: u32) -> [u8; 32] {
         .try_into()
         .unwrap_or_else(|_| unreachable!())
 }
+
+#[must_use]
+#[expect(
+    clippy::big_endian_bytes,
+    reason = "Make channels and bedrock keys different bytewise"
+)]
+pub fn bedrock_channel_id_from_root(root: u32) -> ChannelId {
+    let channel_id: [u8; 32] = root
+        .to_be_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}

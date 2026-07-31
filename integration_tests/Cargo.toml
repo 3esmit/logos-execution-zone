@@ -52,3 +52,4 @@ bytesize.workspace = true
 reqwest.workspace = true
 borsh.workspace = true
 num-bigint.workspace = true
+env_logger.workspace = true

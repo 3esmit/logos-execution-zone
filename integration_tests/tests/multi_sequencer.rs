@@ -19,6 +19,7 @@ use integration_tests::{
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use sequencer_core::{block_publisher::post_channel_config, config::BedrockConfig};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
@@ -143,6 +144,116 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
             .await?
             .with_context(|| format!("Indexer is missing finalized block {id}"))?;
         let block_a = a
+            .get_block(id)
+            .await?
+            .with_context(|| format!("A is missing block {id}"))?;
+        ensure!(
+            block_i.header.hash == indexer_service_protocol::HashType::from(block_a.header.hash),
+            "Indexer diverges from A at block {id}"
+        );
+    }
+    let status = indexer.get_status().await?;
+    ensure!(
+        status.stall_reason.is_none(),
+        "Indexer is stalled: {:?}",
+        status.stall_reason
+    );
+
+    Ok(())
+}
+
+#[test]
+async fn multiseq_proff_of_concept_comm() -> Result<()> {
+    let bedrock_channel_id = config::bedrock_channel_id();
+    let partial = SequencerPartialConfig {
+        block_create_timeout: Duration::from_secs(5),
+        ..SequencerPartialConfig::default()
+    };
+
+    let ctx = TestContext::builder(
+        vec![
+            MultiNodeTestContextConfig {
+                num_nodes: 2,
+                bedrock_channel: bedrock_channel_id,
+            },
+        ],
+        None,
+    )
+    .with_sequencer_partial_config(bedrock_channel_id, partial)
+    .build()
+    .await?;
+
+    let mut seq_iterator = ctx
+        .sequencer_components_iter(bedrock_channel_id)
+        .unwrap();
+
+    let seq_client_a = &(seq_iterator
+        .next()
+        .unwrap()
+        .1
+        .sequencer_client);
+    let seq_client_b = &(seq_iterator
+        .next()
+        .unwrap()
+        .1
+        .sequencer_client);
+
+    let indexer = ctx.indexer_client();
+
+    wait_for_height(seq_client_a, 2, "sequencer A to produce past genesis").await?;
+
+    let height_at_config = seq_client_a.get_last_block_id().await?;
+    wait_for_height(
+        seq_client_a,
+        height_at_config + 1,
+        "A to produce after the roster change",
+    )
+    .await?;
+
+    let join_height = seq_client_a.get_last_block_id().await?;
+    wait_for_height(seq_client_b, join_height, "B to sync to A's height at join").await?;
+
+    // Phase 4: rotation + convergence over ≈4 turn windows.
+    let rotation_target = join_height + ROTATION_BLOCKS;
+    wait_for_height(
+        seq_client_a,
+        rotation_target,
+        "the chain to advance across turn windows",
+    )
+    .await?;
+    wait_for_height(seq_client_b, rotation_target, "B to follow across turn windows").await?;
+    assert_same_chain(seq_client_a, seq_client_b).await?;
+
+    // Phase 5: a tx submitted only to B is included by B and visible on A.
+    let accounts = initial_public_user_accounts();
+    let from = accounts[0].account_id;
+    let to = accounts[1].account_id;
+    let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+
+    let to_balance_before = seq_client_a.get_account_balance(to).await?;
+    let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        from,
+        nonce.0,
+        to,
+        TRANSFER_AMOUNT,
+        &sign_key,
+    );
+    seq_client_b.send_transaction(tx)
+        .await
+        .context("Failed to submit the transfer to B")?;
+
+    wait_for_balance(seq_client_a, to, to_balance_before + TRANSFER_AMOUNT).await?;
+
+    // Phase 6: the indexer finalizes the same chain, with no stall.
+    wait_for_finalized(&indexer, join_height).await?;
+    let finalized = indexer.get_last_finalized_block_id().await?.unwrap_or(0);
+    for id in 1..=finalized {
+        let block_i = indexer
+            .get_block_by_id(id)
+            .await?
+            .with_context(|| format!("Indexer is missing finalized block {id}"))?;
+        let block_a = seq_client_a
             .get_block(id)
             .await?
             .with_context(|| format!("A is missing block {id}"))?;
