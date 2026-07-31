@@ -23,12 +23,7 @@ impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
     pub fn open_db(location: &Path) -> Result<Self> {
-        #[cfg(not(feature = "testnet"))]
         let initial_state = testnet_initial_state::initial_state();
-
-        #[cfg(feature = "testnet")]
-        let initial_state = testnet_initial_state::initial_state_testnet();
-
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;
