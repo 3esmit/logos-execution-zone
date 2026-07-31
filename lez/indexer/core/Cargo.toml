@@ -7,10 +7,6 @@ license = { workspace = true }
 [lints]
 workspace = true
 
-[features]
-default = []
-testnet = []
-
 [dependencies]
 common.workspace = true
 logos-blockchain-zone-sdk.workspace = true

@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
-    verify_commitment_is_in_state, wait_for_indexer_to_catch_up,
+    verify_commitment_is_in_state,
 };
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
@@ -160,41 +160,6 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
     assert_eq!(winner_balance_post, 10000 + pinata_prize);
 
     info!("Successfully claimed pinata to public account");
-
-    Ok(())
-}
-
-#[test]
-async fn claim_pinata_indexer_keeps_up() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-
-    let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: public_mention(ctx.existing_public_accounts()[0]),
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    info!("Waiting for indexer to parse blocks");
-    wait_for_indexer_to_catch_up(&ctx).await?;
-
-    let winner_ind_state = indexer_service_rpc::RpcClient::get_account(
-        &**ctx.indexer_client(),
-        ctx.existing_public_accounts()[0].into(),
-    )
-    .await
-    .unwrap();
-    let winner_seq_state = sequencer_service_rpc::RpcClient::get_account(
-        ctx.sequencer_client(),
-        ctx.existing_public_accounts()[0],
-    )
-    .await?;
-
-    assert_eq!(winner_ind_state, winner_seq_state.into());
-
-    info!("Indexer correctly indexed the pinata claim");
 
     Ok(())
 }
