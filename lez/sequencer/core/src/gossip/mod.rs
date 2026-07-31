@@ -6,3 +6,4 @@
 //! never halts the node.
 
 pub mod announcement;
+pub mod directory;
