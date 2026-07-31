@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
@@ -34,13 +34,10 @@ use logos_blockchain_zone_sdk::{
         ZoneSequencer,
     },
 };
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::JoinHandle,
-};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::BedrockConfig;
+use crate::{config::BedrockConfig, task_group::TaskGroup};
 
 /// Channel capacity for the publish inbox. One publish per produced block, drained
 /// in microseconds by the drive task — 32 is huge headroom and just provides
@@ -120,6 +117,14 @@ pub trait BlockPublisherTrait: Sized {
     /// are processed past that point, so the node must halt.
     fn driver_cancellation(&self) -> CancellationToken;
 
+    /// The publisher's background tasks, for a caller that needs to know when
+    /// they have actually stopped. Its sinks capture a store handle, so the
+    /// `RocksDB` lock outlives the sequencer until the drive task is gone.
+    /// Empty by default, for publishers that run no tasks.
+    fn background_tasks(&self) -> TaskGroup {
+        TaskGroup::default()
+    }
+
     /// Current channel frontier slot on the connected chain, or `None` if the
     /// channel does not exist there. Drives the startup frontier check.
     async fn channel_tip_slot(&self) -> Result<Option<Slot>>;
@@ -143,17 +148,10 @@ pub struct ZoneSdkPublisher {
     turn_rx: watch::Receiver<TurnNotification>,
     // Cancelled when the drive task ends for any reason, including a panic.
     driver_cancellation: CancellationToken,
-    // Aborts the drive task when the last clone is dropped.
-    _drive_task: Arc<DriveTaskGuard>,
+    // Stops the drive task when the last clone is dropped, and lets a shutdown
+    // path wait until it has actually stopped.
+    drive_task: TaskGroup,
     indexer: ZoneIndexer<NodeHttpClient>,
-}
-
-struct DriveTaskGuard(JoinHandle<()>);
-
-impl Drop for DriveTaskGuard {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 impl BlockPublisherTrait for ZoneSdkPublisher {
@@ -318,7 +316,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             command_tx,
             turn_rx,
             driver_cancellation,
-            _drive_task: Arc::new(DriveTaskGuard(drive_task)),
+            drive_task: TaskGroup::new(vec![drive_task]),
         })
     }
 
@@ -357,6 +355,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
     fn driver_cancellation(&self) -> CancellationToken {
         self.driver_cancellation.clone()
+    }
+
+    fn background_tasks(&self) -> TaskGroup {
+        self.drive_task.clone()
     }
 
     async fn channel_tip_slot(&self) -> Result<Option<Slot>> {

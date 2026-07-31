@@ -37,6 +37,17 @@ fn deposit_record(seed: u8) -> PendingDepositEventRecord {
     }
 }
 
+fn dispatch_record(seed: u8) -> PendingCrossZoneDispatchRecord {
+    PendingCrossZoneDispatchRecord::recorded([seed; 32], vec![seed; 4])
+}
+
+/// A distinct message key per index, for filling the pending list.
+fn key_from_index(index: usize) -> [u8; 32] {
+    let mut key = [0_u8; 32];
+    key[..8].copy_from_slice(&u64::try_from(index).expect("test index fits").to_le_bytes());
+    key
+}
+
 fn stored_balance(dbio: &RocksDBIO) -> u128 {
     dbio.get_lee_state()
         .unwrap()
@@ -397,6 +408,171 @@ fn finalized_deposit_records_are_removed_by_op_id() {
 
     let stored = dbio.get_pending_deposit_events().unwrap();
     assert_eq!(stored, vec![second]);
+}
+
+#[test]
+fn dispatch_records_round_trip_and_dedupe_by_message_key() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = dispatch_record(1);
+    assert_eq!(
+        dbio.add_pending_cross_zone_dispatches(vec![record.clone()])
+            .unwrap(),
+        1
+    );
+    // The watcher re-reads a slot it stalled on, so the same delivery arrives
+    // again; recording it twice would double-count its failed attempts.
+    assert_eq!(
+        dbio.add_pending_cross_zone_dispatches(vec![record.clone(), dispatch_record(2)])
+            .unwrap(),
+        1,
+        "only the delivery not already held is newly recorded"
+    );
+
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap(),
+        vec![record, dispatch_record(2)]
+    );
+}
+
+#[test]
+fn recording_past_the_cap_writes_nothing() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    // What fills this list is chosen by peer zones, so the bound is what stops a
+    // peer deciding how large our store gets. Refusing the whole write leaves
+    // the watcher's floor where it is, so the slot is read again later and
+    // nothing is lost.
+    let full: Vec<_> = (0..MAX_PENDING_CROSS_ZONE_DISPATCHES)
+        .map(|seed| PendingCrossZoneDispatchRecord::recorded(key_from_index(seed), vec![0_u8; 4]))
+        .collect();
+    assert_eq!(
+        dbio.add_pending_cross_zone_dispatches(full).unwrap(),
+        MAX_PENDING_CROSS_ZONE_DISPATCHES
+    );
+
+    let over = PendingCrossZoneDispatchRecord::recorded(
+        key_from_index(MAX_PENDING_CROSS_ZONE_DISPATCHES),
+        vec![0_u8; 4],
+    );
+    assert!(
+        dbio.add_pending_cross_zone_dispatches(vec![over]).is_err(),
+        "recording past the cap must fail so the caller holds its floor"
+    );
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap().len(),
+        MAX_PENDING_CROSS_ZONE_DISPATCHES,
+        "a refused write must leave the list untouched"
+    );
+
+    // Re-offering only what is already held is not growth, so it still succeeds.
+    assert_eq!(
+        dbio.add_pending_cross_zone_dispatches(vec![PendingCrossZoneDispatchRecord::recorded(
+            key_from_index(0),
+            vec![0_u8; 4]
+        )])
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn settled_dispatch_records_are_dropped_outside_an_update() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    // The watcher re-reads a slot it already consumed and re-records a delivery
+    // that settled long ago. Its key will never appear in a future block, so the
+    // store-update path cannot reach it and this is the only thing that does.
+    let first = dispatch_record(1);
+    let second = dispatch_record(2);
+    dbio.add_pending_cross_zone_dispatches(vec![first.clone(), second.clone()])
+        .unwrap();
+
+    assert_eq!(
+        dbio.drop_settled_cross_zone_dispatches(&[first.message_key])
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap(),
+        vec![second]
+    );
+
+    // Dropping one that is already gone is a no-op, not an error.
+    assert_eq!(
+        dbio.drop_settled_cross_zone_dispatches(&[first.message_key])
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn finalized_dispatch_records_are_removed_by_message_key() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let first = dispatch_record(1);
+    let second = dispatch_record(2);
+    dbio.add_pending_cross_zone_dispatches(vec![first.clone(), second.clone()])
+        .unwrap();
+
+    // Only the finalized delivery's key is dropped. Two deliveries can sit in
+    // the same block, so a record must go by its own identity rather than by
+    // anything about the height its delivery landed at.
+    dbio.store_update(&StoreUpdate {
+        remove_dispatch_records: &[first.message_key],
+        ..StoreUpdate::new(&state_with_balance(100))
+    })
+    .unwrap();
+
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap(),
+        vec![second]
+    );
+}
+
+#[test]
+fn record_dispatch_failure_drops_the_record_at_the_limit() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = dispatch_record(1);
+    let key = record.message_key;
+    let survivor = dispatch_record(2);
+    dbio.add_pending_cross_zone_dispatches(vec![record, survivor.clone()])
+        .unwrap();
+
+    assert!(!dbio.record_dispatch_failure(key, 3).unwrap());
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap()[0].failed_attempts,
+        1,
+        "a failure short of the limit is counted, not given up on"
+    );
+    assert!(!dbio.record_dispatch_failure(key, 3).unwrap());
+    assert!(
+        dbio.record_dispatch_failure(key, 3).unwrap(),
+        "the third failure is the one it is given up on"
+    );
+
+    // Dropped rather than flagged: a delivery the drain will never feed into a
+    // block again is one nothing would ever remove, so flagging it would let a
+    // peer that can make deliveries fail grow the list without bound.
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap(),
+        vec![survivor],
+        "giving up on a delivery drops its record and leaves the others alone"
+    );
+
+    // A key with no record reads as given up on: there is nothing left to count
+    // against, and nothing will feed it into a block.
+    assert!(
+        dbio.record_dispatch_failure(key, 3).unwrap(),
+        "a failure against a dropped delivery must not re-create its record"
+    );
+    assert_eq!(dbio.get_pending_cross_zone_dispatches().unwrap().len(), 1);
 }
 
 #[test]

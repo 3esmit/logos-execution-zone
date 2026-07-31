@@ -4,7 +4,7 @@ use std::{pin::pin, time::Duration};
 
 use common::{
     HashType,
-    block::{BedrockStatus, HashableBlockData},
+    block::{BedrockStatus, Block, HashableBlockData},
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation},
 };
@@ -29,22 +29,31 @@ use logos_blockchain_core::mantle::{
 };
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
-use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
+use ping_core::{ReceiverInstruction, ping_record_pda};
+use storage::sequencer::sequencer_cells::{
+    PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+};
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
-    TransactionOrigin, apply_follow_update,
+    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
+    apply_follow_update,
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
-    build_bridge_deposit_tx_from_event, build_genesis_state,
-    config::{BedrockConfig, GenesisAction, SequencerConfig},
-    deposit_already_minted, is_sequencer_only_program,
+    build_bridge_deposit_tx_from_event, build_genesis_state, classify_settled_deliveries,
+    config::{BedrockConfig, CrossZoneConfig, CrossZonePeer, GenesisAction, SequencerConfig},
+    deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
+    extract_cross_zone_dispatch_key, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, mock_checkpoint},
     resubmittable_txs,
 };
 
 mod reconstruction;
+
+/// The peer zone a cross-zone test receives from. Distinct from the test
+/// channel id (`[0; 32]`), which the inbox guest rejects as a source.
+const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 #[derive(borsh::BorshSerialize)]
 struct DepositMetadataForEncoding {
@@ -160,6 +169,80 @@ fn tx_is_bridge_deposit(
             ..
         } if l1_deposit_op_id == deposit_op_id && amount == expected_amount
     )
+}
+
+/// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
+/// `build_genesis_state` seeds the inbox config PDA and a delivery has an
+/// allowlist to pass.
+fn cross_zone_test_config() -> SequencerConfig {
+    SequencerConfig {
+        cross_zone: Some(CrossZoneConfig {
+            peers: vec![CrossZonePeer {
+                channel_id: PEER_ZONE,
+                allowed_targets: vec![programs::ping_receiver().id()],
+                expected_block_signing_pubkey: None,
+            }],
+        }),
+        ..setup_sequencer_config()
+    }
+}
+
+/// A `ping_receiver::Record` instruction as risc0 words, little-endian: the wire
+/// form an emitter on the peer zone puts in the message payload.
+fn ping_payload(payload: &[u8]) -> Vec<u8> {
+    risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: payload.to_vec(),
+    })
+    .expect("ping instruction serializes")
+    .iter()
+    .flat_map(|word| word.to_le_bytes())
+    .collect()
+}
+
+/// The dispatch transaction for a message at index 0 of [`PEER_ZONE`] block
+/// `src_block_id`. Built through the same builder the watcher uses, so a change
+/// to the encoding shows up here rather than passing silently.
+fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
+    let receiver_id = programs::ping_receiver().id();
+    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
+        PEER_ZONE,
+        src_block_id,
+        0,
+        programs::ping_sender().id(),
+        receiver_id,
+        &[ping_record_pda(receiver_id).into_value()],
+        payload,
+    ))
+}
+
+/// The pending record the watcher would leave behind for that dispatch.
+fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispatchRecord {
+    let tx = dispatch_tx(src_block_id, payload);
+    PendingCrossZoneDispatchRecord::recorded(
+        cross_zone_inbox_core::message_key(&PEER_ZONE, src_block_id, 0),
+        borsh::to_vec(&tx).expect("dispatch encodes"),
+    )
+}
+
+/// The message keys of the deliveries a block carries.
+fn dispatches_in(block: &Block) -> Vec<[u8; 32]> {
+    block
+        .body
+        .transactions
+        .iter()
+        .filter_map(extract_cross_zone_dispatch_key)
+        .collect()
+}
+
+/// The pending dispatch records a sequencer still holds.
+fn pending_dispatches(
+    sequencer: &SequencerCoreWithMockClients,
+) -> Vec<PendingCrossZoneDispatchRecord> {
+    sequencer
+        .store
+        .dbio()
+        .get_pending_cross_zone_dispatches()
+        .expect("pending dispatches readable")
 }
 
 #[tokio::test]
@@ -475,6 +558,363 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         u128::from(amount),
         "a replayed deposit must not re-credit the vault"
     );
+}
+
+#[tokio::test]
+async fn recorded_dispatches_are_drained_from_the_store_on_production() {
+    let payload = b"hello-cross-zone".to_vec();
+    let record = dispatch_record(7, ping_payload(&payload));
+    let key = record.message_key;
+
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    assert_eq!(
+        sequencer
+            .store
+            .dbio()
+            .add_pending_cross_zone_dispatches(vec![record])
+            .unwrap(),
+        1
+    );
+
+    // The delivery never goes through the mempool: the record is the queue, and
+    // production drains it. That is what makes the window between the watcher's
+    // durable read cursor and a block carrying the dispatch survivable.
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "deliveries are drained from the store, never queued in the mempool"
+    );
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(block_id)
+        .unwrap()
+        .expect("produced block is stored");
+    assert_eq!(
+        dispatches_in(&block),
+        vec![key],
+        "the drained delivery should be included in the produced block"
+    );
+
+    let record_id = ping_record_pda(programs::ping_receiver().id());
+    assert_eq!(
+        sequencer.with_state(|state| state.get_account_by_id(record_id).data.into_inner()),
+        payload,
+        "the dispatch must reach its target program, not just sit in the block"
+    );
+
+    // The record stays until the delivery finalizes; re-delivery is prevented by
+    // the inbox seen-set now in head state, not by any marker on the record.
+    assert_eq!(
+        pending_dispatches(&sequencer)
+            .iter()
+            .map(|record| record.message_key)
+            .collect::<Vec<_>>(),
+        vec![key],
+        "the record remains until the delivery becomes irreversible"
+    );
+}
+
+#[tokio::test]
+async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
+    // The seen-set is what replaces the submitted mark: the drain asks the state
+    // it is building on whether the inbox has already taken this message, so a
+    // record that outlives its delivery costs one skipped drain, not a replay.
+    let record = dispatch_record(11, ping_payload(b"once"));
+    let key = record.message_key;
+
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    let first = sequencer.produce_new_block().await.unwrap();
+    let second = sequencer.produce_new_block().await.unwrap();
+
+    let delivered_in = |block_id: u64| {
+        dispatches_in(
+            &sequencer
+                .store
+                .get_block_at_id(block_id)
+                .unwrap()
+                .expect("produced block is stored"),
+        )
+    };
+    assert_eq!(delivered_in(first), vec![key]);
+    assert!(
+        delivered_in(second).is_empty(),
+        "the inbox seen-set must keep the drain from re-delivering"
+    );
+
+    let message = extract_cross_zone_dispatch(&dispatch_tx(11, ping_payload(b"once")))
+        .expect("the dispatch carries a cross-zone message");
+    assert!(
+        sequencer.with_state(|state| dispatch_already_delivered(state, &message)),
+        "the seen shard in head state is what the skip reads"
+    );
+}
+
+#[tokio::test]
+async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures() {
+    // A payload that is not `u32`-aligned: the inbox guest rejects it outright,
+    // so this is a delivery that can never execute however often it is retried.
+    // Its content is chosen on the peer zone and validated by nobody in between,
+    // so without a give-up policy it would fail on every block for ever.
+    let record = dispatch_record(13, b"odd".to_vec());
+
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    for attempt in 1..RETIRE_DISPATCH_AFTER_FAILURES {
+        let block_id = sequencer.produce_new_block().await.unwrap();
+        let block = sequencer
+            .store
+            .get_block_at_id(block_id)
+            .unwrap()
+            .expect("produced block is stored");
+        assert!(
+            dispatches_in(&block).is_empty(),
+            "a dispatch that fails to execute must not reach the block"
+        );
+
+        let records = pending_dispatches(&sequencer);
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].failed_attempts, attempt,
+            "the counter advances once per block, not once per process start"
+        );
+    }
+
+    // The attempt at the limit gives up on it, and giving up drops the record.
+    // Anything else leaves an entry no later block can ever remove, which is how
+    // a peer that can make deliveries fail would grow this list without bound.
+    sequencer.produce_new_block().await.unwrap();
+    assert!(
+        pending_dispatches(&sequencer).is_empty(),
+        "giving up on a delivery must drop its record, not flag it"
+    );
+
+    // And nothing re-feeds it, so it stops costing a guest execution per block.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert!(dispatches_in(&block).is_empty());
+    assert!(pending_dispatches(&sequencer).is_empty());
+}
+
+#[tokio::test]
+async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
+    // The watcher persists its floor only at slot boundaries, so a crash inside
+    // a slot makes the next run re-read it and re-record deliveries that have
+    // already settled. Their keys are in the inbox seen-set for good, so no
+    // future block will ever carry them and the settlement path cannot reach
+    // them. The drain dropping them is the only thing that does.
+    let record = dispatch_record(29, ping_payload(b"again"));
+    let key = record.message_key;
+
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record.clone()])
+        .unwrap();
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_eq!(dispatches_in(&delivery_block), vec![key]);
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
+            ..empty_follow_update()
+        },
+    );
+    assert!(pending_dispatches(&sequencer).is_empty());
+
+    // The watcher re-reads the slot and records it again.
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+    assert_eq!(pending_dispatches(&sequencer).len(), 1);
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert!(
+        dispatches_in(&block).is_empty(),
+        "the delivery is already on the chain, so it must not be delivered again"
+    );
+    assert!(
+        pending_dispatches(&sequencer).is_empty(),
+        "a record whose delivery is already irreversible must be dropped, not kept for ever"
+    );
+}
+
+#[tokio::test]
+async fn a_delivery_still_reversible_keeps_its_record() {
+    // The counterpart to the test above, and the reason the drain checks two
+    // states rather than one. In head but not yet final means the delivery can
+    // still orphan, so skipping it is right but dropping its record would lose
+    // the delivery when it does.
+    let record = dispatch_record(31, ping_payload(b"pending"));
+    let key = record.message_key;
+
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    sequencer.produce_new_block().await.unwrap();
+    sequencer.produce_new_block().await.unwrap();
+
+    assert_eq!(
+        pending_dispatches(&sequencer)
+            .iter()
+            .map(|record| record.message_key)
+            .collect::<Vec<_>>(),
+        vec![key],
+        "nothing has finalized, so the record must survive in case the block orphans"
+    );
+}
+
+#[test]
+fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
+    // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
+    // about the payload, and so does the inbox's own replay check. So a peer's
+    // sequencer can publish a delivery under a key we hold with a payload we
+    // never saw, and it settles our correct record along with it. The indexer
+    // catches the forgery and halts; this record is the last local copy of what
+    // we believed, so the mismatch has to be reported before it is dropped.
+    let honest = dispatch_record(53, ping_payload(b"honest"));
+    let key = honest.message_key;
+    let forged = dispatch_tx(53, ping_payload(b"forged"));
+    assert_eq!(
+        extract_cross_zone_dispatch_key(&forged),
+        Some(key),
+        "the forged delivery must share the key, or it proves nothing"
+    );
+
+    let block = common::test_utils::produce_dummy_block(2, None, vec![forged]);
+    let (keys, mismatched) = classify_settled_deliveries(std::slice::from_ref(&honest), &block);
+    assert_eq!(keys, vec![key], "the record is settled either way");
+    assert_eq!(
+        mismatched,
+        vec![key],
+        "a delivery that differs from the one recorded under that key must be reported"
+    );
+
+    // The honest case must stay quiet, or the report is noise.
+    let honest_block = common::test_utils::produce_dummy_block(
+        2,
+        None,
+        vec![dispatch_tx(53, ping_payload(b"honest"))],
+    );
+    let (keys, mismatched) = classify_settled_deliveries(&[honest], &honest_block);
+    assert_eq!(keys, vec![key]);
+    assert!(mismatched.is_empty());
+}
+
+#[tokio::test]
+async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
+    // A store-drained transaction is at the head of the queue every turn, so one
+    // that cannot fit in any block would defer itself for ever and, because the
+    // deferral breaks the loop, stop production ever reaching the mempool behind
+    // it. The peer chooses the payload, so this is theirs to trigger.
+    let record = dispatch_record(41, ping_payload(&[7_u8; 8192]));
+
+    let mut config = cross_zone_test_config();
+    config.max_block_size = bytesize::ByteSize::kib(4);
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    let user_tx = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, user_tx.clone()))
+        .await
+        .unwrap();
+
+    // Production must get past it to the mempool in the very first block.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert!(
+        block.body.transactions.contains(&user_tx),
+        "an oversized drained delivery must not stop production reaching the mempool"
+    );
+    assert!(dispatches_in(&block).is_empty());
+
+    // And it is given up on rather than retried for ever.
+    for _ in 1..RETIRE_DISPATCH_AFTER_FAILURES {
+        sequencer.produce_new_block().await.unwrap();
+    }
+    assert!(
+        pending_dispatches(&sequencer).is_empty(),
+        "a delivery that fits in no block must be given up on"
+    );
+}
+
+#[tokio::test]
+async fn a_delivery_backlog_is_spread_across_blocks() {
+    // Each delivery costs a guest execution and peers decide how many queue up,
+    // so an unbounded drain would let a backlog decide how long a block takes to
+    // build and leave no room for user work, since store-drained transactions
+    // are taken before the mempool.
+    let backlog = MAX_DISPATCHES_PER_BLOCK + 3;
+    let records: Vec<_> = (0..backlog)
+        .map(|index| {
+            let src_block_id = 100 + u64::try_from(index).expect("test index fits");
+            dispatch_record(src_block_id, ping_payload(b"backlog"))
+        })
+        .collect();
+
+    let mut config = cross_zone_test_config();
+    config.max_num_tx_in_block = backlog + 10;
+    let (mut sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(records)
+        .unwrap();
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_eq!(
+        dispatches_in(&block).len(),
+        MAX_DISPATCHES_PER_BLOCK,
+        "one block must not carry an unbounded number of deliveries"
+    );
+
+    // Deferred, not dropped: the rest go in the next block.
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_eq!(dispatches_in(&block).len(), 3);
 }
 
 #[test]
@@ -1772,6 +2212,98 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     assert_eq!(sequencer.chain_height(), 2, "head is unchanged");
     let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
+}
+
+#[tokio::test]
+async fn follow_finalized_delivery_drops_its_pending_record() {
+    // The record exists to bridge the gap between the watcher's durable read
+    // cursor and a block that carries the delivery. Once that block is
+    // irreversible the delivery cannot be lost any more, so the record is owed
+    // nothing and goes with the same update that made the block irreversible.
+    let record = dispatch_record(17, ping_payload(b"settled"));
+    let key = record.message_key;
+
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
+    assert_eq!(dispatches_in(&delivery_block), vec![key]);
+    assert_eq!(
+        pending_dispatches(&sequencer).len(),
+        1,
+        "including the delivery is not enough to settle its record"
+    );
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![(MsgId::from(delivery_block.header.hash.0), delivery_block)],
+            ..empty_follow_update()
+        },
+    );
+
+    assert!(
+        pending_dispatches(&sequencer).is_empty(),
+        "a delivery in an irreversible block settles its record"
+    );
+}
+
+#[tokio::test]
+async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
+    // Keyed by message key, not by height: a finalized block the final tier
+    // parks never became irreversible, so nothing it happens to sit above may
+    // settle a record. Dropping one here would lose the delivery for good, since
+    // the watcher's floor has already moved past the peer block it came from.
+    let record = dispatch_record(19, ping_payload(b"parked"));
+    let key = record.message_key;
+    let delivery = dispatch_tx(19, ping_payload(b"parked"));
+
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    sequencer
+        .store
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    let tx = common::test_utils::produce_dummy_empty_transaction();
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+
+    // A skip-ahead block carrying the same delivery: not in head and linking to
+    // nothing we hold, so the final tier parks it instead of applying it.
+    let parked =
+        common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![delivery]);
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![(MsgId::from([9; 32]), parked)],
+            ..empty_follow_update()
+        },
+    );
+
+    assert_eq!(
+        pending_dispatches(&sequencer)
+            .iter()
+            .map(|record| record.message_key)
+            .collect::<Vec<_>>(),
+        vec![key],
+        "a parked finalized block must not drop its delivery's record"
+    );
 }
 
 #[tokio::test]
