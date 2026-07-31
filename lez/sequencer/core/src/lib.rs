@@ -50,6 +50,7 @@ pub mod block_publisher;
 pub mod block_store;
 pub mod config;
 pub mod cross_zone_watcher;
+pub mod gossip;
 
 #[cfg(feature = "mock")]
 pub mod mock;

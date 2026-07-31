@@ -35,6 +35,38 @@ pub enum GenesisAction {
     },
 }
 
+/// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
+/// entirely: no sockets, no background tasks.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GossipConfig {
+    /// Multiaddr to listen on. Deployments should set a concrete routable
+    /// address (announced addresses are taken from listeners; unspecified
+    /// IPs like 0.0.0.0 are filtered out of announcements).
+    #[serde(default = "default_gossip_listen_addr")]
+    pub listen_addr: String,
+    /// Peer multiaddrs to dial at startup, optionally with `/p2p/<peer_id>`.
+    #[serde(default)]
+    pub bootstrap_peers: Vec<String>,
+    /// Announcement heartbeat interval.
+    #[serde(with = "humantime_serde", default = "default_announce_interval")]
+    pub announce_interval: Duration,
+    /// Accredited-keys refresh interval.
+    #[serde(with = "humantime_serde", default = "default_keys_refresh_interval")]
+    pub keys_refresh_interval: Duration,
+}
+
+fn default_gossip_listen_addr() -> String {
+    "/ip4/0.0.0.0/udp/0/quic-v1".to_owned()
+}
+
+const fn default_announce_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
+const fn default_keys_refresh_interval() -> Duration {
+    Duration::from_secs(300)
+}
+
 // TODO: Provide default values
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
@@ -67,6 +99,9 @@ pub struct SequencerConfig {
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_address")]
     pub metrics_address: Option<SocketAddr>,
+    /// Sequencer p2p gossip configuration. `None` disables gossip.
+    #[serde(default)]
+    pub gossip: Option<GossipConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -107,4 +142,43 @@ const fn default_metrics_address() -> Option<SocketAddr> {
 #[must_use]
 pub const fn default_priority_fee() -> u64 {
     logos_blockchain_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gossip_config_defaults() {
+        let config: GossipConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.listen_addr, "/ip4/0.0.0.0/udp/0/quic-v1");
+        assert!(config.bootstrap_peers.is_empty());
+        assert_eq!(config.announce_interval, Duration::from_secs(60));
+        assert_eq!(config.keys_refresh_interval, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn gossip_config_parses_humantime_intervals() {
+        let config: GossipConfig = serde_json::from_str(
+            r#"{"listen_addr": "/ip4/127.0.0.1/udp/7070/quic-v1",
+                "bootstrap_peers": ["/ip4/127.0.0.1/udp/7071/quic-v1"],
+                "announce_interval": "5s",
+                "keys_refresh_interval": "1m"}"#,
+        )
+        .unwrap();
+        assert_eq!(config.bootstrap_peers.len(), 1);
+        assert_eq!(config.announce_interval, Duration::from_secs(5));
+        assert_eq!(config.keys_refresh_interval, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn sequencer_config_without_gossip_still_parses() {
+        // The checked-in debug config predates gossip and must keep working.
+        let config = SequencerConfig::from_path(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../service/configs/debug/sequencer_config.json"
+        )))
+        .unwrap();
+        assert!(config.gossip.is_none());
+    }
 }

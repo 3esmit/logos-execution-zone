@@ -9497,6 +9497,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "libp2p",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-http-api-common",
