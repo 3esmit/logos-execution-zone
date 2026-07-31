@@ -586,6 +586,146 @@ async fn reconstruction_reconciles_already_finished_deposit() {
     );
 }
 
+/// A cross-zone delivery whose record is still pending locally, but whose block
+/// arrives already finalized on the channel. Reconstruction must settle the
+/// record on the way through: the delivery is permanently reflected in the
+/// reconstructed state (the inbox seen shard), so the next production neither
+/// re-delivers it nor leaves a record nothing will ever drop.
+#[tokio::test]
+async fn reconstructed_delivery_settles_its_pending_record() {
+    let payload = b"reconstructed".to_vec();
+    let record = dispatch_record(23, ping_payload(&payload));
+    let key = record.message_key;
+
+    // Sequencer A produces the block that carries the delivery.
+    let config_a = cross_zone_test_config();
+    let (mut seq_a, _mempool_a) =
+        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    seq_a
+        .block_store()
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record.clone()])
+        .unwrap();
+    seq_a.produce_new_block().await.unwrap();
+
+    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
+    let messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_slot = messages.last().unwrap().1;
+    let channel_id = config_a.bedrock_config.channel_id;
+
+    // Sequencer B holds the same record, as its own watcher would after reading
+    // the peer block, and reconstructs A's chain from a fresh store.
+    let (mut seq_b, _mempool_b) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    assert_eq!(
+        seq_b
+            .block_store()
+            .dbio()
+            .add_pending_cross_zone_dispatches(vec![record])
+            .unwrap(),
+        1
+    );
+
+    let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b,
+        &seq_b.store,
+        &seq_b.chain,
+        true,
+    )
+    .await
+    .expect("reconstruct");
+
+    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    assert_eq!(tip_b.id, tip_a.id);
+    assert_eq!(tip_b.hash, tip_a.hash);
+    assert!(
+        seq_b
+            .block_store()
+            .dbio()
+            .get_pending_cross_zone_dispatches()
+            .unwrap()
+            .is_empty(),
+        "reconstruction must settle the record of a delivery it replayed"
+    );
+
+    // The delivery landed exactly once, and the next turn does not re-emit it.
+    let record_id = ping_record_pda(programs::ping_receiver().id());
+    assert_eq!(
+        seq_b.with_state(|state| state.get_account_by_id(record_id).data.into_inner()),
+        payload,
+        "the reconstructed delivery must reach its target program"
+    );
+    seq_b.produce_new_block().await.unwrap();
+    let produced = seq_b
+        .block_store()
+        .get_block_at_id(tip_b.id + 1)
+        .unwrap()
+        .expect("produced block present");
+    assert!(
+        !dispatches_in(&produced).contains(&key),
+        "the reconstructed delivery must not be re-emitted"
+    );
+}
+
+/// A delivery this node published itself, served back by the channel at or below
+/// its own tip. That path verifies the block matches and returns early, so it is
+/// reached on every restart. It must still settle the delivery's record: the
+/// channel serving the block is what makes it irreversible, and nothing later
+/// will ever put that key in a block again.
+#[tokio::test]
+async fn a_verified_own_block_settles_its_delivery_records() {
+    let record = dispatch_record(37, ping_payload(b"verified"));
+    let key = record.message_key;
+
+    let (mut seq, _mempool) =
+        SequencerCoreWithMockClients::start_from_config(cross_zone_test_config()).await;
+    seq.block_store()
+        .dbio()
+        .add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    let block_id = seq.produce_new_block().await.unwrap();
+    let block = seq
+        .block_store()
+        .get_block_at_id(block_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(dispatches_in(&block), vec![key]);
+    assert_eq!(
+        seq.block_store()
+            .dbio()
+            .get_pending_cross_zone_dispatches()
+            .unwrap()
+            .len(),
+        1,
+        "producing the block is not what settles the record"
+    );
+
+    // The channel serves our own chain back, tip included.
+    let messages = channel_from_store(seq.block_store(), 10);
+    let tip_slot = messages.last().unwrap().1;
+    let mock = MockBlockPublisher::with_canned_channel(
+        seq.sequencer_config.bedrock_config.channel_id,
+        Some(tip_slot),
+        messages,
+    );
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock, &seq.store, &seq.chain, true,
+    )
+    .await
+    .expect("reconstruct");
+
+    assert!(
+        seq.block_store()
+            .dbio()
+            .get_pending_cross_zone_dispatches()
+            .unwrap()
+            .is_empty(),
+        "a delivery the channel confirms must not leave a record nothing can remove"
+    );
+}
+
 #[tokio::test]
 async fn committed_local_against_missing_channel_fails_without_anchor() {
     // A sequencer that has committed blocks — a non-genesis tip plus a persisted

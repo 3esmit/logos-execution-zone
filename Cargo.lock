@@ -9307,6 +9307,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "mempool",
  "num-bigint 0.4.6",
+ "ping_core",
  "programs",
  "rand 0.8.6",
  "risc0-zkvm",
