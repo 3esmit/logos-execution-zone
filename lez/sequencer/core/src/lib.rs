@@ -1162,12 +1162,6 @@ fn apply_follow_update(
     let (resubmit_txs, outcome) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
 
-        // User txs of orphaned blocks, returned to the mempool below.
-        let resubmit_txs: Vec<LeeTransaction> = orphaned
-            .iter()
-            .flat_map(|(_, block)| resubmittable_txs(block))
-            .collect();
-
         // Outcomes align with `adopted`.
         let outcomes = chain.apply_channel_update(&orphaned, &adopted);
         let mut to_persist: Vec<(&Block, bool)> = adopted
@@ -1201,6 +1195,22 @@ fn apply_follow_update(
                 AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
             }
         }
+
+        // User txs of orphaned blocks, returned to the mempool below.
+        //
+        // Computed after the finalized tier has advanced, and only for blocks
+        // above it: the zone-sdk reports a block as orphaned once LIB pruning
+        // drops its inscription from the channel lineage, so every block of
+        // ours is orphaned a poll or two after it finalizes. Those transactions
+        // are irreversibly included, and returning them to the mempool puts
+        // them back in every block we produce from then on.
+        let final_height = chain.final_tip().map(|tip| tip.block_id);
+        let resubmit_txs: Vec<LeeTransaction> = orphaned
+            .iter()
+            .filter(|(_, block)| final_height.is_none_or(|id| block.header.block_id > id))
+            .flat_map(|(_, block)| resubmittable_txs(block))
+            .collect();
+
         // Snapshot the advanced final tier so a restart re-anchors on it.
         let final_meta = final_advanced.then(|| {
             let tip = chain.final_tip().expect("advanced final tier has a tip");

@@ -2173,6 +2173,68 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
 }
 
 #[tokio::test]
+async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
+    // The zone-sdk reports a block as orphaned once LIB pruning drops its
+    // inscription from the channel lineage, which happens a poll or two after
+    // every block of ours finalizes. Its transactions are irreversibly
+    // included, so requeueing them would put them back in every block we
+    // produce from then on.
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
+            ..empty_follow_update()
+        },
+    );
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: vec![(MsgId::from(block2.header.hash.0), block2)],
+            ..empty_follow_update()
+        },
+    );
+
+    assert_eq!(
+        sequencer.chain_height(),
+        2,
+        "an irreversible block cannot be reverted"
+    );
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        20010,
+        "the finalized transfer stands"
+    );
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "a transaction that is already irreversible must not be requeued"
+    );
+}
+
+#[tokio::test]
 async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let config = setup_sequencer_config();
     let (mut sequencer, mempool_handle) =
