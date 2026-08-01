@@ -7,7 +7,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LeeTransaction, LocalPublicTransactionReceiptV1, MembershipProof, Nonce, ProgramId,
+    LeeTransaction, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    LocalPublicTransactionReceiptV1, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -86,6 +87,17 @@ pub trait Rpc {
         confirmation_depth: u8,
     ) -> Result<Option<LocalPublicTransactionReceiptV1>, ErrorObjectOwned>;
 
+    /// Returns a bounded, snapshot-bound page of trusted local public block history.
+    ///
+    /// Callers must echo the first response's `snapshot_tip` as `expected_tip` on later pages.
+    /// The endpoint rejects a changed tip instead of mixing local-chain snapshots. It is not an
+    /// independently verifiable inclusion proof or public-network finality.
+    #[method(name = "getLocalPublicBlockHistory")]
+    async fn get_local_public_block_history(
+        &self,
+        request: LocalPublicBlockHistoryRequestV1,
+    ) -> Result<LocalPublicBlockHistoryPageV1, ErrorObjectOwned>;
+
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
         &self,
@@ -117,7 +129,9 @@ pub trait Rpc {
 #[cfg(test)]
 mod tests {
     use sequencer_service_protocol::{
-        AccountId, HashType, LocalBlockHeaderReceiptV1, LocalPublicTransactionReceiptV1,
+        AccountId, HashType, LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1,
+        LocalPublicBlockHistoryRequestV1, LocalPublicBlockV1, LocalPublicTransactionReceiptV1,
+        LocalPublicTransactionV1,
     };
 
     use super::LeeTransaction;
@@ -169,6 +183,58 @@ mod tests {
 
         let decoded = serde_json::from_value::<LocalPublicTransactionReceiptV1>(wire)?;
         assert_eq!(decoded, receipt);
+        Ok(())
+    }
+
+    #[test]
+    fn local_public_block_history_wire_shape_is_structured() -> Result<(), serde_json::Error> {
+        let tip = LocalBlockHeaderReceiptV1 {
+            block_id: 8,
+            block_hash: HashType([8_u8; 32]),
+            previous_block_hash: HashType([7_u8; 32]),
+        };
+        let page = LocalPublicBlockHistoryPageV1 {
+            snapshot_tip: tip.clone(),
+            blocks: vec![LocalPublicBlockV1 {
+                header: LocalBlockHeaderReceiptV1 {
+                    block_id: 7,
+                    block_hash: HashType([7_u8; 32]),
+                    previous_block_hash: HashType([6_u8; 32]),
+                },
+                public_transactions: vec![LocalPublicTransactionV1 {
+                    transaction_hash: HashType([1_u8; 32]),
+                    program_id: [2_u32; 8],
+                    account_ids: vec![AccountId::new([3_u8; 32])],
+                    instruction_data: vec![4_u32, 5],
+                }],
+            }],
+            next_block_id: Some(8),
+        };
+
+        let wire = serde_json::to_value(&page)?;
+        assert_eq!(wire["snapshot_tip"]["block_id"], 8);
+        assert_eq!(
+            wire["blocks"][0]["public_transactions"][0]["instruction_data"],
+            serde_json::json!([4_u32, 5])
+        );
+        assert_eq!(wire["next_block_id"], 8);
+
+        let decoded = serde_json::from_value::<LocalPublicBlockHistoryPageV1>(wire)?;
+        assert_eq!(decoded, page);
+
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 2,
+            expected_tip: Some(tip),
+        };
+        let request_wire = serde_json::to_value(&request)?;
+        assert_eq!(request_wire["start_block_id"], 7);
+        assert_eq!(request_wire["max_blocks"], 2);
+        assert!(request_wire["expected_tip"].is_object());
+        assert_eq!(
+            serde_json::from_value::<LocalPublicBlockHistoryRequestV1>(request_wire)?,
+            request
+        );
         Ok(())
     }
 }

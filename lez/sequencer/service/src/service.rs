@@ -13,7 +13,10 @@ use sequencer_core::{
 };
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LocalBlockHeaderReceiptV1, LocalPublicTransactionReceiptV1,
+    LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    LocalPublicBlockV1, LocalPublicTransactionReceiptV1, LocalPublicTransactionV1,
+    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_INSTRUCTION_WORDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_TRANSACTIONS,
     MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS,
     MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS, MembershipProof, Nonce, ProgramId,
 };
@@ -222,6 +225,92 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         .map(Some)
     }
 
+    async fn get_local_public_block_history(
+        &self,
+        request: LocalPublicBlockHistoryRequestV1,
+    ) -> Result<LocalPublicBlockHistoryPageV1, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        let genesis_block_id = sequencer.block_store().genesis_id();
+        let mut effective_request = request;
+        effective_request.start_block_id = normalize_local_public_block_history_start(
+            effective_request.start_block_id,
+            genesis_block_id,
+        );
+        validate_local_public_block_history_request(&effective_request, genesis_block_id)?;
+        let snapshot_tip_id = sequencer.chain_height();
+        let snapshot_tip = local_block_header_receipt(
+            &block_at_id(&sequencer, snapshot_tip_id)?,
+            snapshot_tip_id,
+        )?;
+        if effective_request
+            .expected_tip
+            .as_ref()
+            .is_some_and(|expected_tip| expected_tip != &snapshot_tip)
+        {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                "local public history snapshot changed".to_owned(),
+                None::<()>,
+            ));
+        }
+
+        if effective_request.start_block_id > snapshot_tip_id {
+            return Ok(LocalPublicBlockHistoryPageV1 {
+                snapshot_tip,
+                blocks: Vec::new(),
+                next_block_id: None,
+            });
+        }
+
+        let expected_predecessor_hash = if effective_request.start_block_id > genesis_block_id {
+            let predecessor_block_id =
+                effective_request
+                    .start_block_id
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        ErrorObjectOwned::owned(
+                            ErrorCode::InternalError.code(),
+                            "local public history predecessor block identifier underflows"
+                                .to_owned(),
+                            None::<()>,
+                        )
+                    })?;
+            Some(
+                local_block_header_receipt(
+                    &block_at_id(&sequencer, predecessor_block_id)?,
+                    predecessor_block_id,
+                )?
+                .block_hash,
+            )
+        } else {
+            None
+        };
+
+        let requested_blocks = u64::from(effective_request.max_blocks);
+        let end_block_id = effective_request
+            .start_block_id
+            .checked_add(requested_blocks.saturating_sub(1))
+            .map(|candidate| candidate.min(snapshot_tip_id))
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    "local public history block range overflows".to_owned(),
+                    None::<()>,
+                )
+            })?;
+        let mut blocks = Vec::with_capacity(usize::from(effective_request.max_blocks));
+        for block_id in effective_request.start_block_id..=end_block_id {
+            blocks.push(block_at_id(&sequencer, block_id)?);
+        }
+
+        build_local_public_block_history_page(
+            &effective_request,
+            snapshot_tip,
+            expected_predecessor_hash,
+            &blocks,
+        )
+    }
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
@@ -295,6 +384,41 @@ fn validate_confirmation_depth(confirmation_depth: u8) -> Result<(), ErrorObject
         ));
     }
     Ok(())
+}
+
+fn validate_local_public_block_history_request(
+    request: &LocalPublicBlockHistoryRequestV1,
+    genesis_block_id: BlockId,
+) -> Result<(), ErrorObjectOwned> {
+    if request.start_block_id < genesis_block_id {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            format!("local public history must start at or after genesis block {genesis_block_id}"),
+            None::<()>,
+        ));
+    }
+    if request.max_blocks == 0 || request.max_blocks > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            format!(
+                "local public history block count must be between 1 and {MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS}"
+            ),
+            None::<()>,
+        ));
+    }
+    Ok(())
+}
+
+const fn normalize_local_public_block_history_start(
+    requested_start_block_id: BlockId,
+    genesis_block_id: BlockId,
+) -> BlockId {
+    const GENESIS_CURSOR: BlockId = 0;
+    if requested_start_block_id == GENESIS_CURSOR {
+        genesis_block_id
+    } else {
+        requested_start_block_id
+    }
 }
 
 fn block_at_id<BC: BlockPublisherTrait>(
@@ -384,6 +508,128 @@ fn local_confirmation_header_receipt(
     Ok(header)
 }
 
+fn build_local_public_block_history_page(
+    request: &LocalPublicBlockHistoryRequestV1,
+    snapshot_tip: LocalBlockHeaderReceiptV1,
+    expected_predecessor_hash: Option<HashType>,
+    blocks: &[Block],
+) -> Result<LocalPublicBlockHistoryPageV1, ErrorObjectOwned> {
+    if request
+        .expected_tip
+        .as_ref()
+        .is_some_and(|expected_tip| expected_tip != &snapshot_tip)
+    {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            "local public history snapshot changed".to_owned(),
+            None::<()>,
+        ));
+    }
+    if blocks.len() > usize::from(request.max_blocks) {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local public history response exceeds its requested block count".to_owned(),
+            None::<()>,
+        ));
+    }
+
+    let mut expected_block_id = request.start_block_id;
+    let mut previous_hash = expected_predecessor_hash;
+    let mut transaction_count = 0_usize;
+    let mut account_count = 0_usize;
+    let mut instruction_word_count = 0_usize;
+    let mut response_blocks = Vec::with_capacity(blocks.len());
+    for block in blocks {
+        let header = local_block_header_receipt(block, expected_block_id)?;
+        if header.block_id > snapshot_tip.block_id {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "local public history block exceeds its snapshot tip".to_owned(),
+                None::<()>,
+            ));
+        }
+        if previous_hash.is_some_and(|hash| header.previous_block_hash != hash) {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "local public history block chain is discontinuous".to_owned(),
+                None::<()>,
+            ));
+        }
+
+        let mut public_transactions = Vec::new();
+        for transaction in &block.body.transactions {
+            let LeeTransaction::Public(public_transaction) = transaction else {
+                continue;
+            };
+            let message = public_transaction.message();
+            transaction_count = transaction_count.checked_add(1).ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    "local public history transaction count overflow".to_owned(),
+                    None::<()>,
+                )
+            })?;
+            account_count = account_count
+                .checked_add(message.account_ids.len())
+                .ok_or_else(|| {
+                    ErrorObjectOwned::owned(
+                        ErrorCode::InternalError.code(),
+                        "local public history account count overflow".to_owned(),
+                        None::<()>,
+                    )
+                })?;
+            instruction_word_count = instruction_word_count
+                .checked_add(message.instruction_data.len())
+                .ok_or_else(|| {
+                    ErrorObjectOwned::owned(
+                        ErrorCode::InternalError.code(),
+                        "local public history instruction word count overflow".to_owned(),
+                        None::<()>,
+                    )
+                })?;
+            if transaction_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_TRANSACTIONS
+                || account_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS
+                || instruction_word_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_INSTRUCTION_WORDS
+            {
+                return Err(ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    "local public history response exceeds configured bounds".to_owned(),
+                    None::<()>,
+                ));
+            }
+            public_transactions.push(LocalPublicTransactionV1 {
+                transaction_hash: HashType(public_transaction.hash()),
+                program_id: message.program_id,
+                account_ids: message.account_ids.clone(),
+                instruction_data: message.instruction_data.clone(),
+            });
+        }
+
+        previous_hash = Some(header.block_hash);
+        expected_block_id = expected_block_id.checked_add(1).ok_or_else(|| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "local public history block identifier overflow".to_owned(),
+                None::<()>,
+            )
+        })?;
+        response_blocks.push(LocalPublicBlockV1 {
+            header,
+            public_transactions,
+        });
+    }
+
+    let next_block_id = response_blocks
+        .last()
+        .is_some_and(|block| block.header.block_id < snapshot_tip.block_id)
+        .then_some(expected_block_id);
+    Ok(LocalPublicBlockHistoryPageV1 {
+        snapshot_tip,
+        blocks: response_blocks,
+        next_block_id,
+    })
+}
+
 fn build_local_public_transaction_receipt(
     transaction_hash: HashType,
     public_transaction: &lee::PublicTransaction,
@@ -451,13 +697,17 @@ mod tests {
         SequencerCoreWithMockClients,
         config::{BedrockConfig, SequencerConfig},
     };
+    use sequencer_service_protocol::LocalPublicBlockHistoryRequestV1;
     use sequencer_service_rpc::RpcServer as _;
     use tokio::sync::Mutex;
 
     use super::{
+        MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
         MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS, build_local_public_transaction_receipt,
-        instruction_data_sha256, local_confirmation_header_receipt, local_inclusion_header_receipt,
-        validate_confirmation_depth,
+        build_local_public_block_history_page, instruction_data_sha256,
+        local_confirmation_header_receipt, local_inclusion_header_receipt,
+        local_block_header_receipt, normalize_local_public_block_history_start,
+        validate_confirmation_depth, validate_local_public_block_history_request,
     };
 
     fn public_transaction(
@@ -683,6 +933,165 @@ mod tests {
         assert_eq!(
             receipt.confirmation_chain[1].previous_block_hash,
             receipt.confirmation_chain[0].block_hash
+        );
+    }
+
+    #[test]
+    fn builds_a_snapshot_bound_local_public_history_page() {
+        let transaction = public_transaction(
+            vec![AccountId::new([3; 32]), AccountId::new([4; 32])],
+            vec![0x1122_3344, 0x5566_7788],
+        );
+        let first = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(
+                transaction.clone(),
+            )],
+        );
+        let tip_block = produce_dummy_block(8, Some(first.header.hash), vec![]);
+        let tip = local_block_header_receipt(&tip_block, 8).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+
+        let page = build_local_public_block_history_page(
+            &request,
+            tip.clone(),
+            Some(HashType([1; 32])),
+            &[first],
+        )
+        .expect("valid page");
+
+        assert_eq!(page.snapshot_tip, tip);
+        assert_eq!(page.blocks.len(), 1);
+        assert_eq!(page.blocks[0].header.block_id, 7);
+        // The helper appends the sequencer's public clock invocation. Both
+        // transactions remain visible so callers can filter by program ID.
+        assert_eq!(page.blocks[0].public_transactions.len(), 2);
+        assert_eq!(page.blocks[0].public_transactions[0].program_id, [7; 8]);
+        assert_eq!(
+            page.blocks[0].public_transactions[0].instruction_data,
+            vec![0x1122_3344, 0x5566_7788]
+        );
+        assert_eq!(page.next_block_id, Some(8));
+    }
+
+    #[test]
+    fn rejects_a_history_page_when_its_snapshot_changes() {
+        let block = produce_dummy_block(7, Some(HashType([1; 32])), vec![]);
+        let tip = local_block_header_receipt(&block, 7).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 1,
+            expected_tip: Some(sequencer_service_protocol::LocalBlockHeaderReceiptV1 {
+                block_id: 7,
+                block_hash: HashType([9; 32]),
+                previous_block_hash: HashType([1; 32]),
+            }),
+        };
+
+        assert!(build_local_public_block_history_page(&request, tip, None, &[block]).is_err());
+    }
+
+    #[test]
+    fn rejects_a_history_page_that_exceeds_its_account_bound() {
+        let transaction = public_transaction(
+            vec![AccountId::new([3; 32]); MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS + 1],
+            vec![],
+        );
+        let block = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(transaction)],
+        );
+        let tip = local_block_header_receipt(&block, 7).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+
+        assert!(build_local_public_block_history_page(&request, tip, None, &[block]).is_err());
+    }
+
+    #[test]
+    fn accepts_the_stored_genesis_block_as_a_history_start() {
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 0,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+        assert_eq!(
+            normalize_local_public_block_history_start(request.start_block_id, 0),
+            0
+        );
+        assert_eq!(
+            normalize_local_public_block_history_start(request.start_block_id, 1),
+            1
+        );
+        assert!(validate_local_public_block_history_request(&request, 0).is_ok());
+
+        let genesis = produce_dummy_block(0, Some(HashType([0; 32])), vec![]);
+        let tip = local_block_header_receipt(&genesis, 0).expect("valid genesis header");
+        let page = build_local_public_block_history_page(&request, tip, None, &[genesis])
+            .expect("genesis must be replayable");
+
+        assert_eq!(page.blocks.len(), 1);
+        assert_eq!(page.blocks[0].header.block_id, 0);
+        assert_eq!(page.next_block_id, None);
+    }
+
+    #[test]
+    fn rejects_invalid_local_public_history_request_bounds() {
+        let valid_request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 0,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+        let normalized_request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: normalize_local_public_block_history_start(
+                valid_request.start_block_id,
+                1,
+            ),
+            ..valid_request.clone()
+        };
+        assert!(validate_local_public_block_history_request(&normalized_request, 1).is_ok());
+
+        let empty_page = LocalPublicBlockHistoryRequestV1 {
+            max_blocks: 0,
+            ..valid_request.clone()
+        };
+        assert!(validate_local_public_block_history_request(&empty_page, 0).is_err());
+
+        let oversized_page = LocalPublicBlockHistoryRequestV1 {
+            max_blocks: MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS.saturating_add(1),
+            ..valid_request
+        };
+        assert!(validate_local_public_block_history_request(&oversized_page, 0).is_err());
+    }
+
+    #[test]
+    fn rejects_a_history_page_with_a_discontinuous_predecessor() {
+        let predecessor = produce_dummy_block(7, Some(HashType([1; 32])), vec![]);
+        let discontinuous_block = produce_dummy_block(8, Some(HashType([9; 32])), vec![]);
+        let tip = local_block_header_receipt(&discontinuous_block, 8).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 8,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+
+        assert!(
+            build_local_public_block_history_page(
+                &request,
+                tip,
+                Some(predecessor.header.hash),
+                &[discontinuous_block],
+            )
+            .is_err()
         );
     }
 }
