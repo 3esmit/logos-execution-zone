@@ -945,9 +945,7 @@ mod tests {
         let first = produce_dummy_block(
             7,
             Some(HashType([1; 32])),
-            vec![common::transaction::LeeTransaction::Public(
-                transaction.clone(),
-            )],
+            vec![common::transaction::LeeTransaction::Public(transaction)],
         );
         let tip_block = produce_dummy_block(8, Some(first.header.hash), vec![]);
         let tip = local_block_header_receipt(&tip_block, 8).expect("valid tip header");
