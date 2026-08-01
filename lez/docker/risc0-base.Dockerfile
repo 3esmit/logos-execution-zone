@@ -23,15 +23,19 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install r0vm
+# Install pinned RISC Zero components.
 # Use quick install for x86-64 (risczero provides binaries only for this linux platform)
 # Manual build for other platforms (including arm64 Linux)
+# Keep r0vm and cargo-risczero aligned with the workspace risc0-zkvm version.
 RUN ARCH=$(uname -m); \
     if [ "$ARCH" = "x86_64" ]; then \
         echo "Using quick install for $ARCH"; \
         curl -L https://risczero.com/install | bash; \
         export PATH="/root/.cargo/bin:/root/.risc0/bin:${PATH}"; \
-        rzup install; \
+        rzup install rust 1.94.1; \
+        rzup install cpp 2024.1.5; \
+        rzup install r0vm 3.0.5; \
+        rzup install cargo-risczero 3.0.5; \
     else \
         echo "Using manual build for $ARCH"; \
         git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
