@@ -21,6 +21,7 @@ pub struct FfiLocalBlockHeaderReceiptV1 {
     pub block_id: u64,
     pub block_hash: FfiBytes32,
     pub previous_block_hash: FfiBytes32,
+    pub timestamp: u64,
 }
 
 impl From<FfiLocalBlockHeaderReceiptV1> for LocalBlockHeaderReceiptV1 {
@@ -29,6 +30,7 @@ impl From<FfiLocalBlockHeaderReceiptV1> for LocalBlockHeaderReceiptV1 {
             block_id: value.block_id,
             block_hash: HashType(value.block_hash.data),
             previous_block_hash: HashType(value.previous_block_hash.data),
+            timestamp: value.timestamp,
         }
     }
 }
@@ -39,6 +41,7 @@ impl From<LocalBlockHeaderReceiptV1> for FfiLocalBlockHeaderReceiptV1 {
             block_id: value.block_id,
             block_hash: FfiBytes32::from(value.block_hash.0),
             previous_block_hash: FfiBytes32::from(value.previous_block_hash.0),
+            timestamp: value.timestamp,
         }
     }
 }
@@ -151,6 +154,7 @@ mod tests {
             block_id: 9,
             block_hash: HashType([1_u8; 32]),
             previous_block_hash: HashType([2_u8; 32]),
+            timestamp: 900,
         };
 
         let ffi: FfiLocalBlockHeaderReceiptV1 = expected.clone().into();
@@ -158,6 +162,7 @@ mod tests {
         assert_eq!(ffi.block_id, expected.block_id);
         assert_eq!(ffi.block_hash.data, expected.block_hash.0);
         assert_eq!(ffi.previous_block_hash.data, expected.previous_block_hash.0);
+        assert_eq!(ffi.timestamp, expected.timestamp);
         assert_eq!(LocalBlockHeaderReceiptV1::from(ffi), expected);
     }
 }

@@ -31,10 +31,11 @@ use lee_core::{
 };
 use log::info;
 use sequencer_service_protocol::{
-    LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, LocalBlockHeaderReceiptV1,
+    LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
     MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
@@ -527,20 +528,20 @@ impl WalletCore {
 
     /// Read one bounded page of trusted local public history from the configured leader.
     ///
-    /// The request always uses the protocol's maximum bounded page size. `expected_tip` pins
-    /// continuation pages to the first response's snapshot; callers must not treat this local
-    /// sequencer response as public-network finality.
+    /// The request starts at the protocol's maximum bounded page size and retries a configured
+    /// response-limit error with progressively smaller pages. `expected_tip` pins continuation
+    /// pages to the first response's snapshot; callers must not treat this local sequencer
+    /// response as public-network finality.
     pub async fn get_local_public_block_history(
         &self,
         start_block_id: u64,
         expected_tip: Option<LocalBlockHeaderReceiptV1>,
     ) -> Result<LocalPublicBlockHistoryPageV1> {
-        let request = bounded_local_public_block_history_request(start_block_id, expected_tip);
-
         Ok(self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| {
-                client.get_local_public_block_history(request.clone()).await
+                get_local_public_block_history_page(client, start_block_id, expected_tip.clone())
+                    .await
             })
             .await?)
     }
@@ -1054,27 +1055,119 @@ impl WalletCore {
     }
 }
 
+async fn get_local_public_block_history_page(
+    client: &SequencerClient,
+    start_block_id: u64,
+    expected_tip: Option<LocalBlockHeaderReceiptV1>,
+) -> Result<LocalPublicBlockHistoryPageV1, ClientError> {
+    let mut max_blocks = MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS;
+    loop {
+        let request = bounded_local_public_block_history_request(
+            start_block_id,
+            expected_tip.clone(),
+            max_blocks,
+        );
+        match client.get_local_public_block_history(request).await {
+            Ok(page) => return Ok(page),
+            Err(error) if is_local_public_block_history_response_limit_error(&error) => {
+                let Some(smaller_page) = smaller_local_public_block_history_page(max_blocks) else {
+                    return Err(error);
+                };
+                max_blocks = smaller_page;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_local_public_block_history_response_limit_error(error: &ClientError) -> bool {
+    matches!(error, ClientError::Call(error)
+        if error.message() == LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE)
+}
+
+const fn smaller_local_public_block_history_page(max_blocks: u8) -> Option<u8> {
+    if max_blocks > 1 {
+        Some(max_blocks >> 1)
+    } else {
+        None
+    }
+}
+
 const fn bounded_local_public_block_history_request(
     start_block_id: u64,
     expected_tip: Option<LocalBlockHeaderReceiptV1>,
+    max_blocks: u8,
 ) -> LocalPublicBlockHistoryRequestV1 {
     LocalPublicBlockHistoryRequestV1 {
         start_block_id,
-        max_blocks: MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+        max_blocks,
         expected_tip,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::CString, str::FromStr as _};
-
-    use bip39::Mnemonic;
-    use sequencer_service_protocol::{
-        LocalBlockHeaderReceiptV1, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+    use std::{
+        ffi::CString,
+        net::SocketAddr,
+        str::FromStr as _,
+        sync::{Arc, Mutex},
     };
 
-    use super::bounded_local_public_block_history_request;
+    use bip39::Mnemonic;
+    use jsonrpsee::{
+        RpcModule,
+        server::{ServerBuilder, ServerHandle},
+        types::{ErrorObjectOwned, error::INTERNAL_ERROR_CODE},
+    };
+    use sequencer_service_protocol::{
+        LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, LocalBlockHeaderReceiptV1,
+        LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+        MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+    };
+    use sequencer_service_rpc::SequencerClientBuilder;
+
+    use super::{
+        bounded_local_public_block_history_request, get_local_public_block_history_page,
+        smaller_local_public_block_history_page,
+    };
+
+    async fn start_local_history_retry_proxy(
+        requests: Arc<Mutex<Vec<LocalPublicBlockHistoryRequestV1>>>,
+    ) -> (ServerHandle, SocketAddr) {
+        let mut module = RpcModule::new(requests);
+        module
+            .register_async_method(
+                "getLocalPublicBlockHistory",
+                |params, requests, _| async move {
+                    let request: LocalPublicBlockHistoryRequestV1 = params.one()?;
+                    requests.lock().expect("test lock").push(request.clone());
+                    if request.max_blocks == MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS {
+                        return Err(ErrorObjectOwned::owned(
+                            INTERNAL_ERROR_CODE,
+                            LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE,
+                            None::<()>,
+                        ));
+                    }
+
+                    Ok(LocalPublicBlockHistoryPageV1 {
+                        snapshot_tip: request
+                            .expected_tip
+                            .expect("test request pins a local history snapshot"),
+                        blocks: vec![],
+                        next_block_id: None,
+                    })
+                },
+            )
+            .expect("register local-history proxy method");
+
+        let server = ServerBuilder::default()
+            .build("127.0.0.1:0")
+            .await
+            .expect("start local-history proxy");
+        let address = server.local_addr().expect("read proxy address");
+        (server.start(module), address)
+    }
 
     #[test]
     fn mnemonic_roundtrip() {
@@ -1093,17 +1186,75 @@ mod tests {
     }
 
     #[test]
-    fn local_public_history_request_is_fixed_to_the_protocol_page_bound() {
+    fn local_public_history_request_preserves_the_requested_bounded_page_size() {
         let expected_tip = LocalBlockHeaderReceiptV1 {
             block_id: 7,
             block_hash: common::HashType([1_u8; 32]),
             previous_block_hash: common::HashType([2_u8; 32]),
+            timestamp: 700,
         };
 
-        let request = bounded_local_public_block_history_request(8, Some(expected_tip.clone()));
+        let request = bounded_local_public_block_history_request(
+            8,
+            Some(expected_tip.clone()),
+            MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+        );
 
         assert_eq!(request.start_block_id, 8);
         assert_eq!(request.max_blocks, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS);
         assert_eq!(request.expected_tip, Some(expected_tip));
+    }
+
+    #[tokio::test]
+    async fn local_public_history_retries_a_real_response_limit_error() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (server, address) = start_local_history_retry_proxy(Arc::clone(&requests)).await;
+        let client = SequencerClientBuilder::default()
+            .build(format!("http://{address}"))
+            .expect("build local-history proxy client");
+        let expected_tip = LocalBlockHeaderReceiptV1 {
+            block_id: 42,
+            block_hash: common::HashType([1_u8; 32]),
+            previous_block_hash: common::HashType([2_u8; 32]),
+            timestamp: 4_200,
+        };
+
+        let page = get_local_public_block_history_page(&client, 7, Some(expected_tip.clone()))
+            .await
+            .expect("a smaller RPC page should recover from a legacy response bound");
+
+        assert_eq!(page.snapshot_tip, expected_tip);
+        {
+            let requests = requests.lock().expect("test lock");
+            assert_eq!(
+                requests
+                    .iter()
+                    .map(|request| request.max_blocks)
+                    .collect::<Vec<_>>(),
+                vec![
+                    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+                    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS >> 1
+                ]
+            );
+            assert!(requests.iter().all(|request| {
+                request.start_block_id == 7 && request.expected_tip == Some(expected_tip.clone())
+            }));
+        }
+
+        server.stop().expect("stop local-history proxy");
+        server.stopped().await;
+    }
+
+    #[test]
+    fn local_public_history_page_reduction_is_bounded_at_one_block() {
+        let mut page_size = MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS;
+        let mut attempts = vec![page_size];
+        while let Some(smaller_page) = smaller_local_public_block_history_page(page_size) {
+            attempts.push(smaller_page);
+            page_size = smaller_page;
+        }
+
+        assert_eq!(attempts, vec![32, 16, 8, 4, 2, 1]);
+        assert_eq!(smaller_local_public_block_history_page(1), None);
     }
 }

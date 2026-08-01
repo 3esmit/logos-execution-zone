@@ -10996,6 +10996,7 @@ dependencies = [
  "humantime-serde",
  "indicatif",
  "itertools 0.14.0",
+ "jsonrpsee",
  "key_protocol",
  "keycard_wallet",
  "lee",

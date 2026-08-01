@@ -431,6 +431,7 @@ fn wallet_ffi_reads_bounded_local_public_history_from_configured_leader() -> Res
 
     let page: serde_json::Value = serde_json::from_str(&history_json)?;
     assert!(page["snapshot_tip"]["block_id"].is_u64());
+    assert!(page["snapshot_tip"]["timestamp"].is_u64());
     assert!(
         page["blocks"]
             .as_array()

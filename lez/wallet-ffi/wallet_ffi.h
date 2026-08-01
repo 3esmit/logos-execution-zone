@@ -327,6 +327,7 @@ typedef struct FfiLocalBlockHeaderReceiptV1 {
   uint64_t block_id;
   struct FfiBytes32 block_hash;
   struct FfiBytes32 previous_block_hash;
+  uint64_t timestamp;
 } FfiLocalBlockHeaderReceiptV1;
 
 typedef struct FfiBytes32 FfiPdaSeed;

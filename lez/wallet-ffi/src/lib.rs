@@ -36,12 +36,11 @@ use ::wallet::ExecutionFailureKind;
 use error::WalletFfiError;
 // Re-export public types for cbindgen
 pub use error::WalletFfiError as FfiError;
+pub use local_history::FfiLocalBlockHeaderReceiptV1;
 use tokio::runtime::Handle;
 pub use types::*;
 
 use crate::error::print_error;
-
-pub use local_history::FfiLocalBlockHeaderReceiptV1;
 
 pub mod account;
 pub mod bridge;
