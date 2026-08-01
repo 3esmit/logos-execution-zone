@@ -649,6 +649,17 @@ mod tests {
             mempool_handle,
             max_block_size,
         );
+        let zero_confirmation_receipt = service
+            .get_local_public_transaction_receipt(transaction_hash, 0)
+            .await
+            .expect("zero-depth receipt request succeeds")
+            .expect("inclusion receipt is available");
+        assert_eq!(
+            zero_confirmation_receipt.inclusion.block_id,
+            inclusion_block_id
+        );
+        assert!(zero_confirmation_receipt.confirmation_chain.is_empty());
+
         let receipt = service
             .get_local_public_transaction_receipt(transaction_hash, 2)
             .await
