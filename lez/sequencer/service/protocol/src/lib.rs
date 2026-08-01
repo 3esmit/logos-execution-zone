@@ -2,14 +2,15 @@
 
 use std::{fmt::Display, str::FromStr};
 
-pub use common::{HashType, block::Block, transaction::LeeTransaction};
+pub use common::{
+    HashType,
+    block::{Block, Timestamp},
+    transaction::LeeTransaction,
+};
 pub use lee::{Account, AccountId, ProgramId};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
-
-/// Maximum number of account identifiers returned by a local public transaction receipt.
-pub const MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS: usize = 128;
 
 /// Maximum number of successor blocks returned to confirm a local public transaction receipt.
 pub const MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS: u8 = 32;
@@ -17,24 +18,16 @@ pub const MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS: u8 = 32;
 /// Maximum number of blocks returned by one local public history request.
 pub const MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS: u8 = 32;
 
-/// Maximum number of public transactions returned by one local public history page.
-pub const MAX_LOCAL_PUBLIC_BLOCK_HISTORY_TRANSACTIONS: usize = 256;
-
-/// Maximum number of public account identifiers returned by one local public history page.
-pub const MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS: usize = 1024;
-
-/// Maximum number of public instruction words returned by one local public history page.
-pub const MAX_LOCAL_PUBLIC_BLOCK_HISTORY_INSTRUCTION_WORDS: usize = 0x4000;
-
 /// A local sequencer chain header, represented without its transaction payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBlockHeaderReceiptV1 {
     pub block_id: BlockId,
     pub block_hash: HashType,
     pub previous_block_hash: HashType,
+    pub timestamp: Timestamp,
 }
 
-/// A bounded receipt issued by a local sequencer for a public transaction.
+/// A receipt issued by a local sequencer for an accepted public transaction.
 ///
 /// `instruction_data_sha256` is SHA-256 over the little-endian bytes of each instruction word,
 /// in order. `confirmation_chain` contains exactly the requested number of successor headers;
@@ -68,13 +61,14 @@ pub struct LocalPublicBlockHistoryRequestV1 {
     pub expected_tip: Option<LocalBlockHeaderReceiptV1>,
 }
 
-/// One public transaction represented structurally for trusted local replay.
+/// One complete public transaction for trusted local replay.
+///
+/// `transaction` is always [`LeeTransaction::Public`]. It preserves the message nonces and
+/// witness data required to reconstruct the exact transaction that the sequencer accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPublicTransactionV1 {
     pub transaction_hash: HashType,
-    pub program_id: ProgramId,
-    pub account_ids: Vec<AccountId>,
-    pub instruction_data: Vec<u32>,
+    pub transaction: LeeTransaction,
 }
 
 /// A local block header and the public transactions selected from its body.
@@ -88,14 +82,16 @@ pub struct LocalPublicBlockV1 {
     pub public_transactions: Vec<LocalPublicTransactionV1>,
 }
 
-/// A bounded, snapshot-bound page of local public block history.
+/// A snapshot-bound page of local public block history.
 ///
 /// Callers begin with `expected_tip = null`, then use the returned
 /// `snapshot_tip` with each following request. `next_block_id` is absent when
 /// the page reaches that snapshot's tip.
 ///
-/// This is a trusted response from a local sequencer. It is neither public
-/// network finality nor an independently verifiable transaction proof.
+/// A page is bounded by its requested block count. Every selected block includes each of its
+/// public transactions, so an accepted stored block is never split or made unreplayable by a
+/// separate aggregate transaction, account, or instruction limit. This is trusted local
+/// sequencer data, not public network finality or an independently verifiable transaction proof.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPublicBlockHistoryPageV1 {
     pub snapshot_tip: LocalBlockHeaderReceiptV1,

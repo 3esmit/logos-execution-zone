@@ -160,11 +160,13 @@ mod tests {
                 block_id: 7,
                 block_hash: HashType([5_u8; 32]),
                 previous_block_hash: HashType([6_u8; 32]),
+                timestamp: 700,
             },
             confirmation_chain: vec![LocalBlockHeaderReceiptV1 {
                 block_id: 8,
                 block_hash: HashType([7_u8; 32]),
                 previous_block_hash: HashType([5_u8; 32]),
+                timestamp: 800,
             }],
         };
 
@@ -187,12 +189,15 @@ mod tests {
     }
 
     #[test]
-    fn local_public_block_history_wire_shape_is_structured() -> Result<(), serde_json::Error> {
+    fn local_public_block_history_round_trips_complete_transactions()
+    -> Result<(), serde_json::Error> {
         let tip = LocalBlockHeaderReceiptV1 {
             block_id: 8,
             block_hash: HashType([8_u8; 32]),
             previous_block_hash: HashType([7_u8; 32]),
+            timestamp: 800,
         };
+        let transaction = common::test_utils::produce_dummy_empty_transaction();
         let page = LocalPublicBlockHistoryPageV1 {
             snapshot_tip: tip.clone(),
             blocks: vec![LocalPublicBlockV1 {
@@ -200,12 +205,11 @@ mod tests {
                     block_id: 7,
                     block_hash: HashType([7_u8; 32]),
                     previous_block_hash: HashType([6_u8; 32]),
+                    timestamp: 700,
                 },
                 public_transactions: vec![LocalPublicTransactionV1 {
                     transaction_hash: HashType([1_u8; 32]),
-                    program_id: [2_u32; 8],
-                    account_ids: vec![AccountId::new([3_u8; 32])],
-                    instruction_data: vec![4_u32, 5],
+                    transaction,
                 }],
             }],
             next_block_id: Some(8),
@@ -213,10 +217,8 @@ mod tests {
 
         let wire = serde_json::to_value(&page)?;
         assert_eq!(wire["snapshot_tip"]["block_id"], 8);
-        assert_eq!(
-            wire["blocks"][0]["public_transactions"][0]["instruction_data"],
-            serde_json::json!([4_u32, 5])
-        );
+        assert_eq!(wire["blocks"][0]["header"]["timestamp"], 700);
+        assert!(wire["blocks"][0]["public_transactions"][0]["transaction"].is_string());
         assert_eq!(wire["next_block_id"], 8);
 
         let decoded = serde_json::from_value::<LocalPublicBlockHistoryPageV1>(wire)?;

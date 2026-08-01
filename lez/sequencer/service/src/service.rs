@@ -15,10 +15,8 @@ use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
     LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
     LocalPublicBlockV1, LocalPublicTransactionReceiptV1, LocalPublicTransactionV1,
-    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
-    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_INSTRUCTION_WORDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_TRANSACTIONS,
-    MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS,
-    MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS, MembershipProof, Nonce, ProgramId,
+    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS, MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS,
+    MembershipProof, Nonce, ProgramId,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
@@ -468,6 +466,7 @@ fn local_block_header_receipt(
         block_id: block.header.block_id,
         block_hash: block.header.hash,
         previous_block_hash: block.header.prev_block_hash,
+        timestamp: block.header.timestamp,
     })
 }
 
@@ -535,9 +534,6 @@ fn build_local_public_block_history_page(
 
     let mut expected_block_id = request.start_block_id;
     let mut previous_hash = expected_predecessor_hash;
-    let mut transaction_count = 0_usize;
-    let mut account_count = 0_usize;
-    let mut instruction_word_count = 0_usize;
     let mut response_blocks = Vec::with_capacity(blocks.len());
     for block in blocks {
         let header = local_block_header_receipt(block, expected_block_id)?;
@@ -561,47 +557,9 @@ fn build_local_public_block_history_page(
             let LeeTransaction::Public(public_transaction) = transaction else {
                 continue;
             };
-            let message = public_transaction.message();
-            transaction_count = transaction_count.checked_add(1).ok_or_else(|| {
-                ErrorObjectOwned::owned(
-                    ErrorCode::InternalError.code(),
-                    "local public history transaction count overflow".to_owned(),
-                    None::<()>,
-                )
-            })?;
-            account_count = account_count
-                .checked_add(message.account_ids.len())
-                .ok_or_else(|| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InternalError.code(),
-                        "local public history account count overflow".to_owned(),
-                        None::<()>,
-                    )
-                })?;
-            instruction_word_count = instruction_word_count
-                .checked_add(message.instruction_data.len())
-                .ok_or_else(|| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InternalError.code(),
-                        "local public history instruction word count overflow".to_owned(),
-                        None::<()>,
-                    )
-                })?;
-            if transaction_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_TRANSACTIONS
-                || account_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS
-                || instruction_word_count > MAX_LOCAL_PUBLIC_BLOCK_HISTORY_INSTRUCTION_WORDS
-            {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InternalError.code(),
-                    "local public history response exceeds configured bounds".to_owned(),
-                    None::<()>,
-                ));
-            }
             public_transactions.push(LocalPublicTransactionV1 {
                 transaction_hash: HashType(public_transaction.hash()),
-                program_id: message.program_id,
-                account_ids: message.account_ids.clone(),
-                instruction_data: message.instruction_data.clone(),
+                transaction: LeeTransaction::Public(public_transaction.clone()),
             });
         }
 
@@ -645,16 +603,6 @@ fn build_local_public_transaction_receipt(
     }
 
     let message = public_transaction.message();
-    if message.account_ids.len() > MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS {
-        return Err(ErrorObjectOwned::owned(
-            ErrorCode::InvalidParams.code(),
-            format!(
-                "public transaction has {} accounts; maximum receipt size is {MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS}",
-                message.account_ids.len()
-            ),
-            None::<()>,
-        ));
-    }
 
     Ok(LocalPublicTransactionReceiptV1 {
         transaction_hash,
@@ -687,26 +635,24 @@ fn instruction_data_sha256(instruction_data: &[u32]) -> HashType {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use common::{HashType, test_utils::produce_dummy_block};
-    use jsonrpsee::types::ErrorCode;
+    use common::{HashType, test_utils::produce_dummy_block, transaction::LeeTransaction};
     use lee::{
-        AccountId, PublicTransaction,
+        AccountId, PrivateKey, PublicTransaction,
         public_transaction::{Message, WitnessSet},
     };
     use sequencer_core::{
         SequencerCoreWithMockClients,
         config::{BedrockConfig, SequencerConfig},
     };
-    use sequencer_service_protocol::LocalPublicBlockHistoryRequestV1;
+    use sequencer_service_protocol::{LocalPublicBlockHistoryRequestV1, Nonce};
     use sequencer_service_rpc::RpcServer as _;
     use tokio::sync::Mutex;
 
     use super::{
-        MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
-        MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS, build_local_public_transaction_receipt,
-        build_local_public_block_history_page, instruction_data_sha256,
-        local_confirmation_header_receipt, local_inclusion_header_receipt,
-        local_block_header_receipt, normalize_local_public_block_history_start,
+        MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS, build_local_public_block_history_page,
+        build_local_public_transaction_receipt, instruction_data_sha256,
+        local_block_header_receipt, local_confirmation_header_receipt,
+        local_inclusion_header_receipt, normalize_local_public_block_history_start,
         validate_confirmation_depth, validate_local_public_block_history_request,
     };
 
@@ -716,6 +662,30 @@ mod tests {
     ) -> PublicTransaction {
         let message = Message::new_preserialized([7; 8], account_ids, vec![], instruction_data);
         PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    }
+
+    fn distinct_account_ids(count: u32) -> Vec<AccountId> {
+        (0..count)
+            .map(|value| {
+                let mut bytes = [0; 32];
+                bytes[..4].copy_from_slice(&value.to_le_bytes());
+                AccountId::new(bytes)
+            })
+            .collect()
+    }
+
+    fn signed_public_transaction() -> PublicTransaction {
+        let signing_key = PrivateKey::try_new([1; 32]).expect("valid test signing key");
+        let signer_account_id =
+            AccountId::from(&lee::PublicKey::new_from_private_key(&signing_key));
+        let message = Message::new_preserialized(
+            [7; 8],
+            vec![signer_account_id],
+            vec![Nonce(9)],
+            vec![0x1122_3344, 0x5566_7788],
+        );
+        let witness_set = WitnessSet::for_message(&message, &[&signing_key]);
+        PublicTransaction::new(message, witness_set)
     }
 
     #[test]
@@ -822,29 +792,23 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_account_list_that_exceeds_the_response_bound() {
-        let transaction = public_transaction(
-            vec![AccountId::new([3; 32]); MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS + 1],
-            vec![],
-        );
+    fn builds_a_receipt_for_a_transaction_with_many_distinct_accounts() {
+        let transaction = public_transaction(distinct_account_ids(129), vec![]);
         let transaction_hash = HashType(transaction.hash());
-        let error = build_local_public_transaction_receipt(
+        let receipt = build_local_public_transaction_receipt(
             transaction_hash,
             &transaction,
             super::LocalBlockHeaderReceiptV1 {
                 block_id: 7,
                 block_hash: HashType([2; 32]),
                 previous_block_hash: HashType([1; 32]),
+                timestamp: 700,
             },
             vec![],
         )
-        .expect_err("oversized transaction must not produce a receipt");
+        .expect("a receipt must not impose a stricter account limit than transaction admission");
 
-        assert_eq!(
-            error.code(),
-            ErrorCode::InvalidParams.code(),
-            "response bound is a client input error"
-        );
+        assert_eq!(receipt.account_ids, transaction.message().account_ids);
     }
 
     #[test]
@@ -938,15 +902,14 @@ mod tests {
 
     #[test]
     fn builds_a_snapshot_bound_local_public_history_page() {
-        let transaction = public_transaction(
-            vec![AccountId::new([3; 32]), AccountId::new([4; 32])],
-            vec![0x1122_3344, 0x5566_7788],
-        );
+        let transaction = signed_public_transaction();
+        let transaction_hash = HashType(transaction.hash());
         let first = produce_dummy_block(
             7,
             Some(HashType([1; 32])),
-            vec![common::transaction::LeeTransaction::Public(transaction)],
+            vec![LeeTransaction::Public(transaction.clone())],
         );
+        let first_timestamp = first.header.timestamp;
         let tip_block = produce_dummy_block(8, Some(first.header.hash), vec![]);
         let tip = local_block_header_receipt(&tip_block, 8).expect("valid tip header");
         let request = LocalPublicBlockHistoryRequestV1 {
@@ -966,14 +929,21 @@ mod tests {
         assert_eq!(page.snapshot_tip, tip);
         assert_eq!(page.blocks.len(), 1);
         assert_eq!(page.blocks[0].header.block_id, 7);
+        assert_eq!(page.blocks[0].header.timestamp, first_timestamp);
         // The helper appends the sequencer's public clock invocation. Both
         // transactions remain visible so callers can filter by program ID.
         assert_eq!(page.blocks[0].public_transactions.len(), 2);
-        assert_eq!(page.blocks[0].public_transactions[0].program_id, [7; 8]);
+        let replay_transaction = &page.blocks[0].public_transactions[0];
+        assert_eq!(replay_transaction.transaction_hash, transaction_hash);
         assert_eq!(
-            page.blocks[0].public_transactions[0].instruction_data,
-            vec![0x1122_3344, 0x5566_7788]
+            replay_transaction.transaction,
+            LeeTransaction::Public(transaction.clone())
         );
+        let LeeTransaction::Public(replayed) = &replay_transaction.transaction else {
+            panic!("local public history must only return public transactions");
+        };
+        assert_eq!(replayed.message().nonces, vec![Nonce(9)]);
+        assert_eq!(replayed.witness_set(), transaction.witness_set());
         assert_eq!(page.next_block_id, Some(8));
     }
 
@@ -988,6 +958,7 @@ mod tests {
                 block_id: 7,
                 block_hash: HashType([9; 32]),
                 previous_block_hash: HashType([1; 32]),
+                timestamp: 700,
             }),
         };
 
@@ -995,15 +966,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_history_page_that_exceeds_its_account_bound() {
-        let transaction = public_transaction(
-            vec![AccountId::new([3; 32]); MAX_LOCAL_PUBLIC_BLOCK_HISTORY_ACCOUNT_IDS + 1],
-            vec![],
+    fn local_public_history_includes_every_public_transaction_from_a_stored_block() {
+        const STORED_BLOCK_TRANSACTION_COUNT: usize = 257;
+
+        let transactions = std::iter::repeat_with(|| {
+            LeeTransaction::Public(public_transaction(vec![AccountId::new([3; 32])], vec![]))
+        })
+        .take(STORED_BLOCK_TRANSACTION_COUNT)
+        .collect();
+        let block = produce_dummy_block(7, Some(HashType([1; 32])), transactions);
+        let tip = local_block_header_receipt(&block, 7).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+
+        let page = build_local_public_block_history_page(&request, tip, None, &[block])
+            .expect("a stored block must remain replayable with max_blocks = 1");
+
+        assert_eq!(
+            page.blocks[0].public_transactions.len(),
+            STORED_BLOCK_TRANSACTION_COUNT + 1,
+            "the stored public clock transaction is also included"
         );
+    }
+
+    #[test]
+    fn local_public_history_includes_a_stored_block_above_the_former_account_aggregate_limit() {
+        let transaction = public_transaction(distinct_account_ids(1025), vec![]);
         let block = produce_dummy_block(
             7,
             Some(HashType([1; 32])),
-            vec![common::transaction::LeeTransaction::Public(transaction)],
+            vec![LeeTransaction::Public(transaction.clone())],
         );
         let tip = local_block_header_receipt(&block, 7).expect("valid tip header");
         let request = LocalPublicBlockHistoryRequestV1 {
@@ -1012,7 +1007,37 @@ mod tests {
             expected_tip: None,
         };
 
-        assert!(build_local_public_block_history_page(&request, tip, None, &[block]).is_err());
+        let page = build_local_public_block_history_page(&request, tip, None, &[block])
+            .expect("a stored block must remain replayable with max_blocks = 1");
+
+        assert_eq!(
+            page.blocks[0].public_transactions[0].transaction,
+            LeeTransaction::Public(transaction)
+        );
+    }
+
+    #[test]
+    fn local_public_history_includes_a_stored_block_above_the_former_instruction_aggregate_limit() {
+        let transaction = public_transaction(vec![AccountId::new([3; 32])], vec![0_u32; 0x4001]);
+        let block = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![LeeTransaction::Public(transaction.clone())],
+        );
+        let tip = local_block_header_receipt(&block, 7).expect("valid tip header");
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 1,
+            expected_tip: None,
+        };
+
+        let page = build_local_public_block_history_page(&request, tip, None, &[block])
+            .expect("a stored block must remain replayable with max_blocks = 1");
+
+        assert_eq!(
+            page.blocks[0].public_transactions[0].transaction,
+            LeeTransaction::Public(transaction)
+        );
     }
 
     #[test]
