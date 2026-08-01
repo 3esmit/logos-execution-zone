@@ -41,12 +41,15 @@ pub use types::*;
 
 use crate::error::print_error;
 
+pub use local_history::FfiLocalBlockHeaderReceiptV1;
+
 pub mod account;
 pub mod bridge;
 pub mod error;
 pub mod generic_transaction;
 pub mod keys;
 pub mod label;
+pub mod local_history;
 pub mod pda;
 pub mod pinata;
 pub mod program_deployment;

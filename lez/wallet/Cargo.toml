@@ -14,6 +14,7 @@ common.workspace = true
 authenticated_transfer_core.workspace = true
 key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_service_protocol.workspace = true
 amm_core.workspace = true
 testnet_initial_state.workspace = true
 token_core.workspace = true

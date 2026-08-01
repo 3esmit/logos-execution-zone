@@ -30,6 +30,10 @@ use lee_core::{
     program::InstructionData,
 };
 use log::info;
+use sequencer_service_protocol::{
+    LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -518,6 +522,26 @@ impl WalletCore {
         Ok(self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| client.get_last_block_id().await)
+            .await?)
+    }
+
+    /// Read one bounded page of trusted local public history from the configured leader.
+    ///
+    /// The request always uses the protocol's maximum bounded page size. `expected_tip` pins
+    /// continuation pages to the first response's snapshot; callers must not treat this local
+    /// sequencer response as public-network finality.
+    pub async fn get_local_public_block_history(
+        &self,
+        start_block_id: u64,
+        expected_tip: Option<LocalBlockHeaderReceiptV1>,
+    ) -> Result<LocalPublicBlockHistoryPageV1> {
+        let request = bounded_local_public_block_history_request(start_block_id, expected_tip);
+
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                client.get_local_public_block_history(request.clone()).await
+            })
             .await?)
     }
 
@@ -1030,11 +1054,27 @@ impl WalletCore {
     }
 }
 
+const fn bounded_local_public_block_history_request(
+    start_block_id: u64,
+    expected_tip: Option<LocalBlockHeaderReceiptV1>,
+) -> LocalPublicBlockHistoryRequestV1 {
+    LocalPublicBlockHistoryRequestV1 {
+        start_block_id,
+        max_blocks: MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+        expected_tip,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
+    use sequencer_service_protocol::{
+        LocalBlockHeaderReceiptV1, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+    };
+
+    use super::bounded_local_public_block_history_request;
 
     #[test]
     fn mnemonic_roundtrip() {
@@ -1050,5 +1090,20 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
+    }
+
+    #[test]
+    fn local_public_history_request_is_fixed_to_the_protocol_page_bound() {
+        let expected_tip = LocalBlockHeaderReceiptV1 {
+            block_id: 7,
+            block_hash: common::HashType([1_u8; 32]),
+            previous_block_hash: common::HashType([2_u8; 32]),
+        };
+
+        let request = bounded_local_public_block_history_request(8, Some(expected_tip.clone()));
+
+        assert_eq!(request.start_block_id, 8);
+        assert_eq!(request.max_blocks, MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS);
+        assert_eq!(request.expected_tip, Some(expected_tip));
     }
 }
