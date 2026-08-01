@@ -896,23 +896,20 @@ impl WalletCore {
         let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         let mut checkpoint = SyncPersistenceCheckpoint::default();
-        loop {
+        let sync_result = 'sync: loop {
             let block = match blocks.try_next().await {
                 Ok(Some(block)) => block,
-                Ok(None) => break,
-                Err(error) => {
-                    // Persist the cursor and account updates before propagating the
-                    // stream error so a retry cannot extend the replay tail.
-                    return checkpoint
-                        .finish_sync_attempt(Err(error), || self.store_persistent_data());
-                }
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
             };
 
             for tx in block.body.transactions {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
                     continue;
                 };
-                pp_tx.message.validate_note_lengths()?;
+                if let Err(error) = pp_tx.message.validate_note_lengths() {
+                    break 'sync Err(error.into());
+                }
                 // Eagerly decrypt note updates using expected nullifiers.
                 let handled = self
                     .storage
@@ -926,8 +923,11 @@ impl WalletCore {
                 self.store_persistent_data()?;
             }
             bar.inc(1);
-        }
-        checkpoint.finish_sync_attempt(Ok(()), || self.store_persistent_data())?;
+        };
+        // Preserve the cursor and account updates from accepted blocks before
+        // returning any polling or block-processing error. This keeps retries
+        // and process restarts bounded to the unprocessed tail.
+        checkpoint.finish_sync_attempt(sync_result, || self.store_persistent_data())?;
         bar.finish();
 
         println!(
@@ -1090,8 +1090,8 @@ mod tests {
     use bip39::Mnemonic;
 
     use super::{
-        AccountIdWithPrivacy, Label, SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage,
-        SyncPersistenceCheckpoint,
+        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, Message,
+        SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage, SyncPersistenceCheckpoint,
     };
 
     #[test]
@@ -1122,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_checkpoint_persists_partial_progress_before_poll_error() {
+    fn sync_checkpoint_persists_partial_progress_across_poll_retries() {
         let (mut storage, _) = Storage::new("test_pass").unwrap();
         let temp_dir = tempfile::tempdir().unwrap();
         let storage_path = temp_dir.path().join("storage.json");
@@ -1142,6 +1142,63 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.to_string(), "simulated block polling failure");
+        assert!(!checkpoint.has_unpersisted_blocks());
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(recovered.last_synced_block(), partial_progress);
+
+        let mut retry_checkpoint = SyncPersistenceCheckpoint::default();
+        let retry_progress = partial_progress.saturating_mul(2);
+        for block_id in partial_progress.saturating_add(1)..=retry_progress {
+            storage.set_last_synced_block(block_id);
+            assert!(!retry_checkpoint.record_block());
+        }
+
+        let retry_error = retry_checkpoint
+            .finish_sync_attempt(
+                Err(anyhow::anyhow!("simulated retry polling failure")),
+                || storage.save_to_path(&storage_path),
+            )
+            .unwrap_err();
+
+        assert_eq!(retry_error.to_string(), "simulated retry polling failure");
+        assert!(!retry_checkpoint.has_unpersisted_blocks());
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(recovered.last_synced_block(), retry_progress);
+    }
+
+    #[test]
+    fn sync_checkpoint_persists_partial_progress_before_note_validation_error() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let partial_progress = SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_sub(1);
+
+        for block_id in 1..=partial_progress {
+            storage.set_last_synced_block(block_id);
+            assert!(!checkpoint.record_block());
+        }
+
+        let validation_error = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        }
+        .validate_note_lengths()
+        .unwrap_err();
+        let error = checkpoint
+            .finish_sync_attempt(Err(validation_error.into()), || {
+                storage.save_to_path(&storage_path)
+            })
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Note vectors disagree in length")
+        );
         assert!(!checkpoint.has_unpersisted_blocks());
         let recovered = Storage::from_path(&storage_path).unwrap();
         assert_eq!(recovered.last_synced_block(), partial_progress);
