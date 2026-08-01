@@ -9077,6 +9077,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "sha2",
  "tokio",
  "tokio-util",
 ]
@@ -9089,6 +9090,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 

@@ -13,8 +13,11 @@ use sequencer_core::{
 };
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    MembershipProof, Nonce, ProgramId,
+    LocalBlockHeaderReceiptV1, LocalPublicTransactionReceiptV1,
+    MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS,
+    MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS, MembershipProof, Nonce, ProgramId,
 };
+use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
@@ -153,6 +156,63 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
             .map(|(transaction, _block_id)| transaction))
     }
 
+    async fn get_local_public_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+        confirmation_depth: u8,
+    ) -> Result<Option<LocalPublicTransactionReceiptV1>, ErrorObjectOwned> {
+        validate_confirmation_depth(confirmation_depth)?;
+
+        let sequencer = self.sequencer.lock().await;
+        let Some((transaction, inclusion_block_id)) =
+            sequencer.block_store().get_transaction_by_hash(tx_hash)
+        else {
+            return Ok(None);
+        };
+        let LeeTransaction::Public(public_transaction) = transaction else {
+            return Ok(None);
+        };
+        let confirmation_tip_id = inclusion_block_id
+            .checked_add(u64::from(confirmation_depth))
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    "confirmation block height overflow".to_owned(),
+                    None::<()>,
+                )
+            })?;
+        if sequencer.chain_height() < confirmation_tip_id {
+            return Ok(None);
+        }
+
+        let inclusion_block = block_at_id(&sequencer, inclusion_block_id)?;
+        let mut confirmation_blocks = Vec::with_capacity(usize::from(confirmation_depth));
+        if confirmation_depth > 0 {
+            const FIRST_SUCCESSOR_OFFSET: u64 = 1;
+            let first_confirmation_id = inclusion_block_id
+                .checked_add(FIRST_SUCCESSOR_OFFSET)
+                .ok_or_else(|| {
+                    ErrorObjectOwned::owned(
+                        ErrorCode::InternalError.code(),
+                        "confirmation block height overflow".to_owned(),
+                        None::<()>,
+                    )
+                })?;
+            for block_id in first_confirmation_id..=confirmation_tip_id {
+                confirmation_blocks.push(block_at_id(&sequencer, block_id)?);
+            }
+        }
+
+        build_local_public_transaction_receipt(
+            tx_hash,
+            &public_transaction,
+            inclusion_block_id,
+            &inclusion_block,
+            &confirmation_blocks,
+        )
+        .map(Some)
+    }
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
@@ -213,4 +273,280 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
 
 fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+fn validate_confirmation_depth(confirmation_depth: u8) -> Result<(), ErrorObjectOwned> {
+    if confirmation_depth > MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            format!(
+                "confirmation depth exceeds maximum of {MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS}"
+            ),
+            None::<()>,
+        ));
+    }
+    Ok(())
+}
+
+fn block_at_id<BC: BlockPublisherTrait>(
+    sequencer: &SequencerCore<BC>,
+    block_id: BlockId,
+) -> Result<Block, ErrorObjectOwned> {
+    sequencer
+        .block_store()
+        .get_block_at_id(block_id)
+        .map_err(|err| internal_error(&err))?
+        .ok_or_else(|| {
+            ErrorObjectOwned::owned(
+                NOT_FOUND_ERROR_CODE,
+                format!("Block with id {block_id} not found"),
+                None::<()>,
+            )
+        })
+}
+
+fn local_block_header_receipt(
+    block: &Block,
+    expected_block_id: BlockId,
+) -> Result<LocalBlockHeaderReceiptV1, ErrorObjectOwned> {
+    if block.header.block_id != expected_block_id {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer block identifier does not match its store location".to_owned(),
+            None::<()>,
+        ));
+    }
+    if block.recompute_hash() != block.header.hash {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer block hash does not match its contents".to_owned(),
+            None::<()>,
+        ));
+    }
+    Ok(LocalBlockHeaderReceiptV1 {
+        block_id: block.header.block_id,
+        block_hash: block.header.hash,
+        previous_block_hash: block.header.prev_block_hash,
+    })
+}
+
+fn build_local_public_transaction_receipt(
+    transaction_hash: HashType,
+    public_transaction: &lee::PublicTransaction,
+    inclusion_block_id: BlockId,
+    inclusion_block: &Block,
+    confirmation_blocks: &[Block],
+) -> Result<LocalPublicTransactionReceiptV1, ErrorObjectOwned> {
+    if HashType(public_transaction.hash()) != transaction_hash {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer transaction lookup returned a mismatched transaction".to_owned(),
+            None::<()>,
+        ));
+    }
+
+    let message = public_transaction.message();
+    if message.account_ids.len() > MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            format!(
+                "public transaction has {} accounts; maximum receipt size is {MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS}",
+                message.account_ids.len()
+            ),
+            None::<()>,
+        ));
+    }
+
+    let inclusion = local_block_header_receipt(inclusion_block, inclusion_block_id)?;
+    if !inclusion_block
+        .body
+        .transactions
+        .iter()
+        .any(|transaction| transaction.hash() == transaction_hash)
+    {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer transaction is absent from its indexed inclusion block".to_owned(),
+            None::<()>,
+        ));
+    }
+
+    let mut confirmation_chain = Vec::with_capacity(confirmation_blocks.len());
+    let mut previous_hash = inclusion.block_hash;
+    for (offset, block) in confirmation_blocks.iter().enumerate() {
+        let offset = u64::try_from(offset).map_err(|_conversion_error| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "confirmation block offset does not fit in u64".to_owned(),
+                None::<()>,
+            )
+        })?;
+        let expected_block_id = inclusion_block_id
+            .checked_add(offset)
+            .and_then(|block_id| block_id.checked_add(1))
+            .ok_or_else(|| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    "confirmation block height overflow".to_owned(),
+                    None::<()>,
+                )
+            })?;
+        let header = local_block_header_receipt(block, expected_block_id)?;
+        if header.previous_block_hash != previous_hash {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "local sequencer confirmation chain is discontinuous".to_owned(),
+                None::<()>,
+            ));
+        }
+        previous_hash = header.block_hash;
+        confirmation_chain.push(header);
+    }
+
+    Ok(LocalPublicTransactionReceiptV1 {
+        transaction_hash,
+        program_id: message.program_id,
+        account_ids: message.account_ids.clone(),
+        instruction_word_count: u32::try_from(message.instruction_data.len()).map_err(
+            |_conversion_error| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    "instruction word count exceeds u32".to_owned(),
+                    None::<()>,
+                )
+            },
+        )?,
+        instruction_data_sha256: instruction_data_sha256(&message.instruction_data),
+        inclusion,
+        confirmation_chain,
+    })
+}
+
+fn instruction_data_sha256(instruction_data: &[u32]) -> HashType {
+    let mut hasher = Sha256::new();
+    for word in instruction_data {
+        hasher.update(word.to_le_bytes());
+    }
+    HashType(hasher.finalize().into())
+}
+
+#[cfg(test)]
+mod tests {
+    use common::{HashType, test_utils::produce_dummy_block};
+    use lee::{
+        AccountId, PublicTransaction,
+        public_transaction::{Message, WitnessSet},
+    };
+
+    use super::{
+        MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS, build_local_public_transaction_receipt,
+        instruction_data_sha256, validate_confirmation_depth,
+    };
+
+    fn public_transaction(
+        account_ids: Vec<AccountId>,
+        instruction_data: Vec<u32>,
+    ) -> PublicTransaction {
+        let message = Message::new_preserialized([7; 8], account_ids, vec![], instruction_data);
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    }
+
+    #[test]
+    fn builds_a_bounded_local_transaction_receipt() {
+        let transaction = public_transaction(
+            vec![AccountId::new([3; 32]), AccountId::new([4; 32])],
+            vec![0x1122_3344, 0x5566_7788],
+        );
+        let transaction_hash = HashType(transaction.hash());
+        let inclusion = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(
+                transaction.clone(),
+            )],
+        );
+        let confirmation = produce_dummy_block(8, Some(inclusion.header.hash), vec![]);
+
+        let receipt = build_local_public_transaction_receipt(
+            transaction_hash,
+            &transaction,
+            7,
+            &inclusion,
+            &[confirmation],
+        )
+        .expect("valid local chain must produce a receipt");
+
+        assert_eq!(receipt.transaction_hash, transaction_hash);
+        assert_eq!(receipt.program_id, [7; 8]);
+        assert_eq!(receipt.instruction_word_count, 2);
+        assert_eq!(
+            receipt.instruction_data_sha256,
+            instruction_data_sha256(&[0x1122_3344, 0x5566_7788])
+        );
+        assert_eq!(receipt.inclusion.block_id, 7);
+        assert_eq!(receipt.confirmation_chain.len(), 1);
+        assert_eq!(receipt.confirmation_chain[0].block_id, 8);
+        assert_eq!(
+            receipt.confirmation_chain[0].previous_block_hash,
+            receipt.inclusion.block_hash
+        );
+    }
+
+    #[test]
+    fn rejects_a_discontinuous_confirmation_chain() {
+        let transaction = public_transaction(vec![], vec![]);
+        let transaction_hash = HashType(transaction.hash());
+        let inclusion = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(
+                transaction.clone(),
+            )],
+        );
+        let discontinuous_confirmation = produce_dummy_block(8, Some(HashType([9; 32])), vec![]);
+
+        assert!(
+            build_local_public_transaction_receipt(
+                transaction_hash,
+                &transaction,
+                7,
+                &inclusion,
+                &[discontinuous_confirmation],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_an_account_list_that_exceeds_the_response_bound() {
+        let transaction = public_transaction(
+            vec![AccountId::new([3; 32]); MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS + 1],
+            vec![],
+        );
+        let transaction_hash = HashType(transaction.hash());
+        let inclusion = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(
+                transaction.clone(),
+            )],
+        );
+
+        assert!(
+            build_local_public_transaction_receipt(
+                transaction_hash,
+                &transaction,
+                7,
+                &inclusion,
+                &[],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_confirmation_depth_above_the_response_bound() {
+        assert!(validate_confirmation_depth(33).is_err());
+        assert!(validate_confirmation_depth(32).is_ok());
+    }
 }
