@@ -32,3 +32,7 @@ sha2.workspace = true
 default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
+
+[dev-dependencies]
+sequencer_core = { workspace = true, features = ["mock"] }
+tempfile.workspace = true

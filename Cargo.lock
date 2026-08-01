@@ -9078,6 +9078,7 @@ dependencies = [
  "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
 ]

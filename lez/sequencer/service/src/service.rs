@@ -40,6 +40,11 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
             max_block_size,
         }
     }
+
+    async fn load_block_at_id(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        block_at_id(&sequencer, block_id)
+    }
 }
 
 #[async_trait]
@@ -163,7 +168,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     ) -> Result<Option<LocalPublicTransactionReceiptV1>, ErrorObjectOwned> {
         validate_confirmation_depth(confirmation_depth)?;
 
-        let (public_transaction, inclusion_block_id, inclusion_block, confirmation_blocks) = {
+        let (public_transaction, inclusion_block_id) = {
             let sequencer = self.sequencer.lock().await;
             let Some((transaction, inclusion_block_id)) =
                 sequencer.block_store().get_transaction_by_hash(tx_hash)
@@ -175,49 +180,44 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
             };
             let confirmation_tip_id = inclusion_block_id
                 .checked_add(u64::from(confirmation_depth))
-                .ok_or_else(|| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InternalError.code(),
-                        "confirmation block height overflow".to_owned(),
-                        None::<()>,
-                    )
-                })?;
+                .ok_or_else(confirmation_height_overflow)?;
             if sequencer.chain_height() < confirmation_tip_id {
                 return Ok(None);
             }
 
-            let inclusion_block = block_at_id(&sequencer, inclusion_block_id)?;
-            let mut confirmation_blocks = Vec::with_capacity(usize::from(confirmation_depth));
-            if confirmation_depth > 0 {
-                const FIRST_SUCCESSOR_OFFSET: u64 = 1;
-                let first_confirmation_id = inclusion_block_id
-                    .checked_add(FIRST_SUCCESSOR_OFFSET)
-                    .ok_or_else(|| {
-                        ErrorObjectOwned::owned(
-                            ErrorCode::InternalError.code(),
-                            "confirmation block height overflow".to_owned(),
-                            None::<()>,
-                        )
-                    })?;
-                for block_id in first_confirmation_id..=confirmation_tip_id {
-                    confirmation_blocks.push(block_at_id(&sequencer, block_id)?);
-                }
-            }
-
-            (
-                public_transaction,
-                inclusion_block_id,
-                inclusion_block,
-                confirmation_blocks,
-            )
+            (public_transaction, inclusion_block_id)
         };
+
+        // Fetch each body under a short lock, then validate and discard it before loading the
+        // next one. The response retains only bounded headers.
+        let inclusion = {
+            let inclusion_block = self.load_block_at_id(inclusion_block_id).await?;
+            local_inclusion_header_receipt(&inclusion_block, inclusion_block_id, tx_hash)?
+        };
+
+        let mut confirmation_chain = Vec::with_capacity(usize::from(confirmation_depth));
+        let mut previous_block_hash = inclusion.block_hash;
+        for successor_offset in 1..=u64::from(confirmation_depth) {
+            let block_id = inclusion_block_id
+                .checked_add(successor_offset)
+                .ok_or_else(confirmation_height_overflow)?;
+            let header = {
+                let confirmation_block = self.load_block_at_id(block_id).await?;
+                local_confirmation_header_receipt(
+                    &confirmation_block,
+                    block_id,
+                    previous_block_hash,
+                )?
+            };
+            previous_block_hash = header.block_hash;
+            confirmation_chain.push(header);
+        }
 
         build_local_public_transaction_receipt(
             tx_hash,
             &public_transaction,
-            inclusion_block_id,
-            &inclusion_block,
-            &confirmation_blocks,
+            inclusion,
+            confirmation_chain,
         )
         .map(Some)
     }
@@ -314,6 +314,14 @@ fn block_at_id<BC: BlockPublisherTrait>(
         })
 }
 
+fn confirmation_height_overflow() -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        ErrorCode::InternalError.code(),
+        "confirmation block height overflow".to_owned(),
+        None::<()>,
+    )
+}
+
 fn local_block_header_receipt(
     block: &Block,
     expected_block_id: BlockId,
@@ -339,12 +347,48 @@ fn local_block_header_receipt(
     })
 }
 
+fn local_inclusion_header_receipt(
+    block: &Block,
+    expected_block_id: BlockId,
+    transaction_hash: HashType,
+) -> Result<LocalBlockHeaderReceiptV1, ErrorObjectOwned> {
+    let header = local_block_header_receipt(block, expected_block_id)?;
+    if !block
+        .body
+        .transactions
+        .iter()
+        .any(|transaction| transaction.hash() == transaction_hash)
+    {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer transaction is absent from its indexed inclusion block".to_owned(),
+            None::<()>,
+        ));
+    }
+    Ok(header)
+}
+
+fn local_confirmation_header_receipt(
+    block: &Block,
+    expected_block_id: BlockId,
+    expected_previous_block_hash: HashType,
+) -> Result<LocalBlockHeaderReceiptV1, ErrorObjectOwned> {
+    let header = local_block_header_receipt(block, expected_block_id)?;
+    if header.previous_block_hash != expected_previous_block_hash {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InternalError.code(),
+            "local sequencer confirmation chain is discontinuous".to_owned(),
+            None::<()>,
+        ));
+    }
+    Ok(header)
+}
+
 fn build_local_public_transaction_receipt(
     transaction_hash: HashType,
     public_transaction: &lee::PublicTransaction,
-    inclusion_block_id: BlockId,
-    inclusion_block: &Block,
-    confirmation_blocks: &[Block],
+    inclusion: LocalBlockHeaderReceiptV1,
+    confirmation_chain: Vec<LocalBlockHeaderReceiptV1>,
 ) -> Result<LocalPublicTransactionReceiptV1, ErrorObjectOwned> {
     if HashType(public_transaction.hash()) != transaction_hash {
         return Err(ErrorObjectOwned::owned(
@@ -364,52 +408,6 @@ fn build_local_public_transaction_receipt(
             ),
             None::<()>,
         ));
-    }
-
-    let inclusion = local_block_header_receipt(inclusion_block, inclusion_block_id)?;
-    if !inclusion_block
-        .body
-        .transactions
-        .iter()
-        .any(|transaction| transaction.hash() == transaction_hash)
-    {
-        return Err(ErrorObjectOwned::owned(
-            ErrorCode::InternalError.code(),
-            "local sequencer transaction is absent from its indexed inclusion block".to_owned(),
-            None::<()>,
-        ));
-    }
-
-    let mut confirmation_chain = Vec::with_capacity(confirmation_blocks.len());
-    let mut previous_hash = inclusion.block_hash;
-    for (offset, block) in confirmation_blocks.iter().enumerate() {
-        let offset = u64::try_from(offset).map_err(|_conversion_error| {
-            ErrorObjectOwned::owned(
-                ErrorCode::InternalError.code(),
-                "confirmation block offset does not fit in u64".to_owned(),
-                None::<()>,
-            )
-        })?;
-        let expected_block_id = inclusion_block_id
-            .checked_add(offset)
-            .and_then(|block_id| block_id.checked_add(1))
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(
-                    ErrorCode::InternalError.code(),
-                    "confirmation block height overflow".to_owned(),
-                    None::<()>,
-                )
-            })?;
-        let header = local_block_header_receipt(block, expected_block_id)?;
-        if header.previous_block_hash != previous_hash {
-            return Err(ErrorObjectOwned::owned(
-                ErrorCode::InternalError.code(),
-                "local sequencer confirmation chain is discontinuous".to_owned(),
-                None::<()>,
-            ));
-        }
-        previous_hash = header.block_hash;
-        confirmation_chain.push(header);
     }
 
     Ok(LocalPublicTransactionReceiptV1 {
@@ -441,16 +439,25 @@ fn instruction_data_sha256(instruction_data: &[u32]) -> HashType {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
     use common::{HashType, test_utils::produce_dummy_block};
     use jsonrpsee::types::ErrorCode;
     use lee::{
         AccountId, PublicTransaction,
         public_transaction::{Message, WitnessSet},
     };
+    use sequencer_core::{
+        SequencerCoreWithMockClients,
+        config::{BedrockConfig, SequencerConfig},
+    };
+    use sequencer_service_rpc::RpcServer as _;
+    use tokio::sync::Mutex;
 
     use super::{
         MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS, build_local_public_transaction_receipt,
-        instruction_data_sha256, validate_confirmation_depth,
+        instruction_data_sha256, local_confirmation_header_receipt, local_inclusion_header_receipt,
+        validate_confirmation_depth,
     };
 
     fn public_transaction(
@@ -476,13 +483,17 @@ mod tests {
             )],
         );
         let confirmation = produce_dummy_block(8, Some(inclusion.header.hash), vec![]);
+        let inclusion_header = local_inclusion_header_receipt(&inclusion, 7, transaction_hash)
+            .expect("inclusion block must contain the indexed transaction");
+        let confirmation_header =
+            local_confirmation_header_receipt(&confirmation, 8, inclusion_header.block_hash)
+                .expect("successor must link to the inclusion block");
 
         let receipt = build_local_public_transaction_receipt(
             transaction_hash,
             &transaction,
-            7,
-            &inclusion,
-            &[confirmation],
+            inclusion_header,
+            vec![confirmation_header],
         )
         .expect("valid local chain must produce a receipt");
 
@@ -509,22 +520,55 @@ mod tests {
         let inclusion = produce_dummy_block(
             7,
             Some(HashType([1; 32])),
-            vec![common::transaction::LeeTransaction::Public(
-                transaction.clone(),
-            )],
+            vec![common::transaction::LeeTransaction::Public(transaction)],
         );
         let discontinuous_confirmation = produce_dummy_block(8, Some(HashType([9; 32])), vec![]);
+        let inclusion_header = local_inclusion_header_receipt(&inclusion, 7, transaction_hash)
+            .expect("inclusion block must contain the indexed transaction");
 
         assert!(
-            build_local_public_transaction_receipt(
-                transaction_hash,
-                &transaction,
-                7,
-                &inclusion,
-                &[discontinuous_confirmation],
+            local_confirmation_header_receipt(
+                &discontinuous_confirmation,
+                8,
+                inclusion_header.block_hash,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_consecutive_successor_headers() {
+        let transaction = public_transaction(vec![], vec![]);
+        let transaction_hash = HashType(transaction.hash());
+        let inclusion = produce_dummy_block(
+            7,
+            Some(HashType([1; 32])),
+            vec![common::transaction::LeeTransaction::Public(transaction)],
+        );
+        let first_successor = produce_dummy_block(8, Some(inclusion.header.hash), vec![]);
+        let second_successor = produce_dummy_block(9, Some(first_successor.header.hash), vec![]);
+
+        let inclusion_header = local_inclusion_header_receipt(&inclusion, 7, transaction_hash)
+            .expect("inclusion block must contain the indexed transaction");
+        let first_header =
+            local_confirmation_header_receipt(&first_successor, 8, inclusion_header.block_hash)
+                .expect("first successor must link to inclusion");
+        let second_header =
+            local_confirmation_header_receipt(&second_successor, 9, first_header.block_hash)
+                .expect("second successor must link to first successor");
+
+        assert_eq!(first_header.block_id, 8);
+        assert_eq!(second_header.block_id, 9);
+        assert_eq!(second_header.previous_block_hash, first_header.block_hash);
+    }
+
+    #[test]
+    fn rejects_an_inclusion_block_without_the_indexed_transaction() {
+        let transaction = public_transaction(vec![], vec![]);
+        let transaction_hash = HashType(transaction.hash());
+        let unrelated_block = produce_dummy_block(7, Some(HashType([1; 32])), vec![]);
+
+        assert!(local_inclusion_header_receipt(&unrelated_block, 7, transaction_hash).is_err());
     }
 
     #[test]
@@ -534,20 +578,15 @@ mod tests {
             vec![],
         );
         let transaction_hash = HashType(transaction.hash());
-        let inclusion = produce_dummy_block(
-            7,
-            Some(HashType([1; 32])),
-            vec![common::transaction::LeeTransaction::Public(
-                transaction.clone(),
-            )],
-        );
-
         let error = build_local_public_transaction_receipt(
             transaction_hash,
             &transaction,
-            7,
-            &inclusion,
-            &[],
+            super::LocalBlockHeaderReceiptV1 {
+                block_id: 7,
+                block_hash: HashType([2; 32]),
+                previous_block_hash: HashType([1; 32]),
+            },
+            vec![],
         )
         .expect_err("oversized transaction must not produce a receipt");
 
@@ -562,5 +601,77 @@ mod tests {
     fn rejects_confirmation_depth_above_the_response_bound() {
         assert!(validate_confirmation_depth(33).is_err());
         assert!(validate_confirmation_depth(32).is_ok());
+    }
+
+    #[tokio::test]
+    async fn local_receipt_reads_a_bounded_successor_chain_from_the_store() {
+        let home = tempfile::tempdir().expect("temporary sequencer home");
+        let config = SequencerConfig {
+            home: home.path().to_path_buf(),
+            max_num_tx_in_block: 10,
+            max_block_size: bytesize::ByteSize::mib(1),
+            mempool_max_size: 100,
+            block_create_timeout: Duration::from_secs(1),
+            signing_key: *common::test_utils::sequencer_sign_key_for_testing().value(),
+            bedrock_config: BedrockConfig {
+                channel_id: [0; 32].into(),
+                node_url: "http://not-used-in-unit-tests"
+                    .parse()
+                    .expect("valid test URL"),
+                auth: None,
+            },
+            retry_pending_blocks_timeout: Duration::from_secs(1),
+            genesis: vec![],
+            cross_zone: None,
+        };
+        let max_block_size = config.max_block_size.as_u64();
+        let (mut sequencer, mempool_handle) =
+            SequencerCoreWithMockClients::start_from_config(config).await;
+        let inclusion_block_id = sequencer.chain_height();
+        let inclusion_block = sequencer
+            .block_store()
+            .get_block_at_id(inclusion_block_id)
+            .expect("read genesis block")
+            .expect("genesis block exists");
+        let transaction_hash = inclusion_block.body.transactions[0].hash();
+
+        sequencer
+            .produce_new_block()
+            .await
+            .expect("first successor block");
+        sequencer
+            .produce_new_block()
+            .await
+            .expect("second successor block");
+
+        let service = super::SequencerService::new(
+            Arc::new(Mutex::new(sequencer)),
+            mempool_handle,
+            max_block_size,
+        );
+        let receipt = service
+            .get_local_public_transaction_receipt(transaction_hash, 2)
+            .await
+            .expect("receipt request succeeds")
+            .expect("receipt is available after successors are stored");
+
+        assert_eq!(receipt.inclusion.block_id, inclusion_block_id);
+        assert_eq!(receipt.confirmation_chain.len(), 2);
+        assert_eq!(
+            receipt.confirmation_chain[0].block_id,
+            inclusion_block_id + 1
+        );
+        assert_eq!(
+            receipt.confirmation_chain[1].block_id,
+            inclusion_block_id + 2
+        );
+        assert_eq!(
+            receipt.confirmation_chain[0].previous_block_hash,
+            receipt.inclusion.block_hash
+        );
+        assert_eq!(
+            receipt.confirmation_chain[1].previous_block_hash,
+            receipt.confirmation_chain[0].block_hash
+        );
     }
 }
