@@ -163,34 +163,18 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     ) -> Result<Option<LocalPublicTransactionReceiptV1>, ErrorObjectOwned> {
         validate_confirmation_depth(confirmation_depth)?;
 
-        let sequencer = self.sequencer.lock().await;
-        let Some((transaction, inclusion_block_id)) =
-            sequencer.block_store().get_transaction_by_hash(tx_hash)
-        else {
-            return Ok(None);
-        };
-        let LeeTransaction::Public(public_transaction) = transaction else {
-            return Ok(None);
-        };
-        let confirmation_tip_id = inclusion_block_id
-            .checked_add(u64::from(confirmation_depth))
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(
-                    ErrorCode::InternalError.code(),
-                    "confirmation block height overflow".to_owned(),
-                    None::<()>,
-                )
-            })?;
-        if sequencer.chain_height() < confirmation_tip_id {
-            return Ok(None);
-        }
-
-        let inclusion_block = block_at_id(&sequencer, inclusion_block_id)?;
-        let mut confirmation_blocks = Vec::with_capacity(usize::from(confirmation_depth));
-        if confirmation_depth > 0 {
-            const FIRST_SUCCESSOR_OFFSET: u64 = 1;
-            let first_confirmation_id = inclusion_block_id
-                .checked_add(FIRST_SUCCESSOR_OFFSET)
+        let (public_transaction, inclusion_block_id, inclusion_block, confirmation_blocks) = {
+            let sequencer = self.sequencer.lock().await;
+            let Some((transaction, inclusion_block_id)) =
+                sequencer.block_store().get_transaction_by_hash(tx_hash)
+            else {
+                return Ok(None);
+            };
+            let LeeTransaction::Public(public_transaction) = transaction else {
+                return Ok(None);
+            };
+            let confirmation_tip_id = inclusion_block_id
+                .checked_add(u64::from(confirmation_depth))
                 .ok_or_else(|| {
                     ErrorObjectOwned::owned(
                         ErrorCode::InternalError.code(),
@@ -198,10 +182,35 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
                         None::<()>,
                     )
                 })?;
-            for block_id in first_confirmation_id..=confirmation_tip_id {
-                confirmation_blocks.push(block_at_id(&sequencer, block_id)?);
+            if sequencer.chain_height() < confirmation_tip_id {
+                return Ok(None);
             }
-        }
+
+            let inclusion_block = block_at_id(&sequencer, inclusion_block_id)?;
+            let mut confirmation_blocks = Vec::with_capacity(usize::from(confirmation_depth));
+            if confirmation_depth > 0 {
+                const FIRST_SUCCESSOR_OFFSET: u64 = 1;
+                let first_confirmation_id = inclusion_block_id
+                    .checked_add(FIRST_SUCCESSOR_OFFSET)
+                    .ok_or_else(|| {
+                        ErrorObjectOwned::owned(
+                            ErrorCode::InternalError.code(),
+                            "confirmation block height overflow".to_owned(),
+                            None::<()>,
+                        )
+                    })?;
+                for block_id in first_confirmation_id..=confirmation_tip_id {
+                    confirmation_blocks.push(block_at_id(&sequencer, block_id)?);
+                }
+            }
+
+            (
+                public_transaction,
+                inclusion_block_id,
+                inclusion_block,
+                confirmation_blocks,
+            )
+        };
 
         build_local_public_transaction_receipt(
             tx_hash,
@@ -348,7 +357,7 @@ fn build_local_public_transaction_receipt(
     let message = public_transaction.message();
     if message.account_ids.len() > MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS {
         return Err(ErrorObjectOwned::owned(
-            ErrorCode::InternalError.code(),
+            ErrorCode::InvalidParams.code(),
             format!(
                 "public transaction has {} accounts; maximum receipt size is {MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_ACCOUNTS}",
                 message.account_ids.len()
@@ -433,6 +442,7 @@ fn instruction_data_sha256(instruction_data: &[u32]) -> HashType {
 #[cfg(test)]
 mod tests {
     use common::{HashType, test_utils::produce_dummy_block};
+    use jsonrpsee::types::ErrorCode;
     use lee::{
         AccountId, PublicTransaction,
         public_transaction::{Message, WitnessSet},
@@ -532,15 +542,19 @@ mod tests {
             )],
         );
 
-        assert!(
-            build_local_public_transaction_receipt(
-                transaction_hash,
-                &transaction,
-                7,
-                &inclusion,
-                &[],
-            )
-            .is_err()
+        let error = build_local_public_transaction_receipt(
+            transaction_hash,
+            &transaction,
+            7,
+            &inclusion,
+            &[],
+        )
+        .expect_err("oversized transaction must not produce a receipt");
+
+        assert_eq!(
+            error.code(),
+            ErrorCode::InvalidParams.code(),
+            "response bound is a client input error"
         );
     }
 
