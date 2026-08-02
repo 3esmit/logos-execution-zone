@@ -7,14 +7,11 @@ use std::{io::Write as _, time::Duration};
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
-};
+use wallet::{cli::Command, config::WalletConfigOverrides};
 
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
@@ -32,22 +29,9 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    let account_id = new_account(&mut ctx, false, None).await?;
 
-    let SubcommandReturnValue::RegisterAccount { account_id } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        panic!("Expected RegisterAccount return value");
-    };
-
-    let nonces = ctx.wallet().get_accounts_nonces(vec![account_id]).await?;
+    let nonces = ctx.wallet_mut().get_accounts_nonces(&[account_id]).await?;
     let private_key = ctx
         .wallet()
         .get_account_public_signing_key(account_id)
@@ -66,7 +50,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     // block
     tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let post_state_account = ctx.sequencer_client().get_account(account_id).await?;
+    let post_state_account = get_account(&ctx, account_id).await?;
 
     let expected_data: &[u8] = &[];
     assert_eq!(post_state_account.program_owner, claimer.id());
@@ -75,6 +59,40 @@ async fn deploy_and_execute_program() -> Result<()> {
     assert_eq!(post_state_account.nonce.0, 1);
 
     info!("Successfully deployed and executed program");
+
+    Ok(())
+}
+
+#[test]
+async fn deploy_invalid_program_fails() -> Result<()> {
+    // An invalid program bytecode is rejected by the sequencer during block production, so the
+    // deployment transaction is never included in a block. Shrink the wallet's polling window so
+    // the command gives up quickly instead of waiting for the full default timeout.
+    let mut ctx = TestContext::builder()
+        .with_wallet_config_overrides(WalletConfigOverrides {
+            seq_poll_timeout: Some(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)),
+            seq_tx_poll_max_blocks: Some(5),
+            seq_poll_max_retries: Some(2),
+            ..WalletConfigOverrides::default()
+        })
+        .build()
+        .await?;
+
+    let mut tempfile = tempfile::NamedTempFile::new()?;
+    tempfile.write_all(b"this is not a valid program binary")?;
+
+    let command = Command::DeployProgram {
+        binary_filepath: tempfile.path().to_owned(),
+    };
+
+    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await;
+
+    assert!(
+        result.is_err(),
+        "Deploying an invalid program should fail, but got: {result:?}"
+    );
+
+    info!("Deploying an invalid program failed as expected");
 
     Ok(())
 }

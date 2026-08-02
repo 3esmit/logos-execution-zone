@@ -22,6 +22,12 @@ associated_token_account_core.workspace = true
 vault_core.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
+ping_core.workspace = true
+cross_zone_outbox_core.workspace = true
+cross_zone_inbox_core.workspace = true
+bridge_lock_core.workspace = true
+wrapped_token_core.workspace = true
+risc0-zkvm.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet-ffi.workspace = true
@@ -30,18 +36,13 @@ indexer_service_protocol.workspace = true
 system_accounts.workspace = true
 programs.workspace = true
 test_programs.workspace = true
+testnet_initial_state.workspace = true
 
-logos-blockchain-http-api-common.workspace = true
 logos-blockchain-core.workspace = true
-logos-blockchain-zone-sdk.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 anyhow.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-futures.workspace = true
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
-reqwest.workspace = true
-borsh.workspace = true
-num-bigint.workspace = true

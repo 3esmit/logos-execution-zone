@@ -8,8 +8,8 @@ use std::{
 };
 
 use lee::{Data, ProgramId, SharedSecretKey};
-use lee_core::{encryption::MlKem768EncapsulationKey, NullifierPublicKey};
-use wallet::AccountIdentity;
+use lee_core::{encryption::MlKem768EncapsulationKey, program::PdaSeed, NullifierPublicKey};
+use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
 use crate::error::WalletFfiError;
 
@@ -24,9 +24,39 @@ pub struct WalletHandle {
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct FfiBytes32 {
     pub data: [u8; 32],
+}
+
+pub type FfiPdaSeed = FfiBytes32;
+
+impl From<FfiPdaSeed> for PdaSeed {
+    fn from(value: FfiPdaSeed) -> Self {
+        Self::new(value.data)
+    }
+}
+
+impl From<PdaSeed> for FfiPdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self {
+            data: *value.as_bytes(),
+        }
+    }
+}
+
+pub type FfiNullifierPublicKey = FfiBytes32;
+
+impl From<FfiNullifierPublicKey> for NullifierPublicKey {
+    fn from(value: FfiNullifierPublicKey) -> Self {
+        Self(value.data)
+    }
+}
+
+impl From<NullifierPublicKey> for FfiNullifierPublicKey {
+    fn from(value: NullifierPublicKey) -> Self {
+        Self { data: value.0 }
+    }
 }
 
 /// Program ID - 8 u32 values (32 bytes total).
@@ -593,6 +623,38 @@ impl From<FfiProgramId> for ProgramId {
     }
 }
 
+#[repr(C)]
+#[derive(Default, PartialEq, Eq, Debug, Clone, Copy)]
+pub struct FfiAccountIdWithPrivacy {
+    pub account_id: FfiBytes32,
+    pub is_private: bool,
+}
+
+impl From<AccountIdWithPrivacy> for FfiAccountIdWithPrivacy {
+    fn from(value: AccountIdWithPrivacy) -> Self {
+        match value {
+            AccountIdWithPrivacy::Public(acc) => Self {
+                account_id: acc.into(),
+                is_private: false,
+            },
+            AccountIdWithPrivacy::Private(acc) => Self {
+                account_id: acc.into(),
+                is_private: true,
+            },
+        }
+    }
+}
+
+impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
+    fn from(value: FfiAccountIdWithPrivacy) -> Self {
+        if value.is_private {
+            Self::Private(value.account_id.into())
+        } else {
+            Self::Public(value.account_id.into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
@@ -613,9 +675,10 @@ mod tests {
         let identifier = u128::from_le_bytes([45; 16]);
 
         let private_reg_acc_id =
-            AccountId::for_private_account(&npk, &PrivateAccountKind::Regular(identifier));
+            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
         let private_pda_acc_id = AccountId::for_private_account(
             &npk,
+            &vpk,
             &PrivateAccountKind::Pda {
                 program_id: [46; 8],
                 seed: PdaSeed::new([47; 32]),

@@ -1,13 +1,16 @@
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use chain_state::{
+    AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
+};
 use common::{
-    block::{BedrockStatus, Block},
-    transaction::{LeeTransaction, clock_invocation},
+    block::{BedrockStatus, Block, BlockHeader},
+    transaction::LeeTransaction,
 };
 use lee::{Account, AccountId, V03State};
 use lee_core::BlockId;
-use log::info;
+use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
@@ -22,8 +25,18 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    pub fn open_db(location: &Path) -> Result<Self> {
-        let initial_state = testnet_initial_state::initial_state();
+    pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
+        #[cfg(not(feature = "testnet"))]
+        let base = testnet_initial_state::initial_state();
+
+        #[cfg(feature = "testnet")]
+        let base = testnet_initial_state::initial_state_testnet();
+
+        // Seed any zone-specific genesis accounts (the bridge-lock holdings) so the
+        // indexer's replayed state matches the sequencer's; none are produced by a
+        // transaction. Cross-zone programs are base builtins, and their config
+        // accounts are reconstructed by replaying the genesis block's InitConfig txs.
+        let initial_state = base.with_public_accounts(genesis_seed);
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
 
         let current_state = dbio.final_state()?;
@@ -113,6 +126,36 @@ impl IndexerStore {
         Ok(())
     }
 
+    /// The L1 inscription slot of the validated tip, written atomically with it
+    /// by [`Self::accept_block`]. `None` on a cold store or one written before
+    /// the slot was recorded.
+    pub fn get_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.dbio.get_meta_tip_slot_in_db()?.map(Slot::from))
+    }
+
+    pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
+        let Some(bytes) = self.dbio.get_stall_reason_bytes()? else {
+            return Ok(None);
+        };
+        let stall: Option<StallReason> =
+            serde_json::from_slice(&bytes).context("Failed to deserialize stored stall reason")?;
+        Ok(stall)
+    }
+
+    pub fn set_stall_reason(&self, stall: &Option<StallReason>) -> Result<()> {
+        let bytes = serde_json::to_vec(stall).context("Failed to serialize stall reason")?;
+        self.dbio.put_stall_reason_bytes(&bytes)?;
+        Ok(())
+    }
+
+    /// Clears a recorded stall marker if one is present, skipping the write otherwise.
+    fn clear_stall_if_present(&self) -> Result<()> {
+        if self.get_stall_reason()?.is_some() {
+            self.set_stall_reason(&None)?;
+        }
+        Ok(())
+    }
+
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
@@ -134,78 +177,132 @@ impl IndexerStore {
             .get_account_by_id(*account_id))
     }
 
-    pub async fn put_block(&self, mut block: Block, l1_header: HeaderId) -> Result<()> {
-        info!("Applying block {}", block.header.block_id);
+    /// The last successfully applied block, or `None` on a cold store.
+    /// Read fresh from the store each call.
+    fn validated_tip(&self) -> Result<Option<Tip>> {
+        let Some(block_id) = self.dbio.get_meta_last_block_id_in_db()? else {
+            return Ok(None);
+        };
+        let Some(block) = self.dbio.get_block(block_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(Tip::from(&block)))
+    }
+
+    /// Record the stall reason.
+    ///
+    /// - First stall is stored verbatim
+    /// - Subsequent stalls only bump `orphans_since`, preserving the original cause.
+    pub fn record_stall(
+        &self,
+        header: Option<&BlockHeader>,
+        l1_slot: Slot,
+        error: BlockIngestError,
+    ) -> Result<()> {
+        let stall = self.get_stall_reason()?.map_or_else(
+            || StallReason::new(header, l1_slot, error),
+            StallReason::escalate,
+        );
+        self.set_stall_reason(&Some(stall))
+    }
+
+    /// Validates `block` against the tip and, if it chains, applies it atomically
+    /// (scratch clone, commit only on full success) and advances the tip.
+    /// Retryable apply failures return `RetryableFailure` without recording a stall
+    /// or touching state; other failures record the stall and return `Parked`.
+    pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
+        let tip = self.validated_tip()?;
+
+        // Re-delivery of an already-applied block is idempotent, not a divergence
+        if let Some(tip) = &tip
+            && block.header.block_id <= tip.block_id
+            && let Some(stored) = self.get_block_at_id(block.header.block_id)?
+            && stored.header.hash == block.header.hash
         {
-            let mut state_guard = self.current_state.write().await;
-
-            let (clock_tx, user_txs) = block
-                .body
-                .transactions
-                .split_last()
-                .ok_or_else(|| anyhow::anyhow!("Block has no transactions"))?;
-
-            anyhow::ensure!(
-                *clock_tx == LeeTransaction::Public(clock_invocation(block.header.timestamp)),
-                "Last transaction in block must be the clock invocation for the block timestamp"
-            );
-
-            let is_genesis = block.header.block_id == 1;
-            for transaction in user_txs {
-                if is_genesis {
-                    let genesis_tx = match transaction {
-                        LeeTransaction::Public(public_tx) => public_tx,
-                        LeeTransaction::PrivacyPreserving(_)
-                        | LeeTransaction::ProgramDeployment(_) => {
-                            anyhow::bail!("Genesis block should contain only public transactions")
-                        }
-                    };
-                    state_guard
-                        .transition_from_public_transaction(
-                            genesis_tx,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )
-                        .context("Failed to execute genesis public transaction")?;
-                } else {
-                    transaction
-                        .clone()
-                        .transaction_stateless_check()?
-                        // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
-                        // sequencer-generated deposit tx'es;
-                        // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
-                        .execute_without_system_accounts_check_on_state(
-                            &mut state_guard,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )?;
-                }
-            }
-
-            // Apply the clock invocation directly (it is expected to modify clock accounts).
-            let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-                anyhow::bail!("Clock invocation must be a public transaction");
-            };
-            state_guard.transition_from_public_transaction(
-                clock_public_tx,
-                block.header.block_id,
-                block.header.timestamp,
-            )?;
+            return Ok(AcceptOutcome::AlreadyApplied);
         }
 
-        // ToDo: Currently we are fetching only finalized blocks
-        // if it changes, the following lines need to be updated
-        // to represent correct block finality
-        block.bedrock_status = BedrockStatus::Finalized;
+        // Validate before paying for the scratch clone; validation failures
+        // are never retryable, so parking immediately is exact.
+        if let Err(err) = validate_against_tip(tip.as_ref(), block) {
+            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
+            return Ok(AcceptOutcome::Parked(err));
+        }
 
-        info!("Putting block {} into DB", block.header.block_id);
-        Ok(self.dbio.put_block(&block, l1_header.into())?)
+        // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
+        let mut scratch = self.current_state.read().await.clone();
+        if let Err(err) = apply_block_to_state(block, &mut scratch) {
+            if err.is_retryable() {
+                return Ok(AcceptOutcome::RetryableFailure(err));
+            }
+            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
+            return Ok(AcceptOutcome::Parked(err));
+        }
+
+        let mut stored = block.clone();
+        stored.bedrock_status = BedrockStatus::Finalized;
+        self.dbio
+            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), &scratch)
+            .context("Failed to persist accepted block")?;
+
+        // Commit in-memory state (infallible) only after the DB write succeeded.
+        *self.current_state.write().await = scratch;
+        // Best-effort: the block is durably applied, so a failed stall clear must not
+        // fail the apply. It self-heals on the next clear.
+        if let Err(err) = self.clear_stall_if_present() {
+            warn!("Failed to clear stall marker after applying block: {err:#}");
+        }
+        Ok(AcceptOutcome::Applied)
+    }
+}
+
+#[cfg(test)]
+mod stall_reason_tests {
+    use common::HashType;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn stall_reason_roundtrips_and_clears() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        assert!(store.get_stall_reason().expect("get").is_none());
+
+        let stall = StallReason {
+            block_id: Some(7),
+            block_hash: Some(HashType([1_u8; 32])),
+            prev_block_hash: Some(HashType([2_u8; 32])),
+            l1_slot: Slot::from(42),
+            error: BlockIngestError::StateTransition {
+                tx_index: 0,
+                reason: "boom".to_owned(),
+            },
+            first_seen: Some(99),
+            orphans_since: 3,
+        };
+        store.set_stall_reason(&Some(stall)).expect("set stall");
+
+        let got = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(got.block_id, Some(7));
+        assert_eq!(got.orphans_since, 3);
+        assert!(matches!(
+            got.error,
+            BlockIngestError::StateTransition { .. }
+        ));
+        assert_eq!(got.block_hash, Some(HashType([1_u8; 32])));
+        assert_eq!(got.prev_block_hash, Some(HashType([2_u8; 32])));
+        assert_eq!(got.l1_slot, Slot::from(42));
+        assert_eq!(got.first_seen, Some(99));
+
+        store.set_stall_reason(&None).expect("clear");
+        assert!(store.get_stall_reason().expect("get").is_none());
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use common::{HashType, block::HashableBlockData};
+    use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -215,7 +312,7 @@ mod tests {
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let storage = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let final_id = storage.get_last_block_id().unwrap();
 
@@ -223,104 +320,473 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_transition() {
+    async fn accept_block_applies_transfers_and_advances_tip() {
         let home = tempdir().unwrap();
-
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        // Submit genesis block
-        let clock_tx = LeeTransaction::Public(clock_invocation(0));
-        let genesis_block_data = HashableBlockData {
-            block_id: 1,
-            prev_block_hash: HashType::default(),
-            timestamp: 0,
-            transactions: vec![clock_tx],
-        };
-        let genesis_block = genesis_block_data
-            .into_pending_block(&common::test_utils::sequencer_sign_key_for_testing());
-        let mut prev_hash = Some(genesis_block.header.hash);
-        storage
-            .put_block(genesis_block, HeaderId::from([0_u8; 32]))
-            .await
-            .unwrap();
+        // Genesis (block 1): clock-only.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut prev_hash = genesis.header.hash;
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
 
-        for i in 0..10 {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from, i, to, 10, &sign_key,
-            );
-            let block_id = u64::try_from(i + 1).unwrap();
-
-            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
-            prev_hash = Some(next_block.header.hash);
-
-            storage
-                .put_block(
-                    next_block,
-                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
-                )
-                .await
-                .unwrap();
+        // Blocks 2..=11: one native transfer of 10 each (nonces 0..=9).
+        for i in 0..10_u64 {
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            assert!(matches!(
+                store.accept_block(&block, Slot::from(0)).await.unwrap(),
+                AcceptOutcome::Applied
+            ));
         }
 
-        let acc1_val = storage.account_current_state(&from).await.unwrap();
-        let acc2_val = storage.account_current_state(&to).await.unwrap();
-
-        assert_eq!(acc1_val.balance, 9900);
-        assert_eq!(acc2_val.balance, 20100);
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            9900
+        );
+        assert_eq!(
+            store.account_current_state(&to).await.unwrap().balance,
+            20100
+        );
+        // Tip advanced to the last applied block; a clean run leaves no stall.
+        assert_eq!(store.get_last_block_id().unwrap(), Some(11));
+        assert!(store.get_stall_reason().unwrap().is_none());
     }
 
     #[tokio::test]
-    async fn account_state_at_block() {
+    async fn account_state_at_block_reflects_history() {
         let home = tempdir().unwrap();
-
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
-
-        let mut prev_hash = None;
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        for i in 0..10 {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from, i, to, 10, &sign_key,
-            );
-            let block_id = u64::try_from(i + 1).unwrap();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut prev_hash = genesis.header.hash;
+        store.accept_block(&genesis, Slot::from(0)).await.unwrap();
 
-            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
-            prev_hash = Some(next_block.header.hash);
-
-            storage
-                .put_block(
-                    next_block,
-                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
-                )
-                .await
-                .unwrap();
+        for i in 0..10_u64 {
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            store.accept_block(&block, Slot::from(0)).await.unwrap();
         }
 
-        // Genesis block: no transfers applied yet.
-        let acc1_at_1 = storage.account_state_at_block(&from, 1).unwrap();
-        let acc2_at_1 = storage.account_state_at_block(&to, 1).unwrap();
-        assert_eq!(acc1_at_1.balance, 9990);
-        assert_eq!(acc2_at_1.balance, 20010);
+        // State at block N is inclusive of block N.
+        // Block 1 (genesis, clock-only): no transfers yet.
+        assert_eq!(
+            store.account_state_at_block(&from, 1).unwrap().balance,
+            10000
+        );
+        assert_eq!(store.account_state_at_block(&to, 1).unwrap().balance, 20000);
+        // Through block 5: 4 transfers applied (blocks 2..=5).
+        assert_eq!(
+            store.account_state_at_block(&from, 5).unwrap().balance,
+            9960
+        );
+        assert_eq!(store.account_state_at_block(&to, 5).unwrap().balance, 20040);
+        // Through block 9: 8 transfers applied (blocks 2..=9).
+        assert_eq!(
+            store.account_state_at_block(&from, 9).unwrap().balance,
+            9920
+        );
+        assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
+    }
+}
 
-        // After block 5: 4 transfers of 10 applied (one each in blocks 2..=5).
-        let acc1_at_5 = storage.account_state_at_block(&from, 5).unwrap();
-        let acc2_at_5 = storage.account_state_at_block(&to, 5).unwrap();
-        assert_eq!(acc1_at_5.balance, 9950);
-        assert_eq!(acc2_at_5.balance, 20050);
+#[cfg(test)]
+mod accept_tests {
+    use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
 
-        // After final block 9: 8 transfers applied; should match current state.
-        let acc1_at_9 = storage.account_state_at_block(&from, 9).unwrap();
-        let acc2_at_9 = storage.account_state_at_block(&to, 9).unwrap();
-        assert_eq!(acc1_at_9.balance, 9910);
-        assert_eq!(acc2_at_9.balance, 20090);
+    use super::*;
+
+    fn signing_key() -> lee::PrivateKey {
+        lee::PrivateKey::try_new([7_u8; 32]).expect("valid key")
+    }
+
+    // A block with a correct hash but empty body — enough to exercise the
+    // acceptance checks (id/link/hash), which run before any state application.
+    fn valid_hash_block(block_id: u64, prev: HashType) -> common::block::Block {
+        HashableBlockData {
+            block_id,
+            prev_block_hash: prev,
+            timestamp: 0,
+            transactions: vec![],
+        }
+        .into_pending_block(&signing_key())
+    }
+
+    #[tokio::test]
+    async fn non_genesis_first_block_parks_with_unexpected_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let block = valid_hash_block(2, HashType([0_u8; 32]));
+        let outcome = store
+            .accept_block(&block, Slot::from(0))
+            .await
+            .expect("accept");
+
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                expected: 1,
+                got: 2
+            })
+        ));
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, Some(2));
+        assert_eq!(stall.orphans_since, 0);
+    }
+
+    #[tokio::test]
+    async fn hash_mismatch_parks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let mut block = valid_hash_block(1, HashType([0_u8; 32]));
+        block.header.timestamp = 999; // invalidates the stored hash
+
+        let outcome = store
+            .accept_block(&block, Slot::from(0))
+            .await
+            .expect("accept");
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::Parked(BlockIngestError::HashMismatch { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn second_break_bumps_orphan_count_and_keeps_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let first = valid_hash_block(2, HashType([0_u8; 32]));
+        store
+            .accept_block(&first, Slot::from(0))
+            .await
+            .expect("accept");
+        let second = valid_hash_block(3, HashType([0_u8; 32]));
+        store
+            .accept_block(&second, Slot::from(0))
+            .await
+            .expect("accept");
+
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, Some(2), "first stall preserved");
+        assert_eq!(stall.orphans_since, 1, "second break counted as orphan");
+    }
+
+    #[tokio::test]
+    async fn deserialize_break_records_stall_without_header() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        store
+            .record_stall(
+                None,
+                Slot::from(0),
+                BlockIngestError::Deserialize("bad bytes".to_owned()),
+            )
+            .expect("record");
+
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, None);
+        assert!(matches!(stall.error, BlockIngestError::Deserialize(_)));
+    }
+
+    #[tokio::test]
+    async fn parks_then_recovers_on_valid_continuation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        // Genesis (block 1, clock-only) applies and advances the tip.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        // A block that skips ahead (id 3 while the tip is 1) parks the indexer.
+        let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            store.accept_block(&bad, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                expected: 2,
+                got: 3
+            })
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_some(),
+            "indexer should be parked after the bad block"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(1),
+            "validated tip must stay frozen at genesis while parked"
+        );
+
+        // The valid continuation (block 2 chaining on genesis) recovers the chain.
+        let next = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            store.accept_block(&next, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "stall reason must clear on recovery"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(2),
+            "tip must advance to the recovered block"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_block_records_tip_inscription_slot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        assert_eq!(store.get_tip_slot().expect("get"), None);
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(1_000))
+            .await
+            .expect("accept");
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_000)));
+
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        store
+            .accept_block(&block2, Slot::from(1_005))
+            .await
+            .expect("accept");
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+
+        // A parked block freezes the tip, so its slot must not advance either.
+        let bad = produce_dummy_block(4, Some(block2.header.hash), vec![]);
+        assert!(matches!(
+            store.accept_block(&bad, Slot::from(1_010)).await.unwrap(),
+            AcceptOutcome::Parked(_)
+        ));
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+
+        // Neither must a re-delivered old block move it.
+        assert!(matches!(
+            store
+                .accept_block(&genesis, Slot::from(1_015))
+                .await
+                .unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+    }
+
+    #[tokio::test]
+    async fn redelivered_tip_block_is_idempotent_not_parked() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(0))
+            .await
+            .expect("accept genesis");
+
+        // Block 2: a single transfer of 10.
+        let tx = common::test_utils::create_transaction_native_token_transfer(
+            from, 0, to, 10, &sign_key,
+        );
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            store.accept_block(&block, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+
+        // Re-deliver the exact same block: idempotent skip, no state change, no park.
+        assert!(matches!(
+            store.accept_block(&block, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            balance_after,
+            "re-delivered block must not be applied twice"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(2),
+            "tip must stay at the already-applied block"
+        );
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "a benign duplicate must not park the indexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn redelivered_block_below_tip_is_idempotent_not_parked() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(0))
+            .await
+            .expect("accept genesis");
+
+        let tx2 = common::test_utils::create_transaction_native_token_transfer(
+            from, 0, to, 10, &sign_key,
+        );
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        assert!(matches!(
+            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let tx3 = common::test_utils::create_transaction_native_token_transfer(
+            from, 1, to, 10, &sign_key,
+        );
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        assert!(matches!(
+            store.accept_block(&block3, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+
+        // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
+        assert!(matches!(
+            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            balance_after,
+            "re-delivered block below the tip must not be applied again"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(3),
+            "tip must stay at the current head"
+        );
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "a benign re-delivery must not park the indexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn accept_block_snapshots_state_at_breakpoint_interval() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+        let mut prev_hash = genesis.header.hash;
+
+        // Blocks 2..=101: one transfer of 1 each; block 100 crosses the interval.
+        for i in 0..100_u64 {
+            let tx = common::test_utils::create_transaction_native_token_transfer(
+                from,
+                i.into(),
+                to,
+                1,
+                &sign_key,
+            );
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            assert!(matches!(
+                store.accept_block(&block, Slot::from(0)).await.unwrap(),
+                AcceptOutcome::Applied
+            ));
+        }
+
+        // Snapshot at block 100 = genesis + 99 transfers, written with the block.
+        let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
+        assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
+
+        // The #605 restart: reopening past the boundary must work.
+        drop(store);
+        let reopened = IndexerStore::open_db(dir.path(), Vec::new()).expect("reopen");
+        assert_eq!(reopened.last_block().unwrap(), Some(101));
+    }
+
+    #[tokio::test]
+    async fn transient_apply_failure_returns_retryable_failure_without_stall() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(0))
+            .await
+            .expect("accept genesis");
+
+        // Overdraft: rejected during execution → StateTransition → retryable.
+        let tx = common::test_utils::create_transaction_native_token_transfer(
+            from,
+            0,
+            to,
+            1_000_000_000,
+            &sign_key,
+        );
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
+
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::RetryableFailure(BlockIngestError::StateTransition { .. })
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "retryable failure must not persist a stall"
+        );
+        assert_eq!(store.get_last_block_id().unwrap(), Some(1), "tip frozen");
     }
 }

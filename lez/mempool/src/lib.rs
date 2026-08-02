@@ -65,6 +65,11 @@ impl<T> MemPoolHandle<T> {
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
         self.sender.send(item).await
     }
+
+    /// Send an item to the mempool, failing _immediately_ if it is full.
+    pub fn try_push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::TrySendError<T>> {
+        self.sender.try_send(item)
+    }
 }
 
 #[cfg(test)]
@@ -120,6 +125,19 @@ mod tests {
         // This should block if buffer is full, but we'll use try_send in a real scenario
         // For now, just verify we can pop items
         assert_eq!(pool.pop(), Some(1));
+        assert_eq!(pool.pop(), Some(2));
+    }
+
+    #[test]
+    async fn try_push_fails_when_full_without_blocking() {
+        let (mut pool, handle) = MemPool::new(1);
+
+        handle.try_push(1).unwrap();
+        assert!(handle.try_push(2).is_err(), "full mempool must not accept");
+
+        // Popping frees capacity again.
+        assert_eq!(pool.pop(), Some(1));
+        handle.try_push(2).unwrap();
         assert_eq!(pool.pop(), Some(2));
     }
 

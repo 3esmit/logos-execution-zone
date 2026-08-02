@@ -6,20 +6,33 @@ default:
 # ---- Configuration ----
 ARTIFACTS := "artifacts"
 
-# Build risc0 program artifacts.
+# On macOS the integration-test binary links pyo3 against the CommandLineTools
+# Python framework with no embedded rpath, so it needs this to launch. Empty on
+# Linux/CI, which is unaffected.
+DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
+
+# Build risc0 program artifacts and test fixture.
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
     @just build-artifact lee/privacy_preserving_circuit
     @just build-artifact lez/programs programs
 
+    @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
+        echo "Skipping test fixture regeneration because CI doesn't need it"; \
+    else \
+        just regenerate-test-fixture; \
+    fi
+
+RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
+
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
     @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
     @if [ "{{features}}" = "" ]; then \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
     else \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
     @mkdir -p {{ARTIFACTS}}/{{methods_path}}
     @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}
@@ -35,6 +48,11 @@ test:
     @echo "🧪 Running tests"
     RISC0_DEV_MODE=1 cargo nextest run --no-fail-fast
 
+# Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
+regenerate-test-fixture:
+    @echo "🧪 Regenerating test fixture"
+    RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
+
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
     @echo "📊 Running criterion benches"
@@ -48,15 +66,17 @@ run-bedrock:
     docker compose up
 
 # Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
+# Optional home/port let a second instance run off the same config, e.g.
+# `just run-sequencer "" "$TMPDIR/lez-sequencer2" 3041` for the multi-sequencer demo.
 [working-directory: 'lez/sequencer/service']
-run-sequencer standalone="":
+run-sequencer standalone="" home="" port="3040":
     @echo "🧠 Running sequencer"
     @if [ "{{standalone}}" = "standalone" ]; then \
         echo "🧪 Running in standalone mode"; \
-        RUST_LOG=info cargo run --features standalone --release -p sequencer_service configs/debug/sequencer_config.json; \
+        RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
     else \
         echo "🚀 Running in normal mode"; \
-        RUST_LOG=info cargo run --release -p sequencer_service configs/debug/sequencer_config.json; \
+        RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
     fi
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
@@ -94,6 +114,26 @@ wallet-import-test-accounts:
 
     just run-wallet account list
 
+# Demo: cross-zone ping. Boots two zones on one Bedrock and sends a message from
+# zone A to zone B, where the indexer re-derives and verifies it (Option B)
+# before ping_receiver records it. Dev mode, no proving.
+demo-cross-zone-ping:
+    @echo "📡 Cross-zone ping demo (message A → B, indexer-verified)"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_verified -- --nocapture
+
+# Demo: cross-zone wrapped-token bridge. Locks a balance on zone A and mints the
+# wrapped token to a recipient on zone B over the same verified spine.
+demo-cross-zone-bridge:
+    @echo "🌉 Cross-zone bridge demo (lock on A, mint on B)"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge -- --nocapture
+
+# Demo: interactive cross-zone chat. Boots two zones on one Bedrock and serves a
+# local two-column web UI; type in one zone and watch the message cross into the
+# other. Two people can chat across the zones. Dev mode, no proving.
+cross-zone-chat:
+    @echo "💬 Cross-zone chat demo — open the printed localhost URL"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
+
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"
@@ -101,5 +141,6 @@ clean:
     rm -rf lez/sequencer/service/rocksdb
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
+    rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
     cd bedrock && docker compose down -v

@@ -11,7 +11,7 @@ use crate::{AccountId, error::LeeError};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
@@ -84,13 +84,27 @@ impl Message {
 
         Sha256::digest(bytes).into()
     }
+
+    /// Ensure that the commitments, nullifiers, and ciphertexts agree.
+    pub fn validate_note_lengths(&self) -> Result<usize, LeeError> {
+        let count = self.new_nullifiers.len();
+        if self.new_commitments.len() != count || self.encrypted_private_post_states.len() != count
+        {
+            return Err(LeeError::InvalidInput(format!(
+                "Note vectors disagree in length with {count} nullifiers, {} commitments, and {} ciphertexts",
+                self.new_commitments.len(),
+                self.encrypted_private_post_states.len(),
+            )));
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
-        SharedSecretKey,
+        Commitment, EncryptionScheme, EphemeralSecretKey, Nullifier, NullifierPublicKey,
+        PrivateAccountKind, SharedSecretKey,
         account::{Account, AccountId, Nonce},
         encryption::ViewingPublicKey,
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -109,6 +123,7 @@ pub mod tests {
 
         let npk1 = NullifierPublicKey::from(&nsk1);
         let npk2 = NullifierPublicKey::from(&nsk2);
+        let vpk = ViewingPublicKey::from_seed(&[7; 32], &[8; 32]);
 
         let public_account_ids = vec![AccountId::new([1; 32])];
 
@@ -118,10 +133,10 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, 0);
+        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, 0);
         let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, 0);
+        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, 0);
         let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
@@ -138,6 +153,20 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
+    }
+
+    #[test]
+    fn validate_note_lengths_accepts_matching_and_rejects_mismatched() {
+        assert_eq!(Message::default().validate_note_lengths().unwrap(), 0);
+
+        let mismatched = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        };
+        assert!(mismatched.validate_note_lengths().is_err());
     }
 
     #[test]
@@ -197,15 +226,15 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
-        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, 0);
-        let commitment = Commitment::new(&account_id, &account);
-        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0_u8; 32], 0);
+        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let nullifier = Nullifier::for_account_initialization(&account_id);
+        let (shared_secret, epk) =
+            SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),
             &shared_secret,
-            &commitment,
-            2,
+            &nullifier,
         );
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());

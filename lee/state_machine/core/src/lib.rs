@@ -4,14 +4,15 @@
 )]
 
 pub use circuit_io::{
-    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
     compute_digest_for_path,
 };
 pub use encryption::{
-    EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, SharedSecretKey, ViewTag,
+    EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
+    ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;

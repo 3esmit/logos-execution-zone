@@ -16,6 +16,7 @@ members = [
 
   "lez",
   "lez/system_accounts",
+  "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
@@ -43,6 +44,13 @@ members = [
   "lez/programs/pinata_token",
   "lez/programs/token",
   "lez/programs/vault",
+  "lez/programs/cross_zone_inbox",
+  "lez/programs/cross_zone_outbox",
+  "lez/programs/bridge_lock",
+  "lez/programs/wrapped_token",
+  "lez/programs/ping_sender",
+  "lez/programs/ping_receiver",
+  "lez/cross_zone",
 
   "test_programs",
   "test_programs/guest",
@@ -58,12 +66,14 @@ members = [
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
+  "tools/cross_zone_chat",
 ]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
+chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
@@ -94,6 +104,12 @@ authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core
 faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 vault_core = { path = "lez/programs/vault/core" }
+cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
+cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
+bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
+wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
+ping_core = { path = "lez/programs/ping_core" }
+cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_programs = { path = "test_programs" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
@@ -116,6 +132,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }
 serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
+serde_yaml = "0.9.34"
 serde_with = "3.16.1"
 actix = "0.13.0"
 actix-cors = "0.7.1"
@@ -146,7 +163,9 @@ base64 = "0.22.1"
 bip39 = "2.2.0"
 hmac-sha512 = "1.1.7"
 chrono = "0.4.41"
+time = "0.3"
 borsh = "1.5.7"
+zstd = "0.13"
 base58 = "0.2.0"
 itertools = "0.14.0"
 num-bigint = "0.4.6"
@@ -155,19 +174,23 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",
   "arithmetic",
@@ -181,9 +204,9 @@ elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
 actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
 ] }
+axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 
@@ -193,6 +216,10 @@ inherits = "release"
 opt-level = 'z'
 lto = true
 codegen-units = 1
+
+# Keccak speedup for in-guest ML KEM
+[patch.crates-io]
+keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
 
 # Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
 # linking large integration-test binaries on resource-constrained CI runners.
