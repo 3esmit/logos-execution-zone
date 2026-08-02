@@ -865,6 +865,27 @@ impl WalletCore {
             .await?)
     }
 
+    fn validate_then_apply_privacy_messages(
+        transactions: &[LeeTransaction],
+        mut apply_message: impl FnMut(&Message),
+    ) -> Result<()> {
+        for transaction in transactions {
+            let LeeTransaction::PrivacyPreserving(transaction) = transaction else {
+                continue;
+            };
+            transaction.message.validate_note_lengths()?;
+        }
+
+        for transaction in transactions {
+            let LeeTransaction::PrivacyPreserving(transaction) = transaction else {
+                continue;
+            };
+            apply_message(&transaction.message);
+        }
+
+        Ok(())
+    }
+
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
         let latest_block_id = self.get_last_block_id().await?;
         println!("Latest block is {latest_block_id}");
@@ -903,19 +924,17 @@ impl WalletCore {
                 Err(error) => break Err(error),
             };
 
-            for tx in block.body.transactions {
-                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
-                    continue;
-                };
-                if let Err(error) = pp_tx.message.validate_note_lengths() {
-                    break 'sync Err(error.into());
-                }
-                // Eagerly decrypt note updates using expected nullifiers.
-                let handled = self
-                    .storage
-                    .key_chain_mut()
-                    .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                self.sync_private_accounts_with_message(&pp_tx.message, &mut index, &handled);
+            if let Err(error) =
+                Self::validate_then_apply_privacy_messages(&block.body.transactions, |message| {
+                    // Eagerly decrypt note updates using expected nullifiers.
+                    let handled = self
+                        .storage
+                        .key_chain_mut()
+                        .sync_updates_via_nullifiers(message, &mut index);
+                    self.sync_private_accounts_with_message(message, &mut index, &handled);
+                })
+            {
+                break 'sync Err(error);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
@@ -1088,11 +1107,20 @@ mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
+    use lee::privacy_preserving_transaction::{circuit::Proof, witness_set::WitnessSet};
 
     use super::{
-        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, Message,
-        SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage, SyncPersistenceCheckpoint,
+        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, LeeTransaction, Message,
+        PrivacyPreservingTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage,
+        SyncPersistenceCheckpoint, WalletCore,
     };
+
+    fn privacy_transaction(message: Message) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+        ))
+    }
 
     #[test]
     fn mnemonic_roundtrip() {
@@ -1202,6 +1230,34 @@ mod tests {
         assert!(!checkpoint.has_unpersisted_blocks());
         let recovered = Storage::from_path(&storage_path).unwrap();
         assert_eq!(recovered.last_synced_block(), partial_progress);
+    }
+
+    #[test]
+    fn sync_validates_all_privacy_messages_before_applying_block_updates() {
+        let invalid_message = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        };
+        let transactions = [
+            privacy_transaction(Message::default()),
+            privacy_transaction(invalid_message),
+        ];
+        let mut applied_messages = 0_usize;
+
+        let error = WalletCore::validate_then_apply_privacy_messages(&transactions, |_| {
+            applied_messages = applied_messages.saturating_add(1);
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Note vectors disagree in length")
+        );
+        assert_eq!(applied_messages, 0);
     }
 
     #[test]
