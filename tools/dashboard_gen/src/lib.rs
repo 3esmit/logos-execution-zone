@@ -494,7 +494,8 @@ impl Dashboard {
 /// The dropdown driving every [`selected_percentile`] query, offering
 /// `percentiles` (e.g. `[50, 90, 95, 99]`) with `default` pre-selected.
 ///
-/// Panics if `default` is not one of `percentiles`.
+/// Panics if `default` is not one of `percentiles`, or if any of them falls
+/// outside `p1..=p99`.
 #[must_use]
 pub fn percentile_variable(percentiles: &[u32], default: u32) -> Variable {
     assert!(
@@ -562,7 +563,15 @@ pub fn selected_percentile(metric: &str, labels: &[&str], legend: &str) -> Targe
 
 /// A percentile as its `histogram_quantile` argument, derived without float
 /// math: zero-pad to two digits then drop trailing zeros (50 → `0.5`).
+///
+/// Panics outside `1..=99`, the only range two digits render: p100 would come
+/// out as `0.1` and p0 as `0.`, neither of them loudly.
 fn quantile(percentile: u32) -> String {
+    assert!(
+        (1..=99).contains(&percentile),
+        "p{percentile} is outside the supported range p1..=p99",
+    );
+
     let quantile = format!("0.{percentile:02}");
     quantile.trim_end_matches('0').to_owned()
 }
