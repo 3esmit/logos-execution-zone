@@ -320,6 +320,16 @@ typedef struct LabelList {
   enum WalletFfiError error;
 } LabelList;
 
+/**
+ * A local sequencer block header used to pin a public-history snapshot.
+ */
+typedef struct FfiLocalBlockHeaderReceiptV1 {
+  uint64_t block_id;
+  struct FfiBytes32 block_hash;
+  struct FfiBytes32 previous_block_hash;
+  uint64_t timestamp;
+} FfiLocalBlockHeaderReceiptV1;
+
 typedef struct FfiBytes32 FfiPdaSeed;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
@@ -917,6 +927,36 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
  *   `wallet_ffi_get_all_labels_for_account`
  */
 enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
+
+/**
+ * Read one bounded, snapshot-pinned page from the wallet's configured leader.
+ *
+ * This always calls the local public-history RPC method at the configured leader. It accepts no
+ * URL, HTTP path, or RPC-method input. The returned JSON is a trusted local sequencer response,
+ * not public-network finality.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle.
+ * - `start_block_id`: Cursor for the page; zero asks the sequencer to use its stored genesis.
+ * - `expected_tip`: Null for the first page, otherwise the prior page's `snapshot_tip`.
+ * - `out_history_json`: Receives an allocated, null-terminated JSON result.
+ *
+ * # Returns
+ * - `Success` with `out_history_json` allocated; free it with `wallet_ffi_free_string()`.
+ * - `NetworkError` if the configured leader cannot serve the request.
+ * - `SerializationError` if the bounded response cannot be encoded as JSON.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ * - If non-null, `expected_tip` must point to a valid `FfiLocalBlockHeaderReceiptV1` for this
+ *   call.
+ * - `out_history_json` must point to writable storage for one `char*` and remains owned by the
+ *   caller; the returned string must be freed with `wallet_ffi_free_string()`.
+ */
+enum WalletFfiError wallet_ffi_get_local_public_block_history(struct WalletHandle *handle,
+                                                              uint64_t start_block_id,
+                                                              const struct FfiLocalBlockHeaderReceiptV1 *expected_tip,
+                                                              char **out_history_json);
 
 /**
  * Produce account id for public PDA.

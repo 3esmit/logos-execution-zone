@@ -12,6 +12,7 @@ crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
 wallet.workspace = true
+sequencer_service_protocol.workspace = true
 lee.workspace = true
 lee_core.workspace = true
 programs.workspace = true

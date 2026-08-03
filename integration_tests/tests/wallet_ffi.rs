@@ -31,8 +31,8 @@ use log::info;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
-    WalletHandle, error,
+    FfiLocalBlockHeaderReceiptV1, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey,
+    FfiTransferResult, FfiU128, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -219,6 +219,13 @@ unsafe extern "C" {
         out_block_height: *mut u64,
     ) -> error::WalletFfiError;
 
+    fn wallet_ffi_get_local_public_block_history(
+        handle: *mut WalletHandle,
+        start_block_id: u64,
+        expected_tip: *const FfiLocalBlockHeaderReceiptV1,
+        out_history_json: *mut *mut c_char,
+    ) -> error::WalletFfiError;
+
     fn wallet_ffi_restore_data(
         handle: *mut WalletHandle,
         mnemonic: *const c_char,
@@ -385,6 +392,53 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
             metrics_path.as_ptr(),
         )
     })
+}
+
+#[test]
+fn wallet_ffi_reads_bounded_local_public_history_from_configured_leader() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+
+    let mut raw_history_json: *mut c_char = std::ptr::null_mut();
+    unsafe {
+        wallet_ffi_get_local_public_block_history(
+            wallet_ffi_handle,
+            0,
+            std::ptr::null(),
+            &raw mut raw_history_json,
+        )
+        .unwrap();
+    }
+
+    if raw_history_json.is_null() {
+        unsafe {
+            wallet_ffi_destroy(wallet_ffi_handle);
+        }
+        anyhow::bail!("local public history returned success without a JSON result");
+    }
+    let history_json = unsafe { CStr::from_ptr(raw_history_json) }
+        .to_str()
+        .map(str::to_owned);
+    unsafe {
+        wallet_ffi_free_string(raw_history_json);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
+    let history_json = history_json?;
+
+    let page: serde_json::Value = serde_json::from_str(&history_json)?;
+    assert!(page["snapshot_tip"]["block_id"].is_u64());
+    assert!(page["snapshot_tip"]["timestamp"].is_u64());
+    assert!(
+        page["blocks"]
+            .as_array()
+            .is_some_and(|blocks| blocks.len() <= 32)
+    );
+
+    Ok(())
 }
 
 #[test]
