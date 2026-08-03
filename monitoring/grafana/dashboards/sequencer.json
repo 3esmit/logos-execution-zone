@@ -71,7 +71,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(blocks_produced_total[1m]) * 60",
+          "expr": "rate(blocks_produced_total[$__rate_interval]) * 60",
           "legendFormat": "produced · blocks/min",
           "refId": "A"
         }
@@ -327,19 +327,19 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(submitted_transactions_total[1m]) * 60",
+          "expr": "rate(submitted_transactions_total[$__rate_interval]) * 60",
           "legendFormat": "submitted",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(before_mempool_failed_transactions_total[1m]) * 60",
+          "expr": "rate(before_mempool_failed_transactions_total[$__rate_interval]) * 60",
           "legendFormat": "failed · before mempool",
           "refId": "B"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(mempool_failed_transactions_total[1m]) * 60",
+          "expr": "rate(mempool_failed_transactions_total[$__rate_interval]) * 60",
           "legendFormat": "failed · in mempool",
           "refId": "C"
         }

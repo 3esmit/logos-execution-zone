@@ -36,9 +36,10 @@ mod unit;
 /// than by a per-environment URL.
 pub const DATASOURCE_UID: &str = "prometheus";
 
-/// Window every histogram query rates over. `$__rate_interval` tracks the
-/// panel's zoom, so a percentile covers the range you are actually looking at,
-/// and an idle window yields no value rather than a zero.
+/// Window every rate query — counter and histogram alike — rates over.
+/// `$__rate_interval` tracks the panel's zoom, so the window always covers the
+/// step Grafana samples at: a fixed one shorter than the step leaves gaps the
+/// query never looks at, dropping events from the graph entirely.
 const RATE_WINDOW: &str = "$__rate_interval";
 
 /// Dashboard variable holding the quantile every percentile query reads.
@@ -578,7 +579,9 @@ pub fn avg(metric: &str) -> Target {
 /// A per-minute rate target for a counter metric.
 #[must_use]
 pub fn rate_per_min(metric: &str, legend: &str) -> Target {
-    Target::new(format!("rate({metric}[1m]) * 60")).legend(legend)
+    //`rate` is per-second whatever the window, so `* 60` is per-minute regardless of the panel's
+    //`rate` zoom.
+    Target::new(format!("rate({metric}[{RATE_WINDOW}]) * 60")).legend(legend)
 }
 
 const fn default_unit() -> Unit {

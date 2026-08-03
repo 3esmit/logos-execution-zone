@@ -8,3 +8,6 @@ datasources:
     url: http://prometheus:9090
     isDefault: true
     editable: true
+    jsonData:
+      # Must match prometheus.yml's `scrape_interval`
+      timeInterval: 5s
