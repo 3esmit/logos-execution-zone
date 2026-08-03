@@ -57,6 +57,44 @@ pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
+const SYNC_PERSIST_CHECKPOINT_BLOCKS: u64 = 100;
+
+#[derive(Default)]
+struct SyncPersistenceCheckpoint {
+    blocks_since_last_persist: u64,
+}
+
+impl SyncPersistenceCheckpoint {
+    #[must_use]
+    const fn record_block(&mut self) -> bool {
+        self.blocks_since_last_persist = self.blocks_since_last_persist.saturating_add(1);
+        if self.blocks_since_last_persist < SYNC_PERSIST_CHECKPOINT_BLOCKS {
+            return false;
+        }
+
+        self.blocks_since_last_persist = 0;
+        true
+    }
+
+    #[must_use]
+    const fn has_unpersisted_blocks(&self) -> bool {
+        self.blocks_since_last_persist != 0
+    }
+
+    fn finish_sync_attempt(
+        &mut self,
+        sync_result: Result<()>,
+        persist: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        if self.has_unpersisted_blocks() {
+            persist()?;
+            self.blocks_since_last_persist = 0;
+        }
+
+        sync_result
+    }
+}
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -827,6 +865,27 @@ impl WalletCore {
             .await?)
     }
 
+    fn validate_then_apply_privacy_messages(
+        transactions: &[LeeTransaction],
+        mut apply_message: impl FnMut(&Message),
+    ) -> Result<()> {
+        for transaction in transactions {
+            let LeeTransaction::PrivacyPreserving(transaction) = transaction else {
+                continue;
+            };
+            transaction.message.validate_note_lengths()?;
+        }
+
+        for transaction in transactions {
+            let LeeTransaction::PrivacyPreserving(transaction) = transaction else {
+                continue;
+            };
+            apply_message(&transaction.message);
+        }
+
+        Ok(())
+    }
+
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
         let latest_block_id = self.get_last_block_id().await?;
         println!("Latest block is {latest_block_id}");
@@ -857,24 +916,37 @@ impl WalletCore {
         // Get the latest nullifiers for all owned accounts.
         let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
-        while let Some(block) = blocks.try_next().await? {
-            for tx in block.body.transactions {
-                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
-                    continue;
-                };
-                pp_tx.message.validate_note_lengths()?;
-                // Eagerly decrypt note updates using expected nullifiers.
-                let handled = self
-                    .storage
-                    .key_chain_mut()
-                    .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                self.sync_private_accounts_with_message(&pp_tx.message, &mut index, &handled);
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let sync_result = 'sync: loop {
+            let block = match blocks.try_next().await {
+                Ok(Some(block)) => block,
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
+            };
+
+            if let Err(error) =
+                Self::validate_then_apply_privacy_messages(&block.body.transactions, |message| {
+                    // Eagerly decrypt note updates using expected nullifiers.
+                    let handled = self
+                        .storage
+                        .key_chain_mut()
+                        .sync_updates_via_nullifiers(message, &mut index);
+                    self.sync_private_accounts_with_message(message, &mut index, &handled);
+                })
+            {
+                break 'sync Err(error);
             }
 
             self.storage.set_last_synced_block(block.header.block_id);
-            self.store_persistent_data()?;
+            if checkpoint.record_block() {
+                self.store_persistent_data()?;
+            }
             bar.inc(1);
-        }
+        };
+        // Preserve the cursor and account updates from accepted blocks before
+        // returning any polling or block-processing error. This keeps retries
+        // and process restarts bounded to the unprocessed tail.
+        checkpoint.finish_sync_attempt(sync_result, || self.store_persistent_data())?;
         bar.finish();
 
         println!(
@@ -1035,6 +1107,20 @@ mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
+    use lee::privacy_preserving_transaction::{circuit::Proof, witness_set::WitnessSet};
+
+    use super::{
+        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, LeeTransaction, Message,
+        PrivacyPreservingTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage,
+        SyncPersistenceCheckpoint, WalletCore,
+    };
+
+    fn privacy_transaction(message: Message) -> LeeTransaction {
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+        ))
+    }
 
     #[test]
     fn mnemonic_roundtrip() {
@@ -1050,5 +1136,208 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
+    }
+
+    #[test]
+    fn sync_persistence_checkpoint_bounds_full_chunks() {
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let persisted_after = (1..=201)
+            .filter(|_| checkpoint.record_block())
+            .collect::<Vec<_>>();
+
+        assert_eq!(persisted_after, vec![100, 200]);
+        assert!(checkpoint.has_unpersisted_blocks());
+    }
+
+    #[test]
+    fn sync_checkpoint_persists_partial_progress_across_poll_retries() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let partial_progress = SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_sub(1);
+
+        for block_id in 1..=partial_progress {
+            storage.set_last_synced_block(block_id);
+            assert!(!checkpoint.record_block());
+        }
+
+        let error = checkpoint
+            .finish_sync_attempt(
+                Err(anyhow::anyhow!("simulated block polling failure")),
+                || storage.save_to_path(&storage_path),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "simulated block polling failure");
+        assert!(!checkpoint.has_unpersisted_blocks());
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(recovered.last_synced_block(), partial_progress);
+
+        let mut retry_checkpoint = SyncPersistenceCheckpoint::default();
+        let retry_progress = partial_progress.saturating_mul(2);
+        for block_id in partial_progress.saturating_add(1)..=retry_progress {
+            storage.set_last_synced_block(block_id);
+            assert!(!retry_checkpoint.record_block());
+        }
+
+        let retry_error = retry_checkpoint
+            .finish_sync_attempt(
+                Err(anyhow::anyhow!("simulated retry polling failure")),
+                || storage.save_to_path(&storage_path),
+            )
+            .unwrap_err();
+
+        assert_eq!(retry_error.to_string(), "simulated retry polling failure");
+        assert!(!retry_checkpoint.has_unpersisted_blocks());
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(recovered.last_synced_block(), retry_progress);
+    }
+
+    #[test]
+    fn sync_checkpoint_persists_partial_progress_before_note_validation_error() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+        let partial_progress = SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_sub(1);
+
+        for block_id in 1..=partial_progress {
+            storage.set_last_synced_block(block_id);
+            assert!(!checkpoint.record_block());
+        }
+
+        let validation_error = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        }
+        .validate_note_lengths()
+        .unwrap_err();
+        let error = checkpoint
+            .finish_sync_attempt(Err(validation_error.into()), || {
+                storage.save_to_path(&storage_path)
+            })
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Note vectors disagree in length")
+        );
+        assert!(!checkpoint.has_unpersisted_blocks());
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(recovered.last_synced_block(), partial_progress);
+    }
+
+    #[test]
+    fn sync_validates_all_privacy_messages_before_applying_block_updates() {
+        let invalid_message = Message {
+            new_commitments: vec![Commitment::new(
+                &AccountId::new([0; 32]),
+                &Account::default(),
+            )],
+            ..Default::default()
+        };
+        let transactions = [
+            privacy_transaction(Message::default()),
+            privacy_transaction(invalid_message),
+        ];
+        let mut applied_messages = 0_usize;
+
+        let error = WalletCore::validate_then_apply_privacy_messages(&transactions, |_| {
+            applied_messages = applied_messages.saturating_add(1);
+        })
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Note vectors disagree in length")
+        );
+        assert_eq!(applied_messages, 0);
+    }
+
+    #[test]
+    fn sync_checkpoint_keeps_persisted_cursor_and_accounts_together() {
+        let (mut storage, _) = Storage::new("test_pass").unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage_path = temp_dir.path().join("storage.json");
+        let mut checkpoint = SyncPersistenceCheckpoint::default();
+
+        let (checkpoint_account, _) = storage
+            .key_chain_mut()
+            .generate_new_public_transaction_private_key(None);
+        let checkpoint_label = Label::new("checkpoint");
+        storage
+            .add_label(
+                checkpoint_label.clone(),
+                AccountIdWithPrivacy::Public(checkpoint_account),
+            )
+            .unwrap();
+
+        for block_id in 1..=SYNC_PERSIST_CHECKPOINT_BLOCKS {
+            storage.set_last_synced_block(block_id);
+            if checkpoint.record_block() {
+                storage.save_to_path(&storage_path).unwrap();
+            }
+        }
+
+        let (tail_account, _) = storage
+            .key_chain_mut()
+            .generate_new_public_transaction_private_key(None);
+        let tail_label = Label::new("unpersisted-tail");
+        storage
+            .add_label(
+                tail_label.clone(),
+                AccountIdWithPrivacy::Public(tail_account),
+            )
+            .unwrap();
+        storage.set_last_synced_block(SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1));
+        assert!(!checkpoint.record_block());
+
+        let recovered = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(
+            recovered.last_synced_block(),
+            SYNC_PERSIST_CHECKPOINT_BLOCKS
+        );
+        assert_eq!(
+            recovered.resolve_label(&checkpoint_label),
+            Some(AccountIdWithPrivacy::Public(checkpoint_account))
+        );
+        assert!(
+            recovered
+                .key_chain()
+                .pub_account_signing_key(checkpoint_account)
+                .is_some()
+        );
+        assert_eq!(recovered.resolve_label(&tail_label), None);
+        assert!(
+            recovered
+                .key_chain()
+                .pub_account_signing_key(tail_account)
+                .is_none()
+        );
+
+        checkpoint
+            .finish_sync_attempt(Ok(()), || storage.save_to_path(&storage_path))
+            .unwrap();
+        let completed = Storage::from_path(&storage_path).unwrap();
+        assert_eq!(
+            completed.last_synced_block(),
+            SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1)
+        );
+        assert_eq!(
+            completed.resolve_label(&tail_label),
+            Some(AccountIdWithPrivacy::Public(tail_account))
+        );
+        assert!(
+            completed
+                .key_chain()
+                .pub_account_signing_key(tail_account)
+                .is_some()
+        );
     }
 }
