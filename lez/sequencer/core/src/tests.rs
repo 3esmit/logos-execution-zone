@@ -90,7 +90,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
         cross_zone: None,
-        metrics_address: SequencerConfig::DEFAULT_METRICS_ADDRESS,
+        metrics_address: None,
     }
 }
 

@@ -110,7 +110,7 @@ pub fn sequencer_config(
             auth: None,
         },
         cross_zone,
-        metrics_address: SequencerConfig::DEFAULT_METRICS_ADDRESS,
+        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
     })
 }
 

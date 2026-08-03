@@ -39,27 +39,18 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args {
-        config_path,
-        port,
-        listen_address,
-        home,
-        metrics_address,
-    } = Args::parse();
+    let args = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
 
-    let mut config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    if let Some(home) = home {
-        config.home = home;
-    }
-    if let Some(metrics_address) = metrics_address {
-        config.metrics_address = metrics_address;
-    }
+    let mut config = sequencer_service::SequencerConfig::from_path(&args.config_path)?;
+    apply_config_overrides(&args, &mut config);
 
-    install_prometheus_recorder(config.metrics_address)?;
+    if let Some(metrics_address) = config.metrics_address {
+        install_prometheus_recorder(metrics_address)?;
+    }
     let mut sequencer_handle =
-        sequencer_service::run(config, SocketAddr::new(listen_address, port)).await?;
+        sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
@@ -80,6 +71,23 @@ async fn main() -> Result<()> {
     info!("Sequencer shutdown complete");
 
     Ok(())
+}
+
+fn apply_config_overrides(args: &Args, config: &mut sequencer_service::SequencerConfig) {
+    let Args {
+        home,
+        metrics_address,
+        config_path: _,
+        port: _,
+        listen_address: _,
+    } = args;
+
+    if let Some(home) = home {
+        config.home.clone_from(home);
+    }
+    if let Some(metrics_address) = metrics_address {
+        config.metrics_address = Some(*metrics_address);
+    }
 }
 
 /// Installs the recorder on `metrics_address`.

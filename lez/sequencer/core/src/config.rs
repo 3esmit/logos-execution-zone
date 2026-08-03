@@ -66,7 +66,7 @@ pub struct SequencerConfig {
     pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_address")]
-    pub metrics_address: SocketAddr,
+    pub metrics_address: Option<SocketAddr>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -97,6 +97,7 @@ const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }
 
-const fn default_metrics_address() -> SocketAddr {
-    SequencerConfig::DEFAULT_METRICS_ADDRESS
+#[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
+const fn default_metrics_address() -> Option<SocketAddr> {
+    Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
