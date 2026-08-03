@@ -38,9 +38,10 @@ impl From<common::transaction::TxKind> for TxKind {
 
 /// Initialize metrics.
 pub fn init() {
-    blocks_total_counter().increment(0);
+    blocks_produced_total_counter().increment(0);
     mempool_failed_transactions_total_counter().increment(0);
     record_mempool_size(0);
+    record_chain_height(0);
 
     drop(block_creation_time_histogram());
     drop(transactions_per_block_histogram());
@@ -63,20 +64,26 @@ pub fn record_block_creation_time(duration: Duration) {
     block_creation_time_histogram().record(duration.as_secs_f64());
 }
 
-fn blocks_total_counter() -> Counter {
-    counter!(
-        description: "Number of blocks in chain",
+/// Height of the chain head, which moves backwards on a reorg, hence a gauge.
+pub fn record_chain_height(height: u64) {
+    gauge!(
+        description: "Height of the chain head",
         unit: Unit::Count,
-        names::BLOCKS_TOTAL
+        names::CHAIN_HEIGHT
+    )
+    .set(height as f64);
+}
+
+fn blocks_produced_total_counter() -> Counter {
+    counter!(
+        description: "Number of blocks produced by this sequencer and applied to the head",
+        unit: Unit::Count,
+        names::BLOCKS_PRODUCED_TOTAL
     )
 }
 
-pub fn set_blocks_total(value: u64) {
-    blocks_total_counter().absolute(value);
-}
-
-pub fn increment_blocks_total() {
-    blocks_total_counter().increment(1);
+pub fn increment_blocks_produced_total() {
+    blocks_produced_total_counter().increment(1);
 }
 
 pub fn record_mempool_size(size: usize) {

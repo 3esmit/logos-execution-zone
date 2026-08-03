@@ -153,6 +153,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             )
             .expect("Failed to create database with genesis block");
 
+            // Incrementing count for genesis.
+            sequencer_core_metrics::increment_blocks_produced_total();
+
             (store, genesis_state)
         }
     }
@@ -311,7 +314,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             watchers,
         };
 
-        sequencer_core_metrics::set_blocks_total(sequencer_core.chain_height());
+        sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
 
         (sequencer_core, mempool_handle)
     }
@@ -610,6 +613,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     chain.head_state(),
                     Some(&checkpoint_bytes),
                 )?;
+
+                sequencer_core_metrics::increment_blocks_produced_total();
+                sequencer_core_metrics::record_chain_height(block.header.block_id);
             }
             // Neither branch persists anything, checkpoint included: the
             // inscription it holds as pending belongs to a block that is not
@@ -941,7 +947,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         );
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
-        sequencer_core_metrics::increment_blocks_total();
 
         Ok(BlockWithMeta { block, withdrawals })
     }
@@ -1187,7 +1192,7 @@ fn apply_follow_update(
 
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
-    let (resubmit_txs, outcome) = {
+    let (resubmit_txs, outcome, head_height) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
 
         // Outcomes align with `adopted`.
@@ -1287,8 +1292,10 @@ fn apply_follow_update(
             })
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
 
-        (resubmit_txs, outcome)
+        (resubmit_txs, outcome, head_tip.map_or(0, |tip| tip.id))
     };
+
+    sequencer_core_metrics::record_chain_height(head_height);
 
     if outcome.accepted_deposits > 0 {
         info!(

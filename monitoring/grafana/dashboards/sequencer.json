@@ -19,7 +19,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "blocks_total",
+          "expr": "chain_height",
           "legendFormat": "height",
           "refId": "A"
         }
@@ -30,11 +30,40 @@
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": {
-        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" },
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "green" }, "unit": "short", "decimals": 0 },
         "overrides": [ ]
       },
-      "gridPos": { "h": 7, "w": 18, "x": 6, "y": 0 },
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 0 },
       "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "blocks_produced_total",
+          "legendFormat": "produced",
+          "refId": "A"
+        }
+      ],
+      "title": "Blocks produced by this sequencer since startup",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "produced · blocks/min" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 0 },
+      "id": 3,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "single" }
@@ -42,8 +71,8 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(blocks_total[1m]) * 60",
-          "legendFormat": "blocks/min",
+          "expr": "rate(blocks_produced_total[1m]) * 60",
+          "legendFormat": "produced · blocks/min",
           "refId": "A"
         }
       ],
@@ -65,7 +94,7 @@
         ]
       },
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 7 },
-      "id": 3,
+      "id": 4,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -94,7 +123,7 @@
         "overrides": [ ]
       },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 16 },
-      "id": 4,
+      "id": 5,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -125,7 +154,7 @@
         ]
       },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 16 },
-      "id": 5,
+      "id": 6,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -167,7 +196,7 @@
         "overrides": [ ]
       },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 25 },
-      "id": 6,
+      "id": 7,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -207,7 +236,7 @@
         ]
       },
       "gridPos": { "h": 8, "w": 18, "x": 6, "y": 25 },
-      "id": 7,
+      "id": 8,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }
@@ -249,7 +278,7 @@
         "overrides": [ ]
       },
       "gridPos": { "h": 8, "w": 6, "x": 0, "y": 33 },
-      "id": 8,
+      "id": 9,
       "options": {
         "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false },
         "showThresholdLabels": false,
@@ -290,7 +319,7 @@
         ]
       },
       "gridPos": { "h": 8, "w": 18, "x": 6, "y": 33 },
-      "id": 9,
+      "id": 10,
       "options": {
         "legend": { "displayMode": "table", "placement": "bottom", "calcs": [ "last", "max" ] },
         "tooltip": { "mode": "multi", "sort": "desc" }

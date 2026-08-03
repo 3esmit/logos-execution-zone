@@ -8,7 +8,7 @@ Every crate that emits metrics gets a sibling `metrics` crate — `lez/sequencer
 
 | Module | Gated by | Contents |
 |---|---|---|
-| `names` | always compiled | `pub const BLOCKS_TOTAL: &str = "blocks_total";` — one const per metric |
+| `names` | always compiled | `pub const BLOCKS_PRODUCED_TOTAL: &str = "blocks_produced_total";` — one const per metric |
 | `record` | `record` feature | `record_*` / `increment_*` functions, plus `init()` |
 
 The emitting crate depends on it with `features = ["record"]`; consumers that only need the names (i.e. `dashboard_gen`) take the default features and pull in nothing. Dashboards reference the same consts the recording code does, so **renaming a metric is a compile error rather than a silently empty panel**.
@@ -19,7 +19,7 @@ The recorder runs with `with_recommended_naming(true)`, which enforces Prometheu
 
 | Kind | Suffix | Example |
 |---|---|---|
-| Counter | `_total` | `blocks_total`, `submitted_transactions_total` |
+| Counter | `_total` | `blocks_produced_total`, `submitted_transactions_total` |
 | Histogram | unit | `block_creation_time_seconds` |
 | Gauge | none | `mempool_size` |
 
@@ -30,22 +30,22 @@ The recorder runs with `with_recommended_naming(true)`, which enforces Prometheu
 | Type | Use for | Example |
 |---|---|---|
 | Counter | monotonically increasing event counts | `mempool_failed_transactions_total` |
-| Gauge | a value that moves both ways | `mempool_size` |
+| Gauge | a value that moves both ways | `mempool_size`, `chain_height` (a reorg lowers it) |
 | Histogram | distributions — latencies, sizes, per-batch counts | `mempool_transaction_application_time_seconds` |
 
 Each metric gets a private constructor plus a public recording wrapper, so its description, unit and labels are declared once:
 
 ```rust
-fn blocks_total_counter() -> Counter {
+fn blocks_produced_total_counter() -> Counter {
     counter!(
-        description: "Number of blocks in chain",
+        description: "Number of blocks produced by this sequencer and applied to the head",
         unit: Unit::Count,
-        names::BLOCKS_TOTAL
+        names::BLOCKS_PRODUCED_TOTAL
     )
 }
 
-pub fn increment_blocks_total() {
-    blocks_total_counter().increment(1);
+pub fn increment_blocks_produced_total() {
+    blocks_produced_total_counter().increment(1);
 }
 ```
 
@@ -89,7 +89,7 @@ Panels are built fluently, and every query is composed from the `names` consts:
 ```rust
 Panel::timeseries("Block production rate")
     .width(18)
-    .target(rate_per_min(sequencer_core_metrics::names::BLOCKS_TOTAL, "blocks/min"))
+    .target(rate_per_min(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL, "blocks/min"))
 ```
 
 Query helpers: `rate_per_min` for counters, `avg` for histograms, and `selected_percentile` for percentile lines — the latter reads a `percentile` dashboard dropdown created by `percentile_variable`, so one panel serves p50/p90/p95/p99 instead of drawing all four. Rate windows use `$__rate_interval`, which tracks the panel's zoom.

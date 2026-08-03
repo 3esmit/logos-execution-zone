@@ -27,15 +27,27 @@ pub fn dashboard() -> Dashboard {
                     .decimals(0)
                     .color(Color::fixed("blue"))
                     .target(
-                        Target::new(sequencer_core_metrics::names::BLOCKS_TOTAL).legend("height"),
+                        Target::new(sequencer_core_metrics::names::CHAIN_HEIGHT).legend("height"),
+                    ),
+                Panel::stat("Blocks produced by this sequencer since startup")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .color(Color::fixed("green"))
+                    .target(
+                        Target::new(sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL)
+                            .legend("produced"),
                     ),
                 Panel::timeseries("Block production rate")
-                    .width(18)
+                    .width(12)
                     .unit(Unit::Short)
                     .target(rate_per_min(
-                        sequencer_core_metrics::names::BLOCKS_TOTAL,
-                        "blocks/min",
-                    )),
+                        sequencer_core_metrics::names::BLOCKS_PRODUCED_TOTAL,
+                        "produced · blocks/min",
+                    ))
+                    .with_override(
+                        FieldOverride::by_name("produced · blocks/min").color(Color::fixed("green")),
+                    ),
             ],
         )
         .row(
