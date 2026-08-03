@@ -185,3 +185,60 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
         info!("Waiting for new transactions");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "standalone")]
+    mod standalone {
+        use std::time::Duration;
+
+        use bytesize::ByteSize;
+        use common::test_utils::sequencer_sign_key_for_testing;
+        use logos_blockchain_core::mantle::ops::channel::ChannelId;
+        use sequencer_service_protocol::LocalPublicBlockHistoryRequestV1;
+        use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
+        use tempfile::tempdir;
+
+        use super::super::{BedrockConfig, SequencerConfig, run};
+
+        #[tokio::test]
+        async fn local_public_block_history_round_trips_through_standalone_rpc()
+        -> anyhow::Result<()> {
+            let temporary_directory = tempdir()?;
+            let config = SequencerConfig {
+                home: temporary_directory.path().to_path_buf(),
+                max_num_tx_in_block: 10,
+                max_block_size: ByteSize::mib(1),
+                mempool_max_size: 10_000,
+                block_create_timeout: Duration::from_secs(3_600),
+                signing_key: *sequencer_sign_key_for_testing().value(),
+                bedrock_config: BedrockConfig {
+                    channel_id: ChannelId::from([0; 32]),
+                    node_url: "http://not-used-in-standalone-test".parse()?,
+                    auth: None,
+                },
+                retry_pending_blocks_timeout: Duration::from_mins(4),
+                genesis: vec![],
+                cross_zone: None,
+            };
+
+            let handle = run(config, 0).await?;
+            let client = SequencerClientBuilder::default()
+                .build(format!("http://127.0.0.1:{}", handle.addr().port()))?;
+            let page = client
+                .get_local_public_block_history(LocalPublicBlockHistoryRequestV1 {
+                    start_block_id: 0,
+                    max_blocks: 1,
+                    expected_tip: None,
+                })
+                .await?;
+
+            assert!(handle.is_healthy());
+            let genesis_block_id = page.snapshot_tip.block_id;
+            assert_eq!(page.blocks.len(), 1);
+            assert_eq!(page.blocks[0].header.block_id, genesis_block_id);
+            assert_eq!(page.next_block_id, None);
+            Ok(())
+        }
+    }
+}

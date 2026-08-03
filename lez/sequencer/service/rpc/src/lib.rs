@@ -7,7 +7,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LeeTransaction, MembershipProof, Nonce, ProgramId,
+    LeeTransaction, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    LocalPublicTransactionReceiptV1, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -74,6 +75,29 @@ pub trait Rpc {
         tx_hash: HashType,
     ) -> Result<Option<LeeTransaction>, ErrorObjectOwned>;
 
+    /// Returns a bounded receipt from the local sequencer for a public transaction.
+    ///
+    /// The response is absent until the transaction is included and the requested number of
+    /// successor blocks exists. This endpoint is a local-chain receipt; it is not an
+    /// independently verifiable cryptographic inclusion proof or Bedrock finality.
+    #[method(name = "getLocalPublicTransactionReceipt")]
+    async fn get_local_public_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+        confirmation_depth: u8,
+    ) -> Result<Option<LocalPublicTransactionReceiptV1>, ErrorObjectOwned>;
+
+    /// Returns a bounded, snapshot-bound page of trusted local public block history.
+    ///
+    /// Callers must echo the first response's `snapshot_tip` as `expected_tip` on later pages.
+    /// The endpoint rejects a changed tip instead of mixing local-chain snapshots. It is not an
+    /// independently verifiable inclusion proof or public-network finality.
+    #[method(name = "getLocalPublicBlockHistory")]
+    async fn get_local_public_block_history(
+        &self,
+        request: LocalPublicBlockHistoryRequestV1,
+    ) -> Result<LocalPublicBlockHistoryPageV1, ErrorObjectOwned>;
+
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
         &self,
@@ -104,6 +128,12 @@ pub trait Rpc {
 
 #[cfg(test)]
 mod tests {
+    use sequencer_service_protocol::{
+        AccountId, HashType, LocalBlockHeaderReceiptV1, LocalPublicBlockHistoryPageV1,
+        LocalPublicBlockHistoryRequestV1, LocalPublicBlockV1, LocalPublicTransactionReceiptV1,
+        LocalPublicTransactionV1,
+    };
+
     use super::LeeTransaction;
 
     #[test]
@@ -114,6 +144,99 @@ mod tests {
 
         let decoded = serde_json::from_value::<Option<LeeTransaction>>(wire)?;
         assert_eq!(decoded, Some(expected));
+        Ok(())
+    }
+
+    #[test]
+    fn local_public_transaction_receipt_wire_shape_is_structured() -> Result<(), serde_json::Error>
+    {
+        let receipt = LocalPublicTransactionReceiptV1 {
+            transaction_hash: HashType([1_u8; 32]),
+            program_id: [2_u32; 8],
+            account_ids: vec![AccountId::new([3_u8; 32])],
+            instruction_word_count: 2,
+            instruction_data_sha256: HashType([4_u8; 32]),
+            inclusion: LocalBlockHeaderReceiptV1 {
+                block_id: 7,
+                block_hash: HashType([5_u8; 32]),
+                previous_block_hash: HashType([6_u8; 32]),
+                timestamp: 700,
+            },
+            confirmation_chain: vec![LocalBlockHeaderReceiptV1 {
+                block_id: 8,
+                block_hash: HashType([7_u8; 32]),
+                previous_block_hash: HashType([5_u8; 32]),
+                timestamp: 800,
+            }],
+        };
+
+        let wire = serde_json::to_value(&receipt)?;
+        assert_eq!(wire["transaction_hash"], "01".repeat(32));
+        assert_eq!(
+            wire["program_id"],
+            serde_json::json!([2_u32, 2, 2, 2, 2, 2, 2, 2])
+        );
+        assert_eq!(
+            wire["account_ids"][0],
+            AccountId::new([3_u8; 32]).to_string()
+        );
+        assert_eq!(wire["inclusion"]["block_id"], 7);
+        assert_eq!(wire["confirmation_chain"].as_array().map(Vec::len), Some(1));
+
+        let decoded = serde_json::from_value::<LocalPublicTransactionReceiptV1>(wire)?;
+        assert_eq!(decoded, receipt);
+        Ok(())
+    }
+
+    #[test]
+    fn local_public_block_history_round_trips_complete_transactions()
+    -> Result<(), serde_json::Error> {
+        let tip = LocalBlockHeaderReceiptV1 {
+            block_id: 8,
+            block_hash: HashType([8_u8; 32]),
+            previous_block_hash: HashType([7_u8; 32]),
+            timestamp: 800,
+        };
+        let transaction = common::test_utils::produce_dummy_empty_transaction();
+        let page = LocalPublicBlockHistoryPageV1 {
+            snapshot_tip: tip.clone(),
+            blocks: vec![LocalPublicBlockV1 {
+                header: LocalBlockHeaderReceiptV1 {
+                    block_id: 7,
+                    block_hash: HashType([7_u8; 32]),
+                    previous_block_hash: HashType([6_u8; 32]),
+                    timestamp: 700,
+                },
+                public_transactions: vec![LocalPublicTransactionV1 {
+                    transaction_hash: HashType([1_u8; 32]),
+                    transaction,
+                }],
+            }],
+            next_block_id: Some(8),
+        };
+
+        let wire = serde_json::to_value(&page)?;
+        assert_eq!(wire["snapshot_tip"]["block_id"], 8);
+        assert_eq!(wire["blocks"][0]["header"]["timestamp"], 700);
+        assert!(wire["blocks"][0]["public_transactions"][0]["transaction"].is_string());
+        assert_eq!(wire["next_block_id"], 8);
+
+        let decoded = serde_json::from_value::<LocalPublicBlockHistoryPageV1>(wire)?;
+        assert_eq!(decoded, page);
+
+        let request = LocalPublicBlockHistoryRequestV1 {
+            start_block_id: 7,
+            max_blocks: 2,
+            expected_tip: Some(tip),
+        };
+        let request_wire = serde_json::to_value(&request)?;
+        assert_eq!(request_wire["start_block_id"], 7);
+        assert_eq!(request_wire["max_blocks"], 2);
+        assert!(request_wire["expected_tip"].is_object());
+        assert_eq!(
+            serde_json::from_value::<LocalPublicBlockHistoryRequestV1>(request_wire)?,
+            request
+        );
         Ok(())
     }
 }

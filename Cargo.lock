@@ -9072,13 +9072,17 @@ dependencies = [
  "jsonrpsee",
  "lee",
  "log",
+ "logos-blockchain-core",
  "mempool",
  "programs",
  "sequencer_core",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "sha2",
+ "tempfile",
  "tokio",
  "tokio-util",
+ "url",
 ]
 
 [[package]]
@@ -9089,6 +9093,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 
