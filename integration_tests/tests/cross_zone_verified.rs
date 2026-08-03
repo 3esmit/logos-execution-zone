@@ -14,6 +14,7 @@ use std::{net::SocketAddr, time::Duration};
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use cross_zone_outbox_core::outbox_pda;
+use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
@@ -24,10 +25,29 @@ use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
-use tokio::test;
+use tokio::{test, time::Instant};
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
+const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(3);
+const DELIVERY_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
+
+#[derive(Debug, Default)]
+struct DeliveryObservation {
+    polls: u32,
+    last_finalized_block: Option<u64>,
+    last_payload_bytes: usize,
+    last_error: Option<String>,
+}
+
+impl DeliveryObservation {
+    fn timeout_message(&self, elapsed: Duration) -> String {
+        format!(
+            "Zone B's indexer did not record the verified payload after {elapsed:?}; polls={}, last finalized block={:?}, payload bytes={}, last error={:?}",
+            self.polls, self.last_finalized_block, self.last_payload_bytes, self.last_error
+        )
+    }
+}
 
 #[test]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
@@ -145,18 +165,85 @@ async fn wait_for_indexer_delivery(
     let account_id = indexer_service_protocol::AccountId {
         value: record_id.into_value(),
     };
-    let wait = async {
-        loop {
-            let account =
-                indexer_service_rpc::RpcClient::get_account(&**indexer, account_id).await?;
-            let data = account.data.0;
-            if !data.is_empty() {
-                return Ok::<Vec<u8>, anyhow::Error>(data);
+    let started = Instant::now();
+    let deadline = started
+        .checked_add(DELIVERY_TIMEOUT)
+        .context("failed to calculate indexer delivery deadline")?;
+    let mut observation = DeliveryObservation::default();
+
+    loop {
+        observation.polls = observation.polls.saturating_add(1);
+        let previous_finalized = observation.last_finalized_block;
+
+        match tokio::time::timeout(DELIVERY_RPC_TIMEOUT, indexer.get_last_finalized_block_id())
+            .await
+        {
+            Ok(Ok(finalized)) => observation.last_finalized_block = finalized,
+            Ok(Err(error)) => observation.last_error = Some(format!("finalized-head: {error}")),
+            Err(_) => {
+                observation.last_error = Some(format!(
+                    "finalized-head timed out after {DELIVERY_RPC_TIMEOUT:?}"
+                ));
             }
-            tokio::time::sleep(Duration::from_secs(3)).await;
         }
-    };
-    tokio::time::timeout(DELIVERY_TIMEOUT, wait)
+
+        match tokio::time::timeout(
+            DELIVERY_RPC_TIMEOUT,
+            indexer_service_rpc::RpcClient::get_account(&**indexer, account_id),
+        )
         .await
-        .context("Zone B's indexer did not record the payload in time")?
+        {
+            Ok(Ok(account)) => {
+                let data = account.data.0;
+                observation.last_payload_bytes = data.len();
+                if !data.is_empty() {
+                    return Ok(data);
+                }
+            }
+            Ok(Err(error)) => observation.last_error = Some(format!("account query: {error}")),
+            Err(_) => {
+                observation.last_error = Some(format!(
+                    "account query timed out after {DELIVERY_RPC_TIMEOUT:?}"
+                ));
+            }
+        }
+
+        if previous_finalized != observation.last_finalized_block || observation.polls == 1 {
+            log::info!(
+                "waiting for verified cross-zone payload: poll={}, finalized block={:?}, payload bytes={}",
+                observation.polls,
+                observation.last_finalized_block,
+                observation.last_payload_bytes
+            );
+        }
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            anyhow::bail!(observation.timeout_message(started.elapsed()));
+        }
+        tokio::time::sleep(DELIVERY_POLL_INTERVAL.min(remaining)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::DeliveryObservation;
+
+    #[test]
+    fn timeout_message_reports_last_indexer_observation() {
+        let observation = DeliveryObservation {
+            polls: 12,
+            last_finalized_block: Some(42),
+            last_payload_bytes: 0,
+            last_error: Some("account query timed out".to_owned()),
+        };
+
+        let message = observation.timeout_message(Duration::from_secs(36));
+        assert!(message.contains("polls=12"));
+        assert!(message.contains("last finalized block=Some(42)"));
+        assert!(message.contains("payload bytes=0"));
+        assert!(message.contains("account query timed out"));
+    }
 }
