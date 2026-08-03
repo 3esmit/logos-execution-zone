@@ -7,3 +7,4 @@
 
 pub mod announcement;
 pub mod directory;
+pub mod keys_provider;
