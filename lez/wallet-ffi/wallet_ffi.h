@@ -1529,6 +1529,35 @@ enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *hand
                                                        struct FfiTransferResult *out_result);
 
 /**
+ * Register a public account on a standalone local network.
+ *
+ * This initializes a public account using the authenticated-transfer program
+ * compiled into this FFI artifact. Use this path for local-development
+ * sequencers whose builtin program identity comes from the local artifact
+ * instead of the immutable Testnet profile.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `account_id`: Account ID to register
+ * - `out_result`: Output pointer for registration result
+ *
+ * # Returns
+ * - `Success` if the registration was submitted successfully
+ * - Error code on failure
+ *
+ * # Memory
+ * The result must be freed with `wallet_ffi_free_transfer_result()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `account_id` must be a valid pointer to a `FfiBytes32` struct
+ * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+ */
+enum WalletFfiError wallet_ffi_register_public_account_local(struct WalletHandle *handle,
+                                                             const struct FfiBytes32 *account_id,
+                                                             struct FfiTransferResult *out_result);
+
+/**
  * Register a private account on the network.
  *
  * This initializes a private account. The account must be
