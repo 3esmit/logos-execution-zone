@@ -382,6 +382,10 @@ jobs:
         uses: ./.github/actions/run-in-ci-image
         with:
           image: ${{ needs.ci-image.outputs.image }}
+          # `cargo risczero build` starts its own guest-builder container. Pin
+          # that Rust toolchain separately from the CI image.
+          env: |
+            RISC0_DOCKER_CONTAINER_TAG=r0.1.94.1
           run: just build-artifacts
 
       - name: Check if artifacts match repository

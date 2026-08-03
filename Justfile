@@ -6,6 +6,10 @@ default:
 # ---- Configuration ----
 ARTIFACTS := "artifacts"
 
+# Guest builder used to regenerate committed artifacts. Keep aligned with CI so
+# the documented `just build-artifacts` command produces reproducible binaries.
+RISC0_DOCKER_CONTAINER_TAG := "r0.1.94.1"
+
 # On macOS the integration-test binary links pyo3 against the CommandLineTools
 # Python framework with no embedded rpath, so it needs this to launch. Empty on
 # Linux/CI, which is unaffected.
@@ -15,8 +19,8 @@ DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Develope
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
-    @just build-artifact lee/privacy_preserving_circuit
-    @just build-artifact lez/programs programs
+    @RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} just build-artifact lee/privacy_preserving_circuit
+    @RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} just build-artifact lez/programs programs
 
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
