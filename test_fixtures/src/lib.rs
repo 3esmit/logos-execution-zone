@@ -25,9 +25,7 @@ use wallet::{
 };
 
 use crate::{
-    config::MultiNodeTestContextConfig,
-    indexer_client::IndexerClient,
-    setup::{
+    config::{MultiNodeTestContextConfig, bedrock_funding_key}, indexer_client::IndexerClient, setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
         setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
         setup_wallet, sync_wallet_from_prebuilt,
@@ -443,7 +441,7 @@ impl Drop for TestContext {
                 sequencer_client: _,
             } in sequencer_components.values_mut()
             {
-                let sequencer_handle = sequencer_handle
+                let mut sequencer_handle = sequencer_handle
                     .take()
                     .expect("Sequencer handle should be present in TestContext drop");
 
@@ -605,6 +603,7 @@ impl ZoneTestContextBuilder {
                 channel_id: mn_config.bedrock_channel,
                 node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
                 auth: None,
+                funding_key: bedrock_funding_key(),
             },
             &Ed25519Key::from_bytes(
                 sequencer_keys

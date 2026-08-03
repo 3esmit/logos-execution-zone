@@ -67,6 +67,18 @@ pub trait DBIO {
         cell.put_batch(self.db(), params, write_batch)
     }
 
+    /// Stage a cell deletion into `write_batch`, the counterpart of
+    /// [`Self::put_batch`]. Deleting an absent key is a no-op (rocksdb
+    /// semantics).
+    fn del_batch<T: SimpleStorableCell>(
+        &self,
+        params: T::KeyParams,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        write_batch.delete_cf(&T::column_ref(self.db()), T::key_constructor(params)?);
+        Ok(())
+    }
+
     /// Delete a cell. Deleting an absent key is a no-op (rocksdb semantics).
     fn del<T: SimpleStorableCell>(&self, params: T::KeyParams) -> DbResult<()> {
         let cf_ref = T::column_ref(self.db());

@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     path::Path,
     sync::{Arc, Mutex},
     time::Instant,
@@ -15,6 +16,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use config::{GenesisAction, SequencerConfig};
+use cross_zone_inbox_core::CrossZoneMessage;
 use futures::StreamExt as _;
 use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
@@ -31,13 +33,17 @@ pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 pub use storage::error::DbError;
 use storage::sequencer::{
-    RocksDBIO,
-    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord},
+    RocksDBIO, StoreUpdate,
+    sequencer_cells::{
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, WithdrawalReconciliationKey,
+        ZoneAnchorRecord,
+    },
 };
 
 use crate::{
-    block_publisher::{BlockPublisherTrait, MsgId, ZoneSdkPublisher},
+    block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
+    task_group::{StoreRelease, TaskGroup},
 };
 
 pub mod block_publisher;
@@ -47,6 +53,23 @@ pub mod cross_zone_watcher;
 
 #[cfg(feature = "mock")]
 pub mod mock;
+pub mod task_group;
+
+/// Failed production attempts before a cross-zone dispatch is given up on.
+///
+/// One attempt per block, so this is tens of seconds of retrying. Enough for a
+/// failure that is not the message's fault to clear, short enough that a message
+/// which will never execute stops being retried.
+const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
+
+/// Cross-zone deliveries one block may carry.
+///
+/// Each one costs a guest execution whether it succeeds or fails, and what
+/// queues them up is chosen by peer zones. Without a bound, a backlog decides
+/// how long a block takes to build and leaves no room for user transactions,
+/// since store-drained work is taken before the mempool. The rest wait one
+/// block; nothing is dropped.
+const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -70,6 +93,10 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     block_publisher: BP,
+    /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
+    /// store handle, so leaving them running would keep the `RocksDB` lock held
+    /// and make the home directory unopenable by a restarting sequencer.
+    watchers: TaskGroup,
 }
 
 impl<BP: BlockPublisherTrait> SequencerCore<BP> {
@@ -188,17 +215,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let is_fresh_start = initial_checkpoint.is_none();
 
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
-        replay_unfulfilled_deposit_events(&store, mempool_handle.clone());
 
         let block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
-            Self::on_checkpoint(store.dbio()),
-            Self::on_finalized_block(store.dbio()),
-            Self::on_deposit_event(store.dbio(), mempool_handle.clone()),
-            Self::on_withdraw_event(store.dbio()),
             Self::on_follow(store.dbio(), Arc::clone(&chain), mempool_handle.clone()),
         )
         .await
@@ -206,14 +228,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         // Cross-zone messaging: start a watcher per configured peer. The inbox
         // config account is seeded into genesis state in `build_genesis_state`.
-        if let Some(cross_zone) = &config.cross_zone {
-            cross_zone_watcher::spawn_watchers(
-                &config.bedrock_config,
-                cross_zone,
-                config.block_create_timeout,
-                &mempool_handle,
-            );
-        }
+        let watchers = config
+            .cross_zone
+            .as_ref()
+            .map_or_else(TaskGroup::default, |cross_zone| {
+                cross_zone_watcher::spawn_watchers(
+                    &config.bedrock_config,
+                    cross_zone,
+                    config.block_create_timeout,
+                    &store.dbio(),
+                )
+            });
         // Before producing, verify our local state still belongs to the chain
         // the channel serves and replay any channel blocks we are missing
         // (e.g. from other sequencers).
@@ -241,8 +266,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 "First pending block on fresh start should be the genesis block"
             );
 
+            let mut last_checkpoint = None;
             for block in &pending_blocks {
-                block_publisher
+                let outcome = block_publisher
                     .publish_block(block, vec![])
                     .await
                     .unwrap_or_else(|err| {
@@ -251,6 +277,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                             block.header.block_id
                         )
                     });
+                last_checkpoint = Some(outcome.checkpoint);
+            }
+
+            // These blocks are already stored, so only the sdk's pending set
+            // moved. Checkpoints are cumulative — persisting just the last one
+            // is both sufficient and the only way to keep this loop linear.
+            if let Some(checkpoint) = last_checkpoint {
+                store
+                    .set_zone_checkpoint(&checkpoint)
+                    .expect("Failed to persist checkpoint after republishing on fresh start");
             }
         }
 
@@ -260,6 +296,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             mempool,
             sequencer_config: config,
             block_publisher,
+            watchers,
         };
 
         (sequencer_core, mempool_handle)
@@ -416,6 +453,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .context("Failed to read stored block")?
             {
                 Some(stored) if stored.header.hash == block_hash => {
+                    // Already applied, but the channel serving it is what makes
+                    // it irreversible, so its deliveries are settled and their
+                    // records are owed nothing. Without this a restart leaves a
+                    // record for every delivery it already published, and
+                    // nothing downstream would ever remove them.
+                    settle_reconstructed_deliveries(store, &stored);
                     store
                         .set_zone_anchor(&record)
                         .context("Failed to persist zone anchor")?;
@@ -448,169 +491,38 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        // Persist like the follow path: the tip meta stays pinned to the head
-        // tip even when the reconstructed block lands below it.
-        let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
-        let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
-        store
-            .dbio()
-            .store_followed_blocks(
-                &[(block, true)],
-                head_tip.as_ref(),
-                chain.head_state(),
-                final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
-            )
-            .context("Failed to persist reconstructed block")?;
-
-        // Mark the deposits' pending records submitted so the production-time
-        // guard drops the mints cold-start backfill re-queued for them. Withdraw
-        // intents are deliberately not counted: backfill already re-delivered and
-        // dropped their finalized L1 events, so an increment here would never be
-        // consumed and would leave a phantom count.
-        let deposit_event_ids: Vec<_> = block
+        // A reconstructed block is finalized, so any deposit it mints is
+        // permanently reflected in state (its receipt PDA); drop the pending
+        // record backfill may have re-delivered, so the drain stops re-minting.
+        let finalized_deposit_ids: Vec<_> = block
             .body
             .transactions
             .iter()
             .filter_map(extract_bridge_deposit_id)
             .collect();
-        store
-            .mark_deposit_events_submitted(&deposit_event_ids, block_id)
-            .context("Failed to mark reconstructed deposits submitted")?;
+        // The same for the deliveries it carries: the inbox has seen them, so
+        // the drain would skip them anyway, and the records are owed nothing.
+        let finalized_dispatch_keys = settled_dispatch_keys(&store.dbio(), block);
 
+        // The tip meta stays pinned to the head tip even when the reconstructed
+        // block lands below it, and the anchor only advances if the block
+        // itself landed.
+        let head_tip = chain.head_tip().map(|head| BlockMeta::from(&head));
+        let final_meta = chain.final_tip().map(|meta| BlockMeta::from(&meta));
         store
-            .set_zone_anchor(&record)
-            .context("Failed to persist zone anchor")?;
+            .dbio()
+            .store_update(&StoreUpdate {
+                blocks: &[(block, true)],
+                head_tip: head_tip.as_ref(),
+                final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
+                remove_deposit_records: &finalized_deposit_ids,
+                remove_dispatch_records: &finalized_dispatch_keys,
+                zone_anchor: Some(&record),
+                ..StoreUpdate::new(chain.head_state())
+            })
+            .context("Failed to persist reconstructed block")?;
+
         Ok(())
-    }
-
-    fn on_checkpoint(dbio: Arc<RocksDBIO>) -> block_publisher::CheckpointSink {
-        Box::new(move |cp| {
-            let bytes = match serde_json::to_vec(&cp) {
-                Ok(b) => b,
-                Err(err) => {
-                    error!("Failed to serialize zone-sdk checkpoint: {err:#}");
-                    return;
-                }
-            };
-            if let Err(err) = dbio.put_zone_sdk_checkpoint_bytes(&bytes) {
-                error!("Failed to persist zone-sdk checkpoint: {err:#}");
-            }
-        })
-    }
-
-    fn on_finalized_block(dbio: Arc<RocksDBIO>) -> block_publisher::FinalizedBlockSink {
-        Box::new(move |block_id| {
-            // NOTE: Theoretically Zone SDK may report finalization happening multiple times for the
-            // same block. In practice this is very unlikely to happen. For that to
-            // happen Sequencer should crash between receiving Finalized and Checkpoint events while
-            // these events happen very fast (because Checkpoints are generated by Zone SDK
-            // locally).
-
-            if let Err(err) = dbio.clean_pending_blocks_up_to(block_id) {
-                error!("Failed to mark pending blocks finalized up to {block_id}: {err:#}");
-            }
-
-            match dbio.remove_fulfilled_pending_deposit_events_up_to_block(block_id) {
-                Ok(0) => {}
-                Ok(removed) => {
-                    info!(
-                        "Removed {removed} fulfilled pending deposit events up to finalized block {block_id}"
-                    );
-                }
-                Err(err) => {
-                    error!(
-                        "Failed to remove fulfilled pending deposit events up to block {block_id}: {err:#}"
-                    );
-                }
-            }
-        })
-    }
-
-    fn on_deposit_event(
-        dbio: Arc<RocksDBIO>,
-        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    ) -> block_publisher::OnDepositEventSink {
-        Box::new(move |deposit| {
-            // NOTE: Theoretically Zone SDK may report multiple identical deposits. In practice this
-            // is very unlikely to happen. For that to happen Sequencer should crash
-            // between receiving Deposit and Checkpoint events while these events happen
-            // very fast (because Checkpoints are generated by Zone SDK locally).
-
-            let dbio = Arc::clone(&dbio);
-            let mempool_handle = mempool_handle.clone();
-
-            Box::pin(async move {
-                let id_hex = hex::encode(deposit.op_id);
-                info!("Observed Bedrock Deposit event with id: {id_hex}");
-
-                let event_record = pending_deposit_event_record(&deposit);
-
-                match dbio.add_pending_deposit_event(event_record.clone()) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        info!(
-                            "Deposit event {id_hex} already persisted as unfulfilled, skipping duplicate enqueue",
-                        );
-                        return;
-                    }
-                    Err(err) => {
-                        error!(
-                            "Failed to persist unfulfilled deposit event {id_hex} before enqueue: {err:#}. Deposit will be lost.",
-                        );
-                        return;
-                    }
-                }
-
-                let tx = match build_bridge_deposit_tx_from_event(&event_record) {
-                    Ok(tx) => tx,
-                    Err(err) => {
-                        error!(
-                            "Failed to build transaction from Bedrock deposit event {id_hex}: {err:#}. Deposit will be lost.",
-                        );
-                        return;
-                    }
-                };
-
-                if let Err(err) = mempool_handle
-                    .push((TransactionOrigin::Sequencer, tx))
-                    .await
-                {
-                    error!(
-                        "Failed to queue sequencer transaction built from finalized Bedrock event: {err:#}. Deposit will be lost."
-                    );
-                }
-            })
-        })
-    }
-
-    fn on_withdraw_event(dbio: Arc<RocksDBIO>) -> block_publisher::OnWithdrawEventSink {
-        Box::new(move |withdraw| {
-            let dbio = Arc::clone(&dbio);
-            Box::pin(async move {
-                let hash_encoded = hex::encode(withdraw.tx_hash.as_ref());
-                let withdraw_key = match withdraw_event_reconciliation_key(&withdraw.op.outputs) {
-                    Ok(key) => key,
-                    Err(err) => {
-                        error!(
-                            "Failed to build reconciliation key for Bedrock Withdraw event with tx_hash {hash_encoded}: {err:#}"
-                        );
-                        return;
-                    }
-                };
-
-                match dbio.consume_unseen_withdraw_count(withdraw_key) {
-                    Ok(true) => {
-                        info!("Validated Bedrock Withdraw event with tx_hash: {hash_encoded}");
-                    }
-                    Ok(false) => warn!(
-                        "Unexpected Bedrock Withdraw event with tx_hash {hash_encoded}: no matching unseen withdraw found"
-                    ),
-                    Err(err) => error!(
-                        "Failed to reconcile Bedrock Withdraw event with tx_hash {hash_encoded}: {err:#}"
-                    ),
-                }
-            })
-        })
     }
 
     /// Publisher sink adapter over [`apply_follow_update`].
@@ -626,31 +538,30 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Produces a new block from mempool transactions and publishes it via zone-sdk.
     pub async fn produce_new_block(&mut self) -> Result<u64> {
-        let BlockWithMeta {
-            block,
-            deposit_event_ids,
-            withdrawals,
-        } = self
+        let BlockWithMeta { block, withdrawals } = self
             .build_block_from_mempool()
             .context("Failed to build block from mempool transactions")?;
 
-        let withdrawal_reconciliation_keys = withdrawals
-            .iter()
-            .map(|withdraw| withdraw_event_reconciliation_key(&withdraw.outputs))
-            .collect::<Result<_>>()
-            .context("Failed to build reconciliation keys for block withdrawals")?;
-
-        let this_msg = self
+        let block_publisher::PublishOutcome {
+            this_msg,
+            checkpoint,
+            released_notes,
+        } = self
             .block_publisher
             .publish_block(&block, withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
 
+        let withdrawal_reconciliation_keys: Vec<_> = released_notes
+            .iter()
+            .map(withdrawal_reconciliation_key)
+            .collect();
+
         self.record_produced_block(
             this_msg,
             &block,
-            &deposit_event_ids,
-            withdrawal_reconciliation_keys,
+            &withdrawal_reconciliation_keys,
+            &checkpoint,
         )?;
 
         Ok(block.header.block_id)
@@ -669,9 +580,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &mut self,
         this_msg: MsgId,
         block: &Block,
-        deposit_event_ids: &[HashType],
-        withdrawal_reconciliation_keys: Vec<WithdrawalReconciliationKey>,
+        withdrawal_reconciliation_keys: &[WithdrawalReconciliationKey],
+        checkpoint: &block_publisher::SequencerCheckpoint,
     ) -> Result<()> {
+        let checkpoint_bytes = block_store::checkpoint_bytes(checkpoint)?;
+
         let mut chain = self.chain.lock().expect("chain state mutex poisoned");
         match chain.apply_produced(this_msg, block) {
             AcceptOutcome::Applied => {
@@ -679,11 +592,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // with the follow path.
                 self.store.update(
                     block,
-                    deposit_event_ids,
                     withdrawal_reconciliation_keys,
                     chain.head_state(),
+                    Some(&checkpoint_bytes),
                 )?;
             }
+            // Neither branch persists anything, checkpoint included: the
+            // inscription it holds as pending belongs to a block that is not
+            // ours to keep.
             AcceptOutcome::AlreadyApplied => {
                 warn!(
                     "Produced block {} lost a competing-write race, skipping persistence",
@@ -704,20 +620,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "splitting the produce-path accumulators into a struct buys nothing"
-    )]
     fn apply_mempool_transaction(
-        store: &SequencerStore,
         state: &mut lee::V03State,
         origin: TransactionOrigin,
         tx: &LeeTransaction,
         block_height: u64,
         timestamp: u64,
-        deposit_event_ids: &mut Vec<HashType>,
         withdrawals: &mut Vec<WithdrawArg>,
-    ) -> Result<bool> {
+    ) -> bool {
         let tx_hash = tx.hash();
         match origin {
             TransactionOrigin::User => {
@@ -727,7 +637,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         error!(
                             "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
                         );
-                        return Ok(false);
+                        return false;
                     }
                 };
 
@@ -742,32 +652,71 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     panic!("Sequencer may only generate Public transactions, found {tx:#?}");
                 };
 
-                if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
-                    if store
-                        .is_deposit_event_submitted(deposit_op_id)
-                        .context("Failed to check whether deposit was already submitted")?
-                    {
-                        info!("Skipping already-submitted bridge deposit {deposit_op_id}");
-                        return Ok(false);
-                    }
-                    deposit_event_ids.push(deposit_op_id);
+                // Bridge deposits are deduped by their receipt PDA in chain
+                // state (drained only when unminted, no-op on replay), so no
+                // node-local guard is needed here.
+                //
+                // Skip-and-log rather than propagate: a drained deposit is
+                // re-fed from the store every turn and only finality removes it,
+                // so a `?` here would let a single unexecutable mint (e.g. a
+                // bridge escrow under-funded relative to the L1 deposit, which
+                // every sequencer hits identically) abort production on all of
+                // them forever. Skipping keeps the record queued for retry
+                // without halting the node.
+                if let Err(err) =
+                    state.transition_from_public_transaction(public_tx, block_height, timestamp)
+                {
+                    error!(
+                        "Sequencer-generated transaction {tx_hash} failed execution: {err:#?}, skipping it",
+                    );
+                    return false;
                 }
-
-                state
-                    .transition_from_public_transaction(public_tx, block_height, timestamp)
-                    .context("Failed to execute sequencer-generated transaction")?;
             }
         }
 
         info!("Validated transaction with hash {tx_hash}, including it in block");
-        Ok(true)
+        true
     }
 
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
-        // Build on the head: its tip is the parent, its state the validation base.
-        let (prev_block_hash, new_block_height, mut working_state) = {
+        // Decoded outside the chain lock, and read before it is taken: the usual
+        // case is no delivery records at all, and decoding is the expensive part.
+        // One that does not decode is dropped rather than kept, since nothing
+        // will ever turn those bytes into a block transaction.
+        let mut settled = Vec::new();
+        let recorded_dispatches: Vec<_> = self
+            .store
+            .dbio()
+            .get_pending_cross_zone_dispatches()
+            .context("Failed to load pending cross-zone dispatches")?
+            .into_iter()
+            .filter_map(
+                |record| match borsh::from_slice::<LeeTransaction>(&record.transaction) {
+                    Ok(tx) => {
+                        let message = extract_cross_zone_dispatch(&tx);
+                        Some((record.message_key, message, tx))
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Dropping pending cross-zone dispatch {} that does not decode: {err:#}",
+                            hex::encode(record.message_key)
+                        );
+                        settled.push(record.message_key);
+                        None
+                    }
+                },
+            )
+            .collect();
+
+        // Build on the head: its tip is the parent, its state the validation
+        // base.
+        //
+        // The delivery records are classified in here rather than after, so the
+        // final state can be read by reference. Cloning it cost a full state
+        // copy on every block of every zone, cross-zone or not.
+        let (prev_block_hash, new_block_height, mut working_state, pending_dispatches) = {
             let chain = self.chain.lock().expect("chain state mutex poisoned");
             let tip = chain.head_tip();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
@@ -776,12 +725,73 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     .expect("block id should not overflow")
             });
             let prev = tip.map_or(HashType([0; 32]), |head| head.hash);
-            (prev, height, chain.head_state().clone())
+
+            // Three outcomes per record. Already in the final state means the
+            // delivery is irreversible, so the record is dropped; that is the
+            // only thing that removes a record the watcher re-added after its
+            // delivery had already settled, which it does whenever it re-reads a
+            // slot it has consumed. Already in the head state but not the final
+            // one means the delivery is on this chain but could still orphan, so
+            // the record is skipped and kept. Otherwise it goes in this block.
+            let mut pending: VecDeque<LeeTransaction> = VecDeque::new();
+            for (key, message, tx) in recorded_dispatches {
+                match message {
+                    Some(message) if dispatch_already_delivered(chain.final_state(), &message) => {
+                        settled.push(key);
+                    }
+                    Some(message) if dispatch_already_delivered(chain.head_state(), &message) => {}
+                    _ if pending.len() >= MAX_DISPATCHES_PER_BLOCK => {}
+                    _ => pending.push_back(tx),
+                }
+            }
+
+            (prev, height, chain.head_state().clone(), pending)
         };
 
+        if !settled.is_empty()
+            && let Err(err) = self
+                .store
+                .dbio()
+                .drop_settled_cross_zone_dispatches(&settled)
+        {
+            // Only bookkeeping: the deliveries themselves are irreversible, and
+            // the next turn tries again.
+            warn!(
+                "Failed to drop {} settled delivery record(s): {err:#}",
+                settled.len()
+            );
+        }
+
         let mut valid_transactions = Vec::new();
-        let mut deposit_event_ids = Vec::new();
         let mut withdrawals = Vec::new();
+
+        // Bridge deposit mints are drained from the store, not the mempool: the
+        // follow path records the event durably but cannot enqueue the mint
+        // itself (it runs on the publisher's drive task, where an await stalls
+        // the very task production needs). Draining here also subsumes the old
+        // startup replay.
+        //
+        // Skip any deposit whose receipt PDA already exists in the state we
+        // build on — it was minted by us or by a peer whose block we adopted.
+        // An orphan reverts the receipt with the block, so the next turn
+        // re-mints without any bookkeeping of our own.
+        let pending_deposits: VecDeque<LeeTransaction> = self
+            .store
+            .get_pending_deposit_events()
+            .context("Failed to load pending deposit events")?
+            .into_iter()
+            .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
+            .filter_map(|record| {
+                build_bridge_deposit_tx_from_event(&record)
+                    .inspect_err(|err| {
+                        warn!(
+                            "Skipping pending deposit event {} due to tx build failure: {err:#}",
+                            hex::encode(record.deposit_op_id)
+                        );
+                    })
+                    .ok()
+            })
+            .collect();
 
         let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
             .expect("`max_block_size` should fit into usize");
@@ -792,7 +802,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
-        while let Some((origin, tx)) = self.mempool.pop() {
+        // Everything drained from the store first, then user work. `from_store`
+        // is not the same as a `Sequencer` origin: it says the transaction has a
+        // record behind it and so needs no requeue, where the origin only says
+        // it was not submitted by a user.
+        let mut pending_from_store = pending_deposits;
+        pending_from_store.extend(pending_dispatches);
+        while let Some((origin, tx, from_store)) = pending_from_store
+            .pop_front()
+            .map(|tx| (TransactionOrigin::Sequencer, tx, true))
+            .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
+        {
             let tx_hash = tx.hash();
 
             let temp_valid_transactions = [
@@ -813,25 +833,59 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .len();
 
             if block_size > max_block_size {
+                // Would a block carrying nothing but this still be too big? Then
+                // it does not fit in any block and deferring it defers it for
+                // ever. A store-drained transaction is at the head of the queue
+                // every turn, so breaking here would stop production reaching
+                // anything behind it, including the whole mempool, permanently.
+                // Count it against the delivery instead so it is given up on.
+                //
+                // Measured on its own rather than from `block_size`, which also
+                // counts whatever this block already holds: a transaction that
+                // merely does not fit *today* is the ordinary deferral below.
+                if from_store
+                    && !self.fits_in_an_empty_block(
+                        &tx,
+                        &clock_lee_tx,
+                        new_block_height,
+                        prev_block_hash,
+                        new_block_timestamp,
+                    )?
+                {
+                    error!(
+                        "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
+                         {max_block_size} byte limit; giving up on it rather than stalling production",
+                    );
+                    self.count_dispatch_failure(&tx);
+                    continue;
+                }
+
                 warn!(
                     "Transaction with hash {tx_hash} deferred to next block: \
                      block size {block_size} bytes would exceed limit of {max_block_size} bytes",
                 );
-                self.mempool.push_front((origin, tx));
+                // Anything drained from the store needs no requeue: its record
+                // stays there and is drained again on the next turn.
+                if !from_store {
+                    self.mempool.push_front((origin, tx));
+                }
                 break;
             }
 
             if Self::apply_mempool_transaction(
-                &self.store,
                 &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
                 new_block_timestamp,
-                &mut deposit_event_ids,
                 &mut withdrawals,
-            )? {
+            ) {
                 valid_transactions.push(tx);
+            } else {
+                // A failed transaction is simply left out of the block, except a
+                // dispatch: that one is re-fed from the store every turn, so one
+                // that can never execute would fail on every block for ever.
+                self.count_dispatch_failure(&tx);
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -861,11 +915,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             now.elapsed().as_secs()
         );
 
-        Ok(BlockWithMeta {
-            block,
-            deposit_event_ids,
-            withdrawals,
-        })
+        Ok(BlockWithMeta { block, withdrawals })
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -896,10 +946,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     }
 
     /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
-    /// finalized. Idempotent. Production callers don't invoke this directly —
-    /// it's wired up in `start_from_config` to the publisher's
-    /// `on_finalized_block` sink, which fires on `Event::TxsFinalized` /
-    /// `Event::FinalizedInscriptions`. Kept on the type for tests.
+    /// finalized. Idempotent. Production no longer calls this: finalization
+    /// flips now ride the follow path's atomic write via
+    /// [`StoreUpdate::finalized_up_to`]. Kept on the type for tests.
     // TODO: Delete blocks instead of marking them as finalized. Current
     // approach is used because we still have `GetBlockDataRequest`.
     pub fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
@@ -925,6 +974,93 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &self.block_publisher
     }
 
+    /// Whether a block carrying nothing but `tx` and the clock would be within
+    /// the size limit.
+    ///
+    /// Distinguishes "does not fit in this block" from "does not fit in any
+    /// block". The first is an ordinary deferral; the second, for a transaction
+    /// the store re-feeds every turn, is a permanent stall unless it is given up
+    /// on.
+    fn fits_in_an_empty_block(
+        &self,
+        tx: &LeeTransaction,
+        clock_tx: &LeeTransaction,
+        block_id: u64,
+        prev_block_hash: HashType,
+        timestamp: u64,
+    ) -> Result<bool> {
+        let alone = HashableBlockData {
+            block_id,
+            transactions: vec![tx.clone(), clock_tx.clone()],
+            prev_block_hash,
+            timestamp,
+        };
+        let size = borsh::to_vec(&alone)
+            .context("Failed to serialize block for size check")?
+            .len();
+        let max = usize::try_from(self.sequencer_config.max_block_size.as_u64())
+            .expect("`max_block_size` should fit into usize");
+        Ok(size <= max)
+    }
+
+    /// Counts one failed production attempt against `tx` if it is a cross-zone
+    /// delivery, giving up on it once too many accumulate.
+    ///
+    /// A delivery's payload and target accounts are chosen on the peer zone and
+    /// validated by nobody in between, so one can fail for good; but a failure
+    /// can equally be a property of the moment, so give up only after several.
+    /// Giving up drops the record, which is also what keeps a peer from growing
+    /// the pending list with deliveries that can never execute.
+    fn count_dispatch_failure(&self, tx: &LeeTransaction) {
+        let Some(message) = extract_cross_zone_dispatch(tx) else {
+            return;
+        };
+        let key = cross_zone_inbox_core::message_key(
+            &message.src_zone,
+            message.src_block_id,
+            message.src_tx_index,
+        );
+        match self
+            .store
+            .dbio()
+            .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES)
+        {
+            Ok(true) => error!(
+                "Giving up on cross-zone delivery {} after {RETIRE_DISPATCH_AFTER_FAILURES} failed attempts; it will not be retried",
+                hex::encode(key)
+            ),
+            Ok(false) => warn!(
+                "Cross-zone delivery {} failed to execute, will retry next block",
+                hex::encode(key)
+            ),
+            Err(err) => error!(
+                "Failed to count the failed attempt for cross-zone delivery {}: {err:#}",
+                hex::encode(key)
+            ),
+        }
+    }
+
+    /// A weak reference to this sequencer's store, for a shutdown path that
+    /// needs to observe the database actually closing rather than infer it.
+    #[must_use]
+    pub fn store_release(&self) -> StoreRelease {
+        StoreRelease::new(&self.store.dbio())
+    }
+
+    /// Every background task that holds this sequencer's store handle.
+    ///
+    /// Taken before the core is shared, so a shutdown path can wait for them
+    /// without owning the core. Until all of them have stopped the `RocksDB`
+    /// lock is still held and the home directory cannot be reopened, which is
+    /// what a restart does.
+    #[must_use]
+    pub fn background_tasks(&self) -> Vec<TaskGroup> {
+        vec![
+            self.watchers.clone(),
+            self.block_publisher.background_tasks(),
+        ]
+    }
+
     /// Whether this sequencer is currently authorized to write to the channel.
     #[must_use]
     pub fn is_our_turn(&self) -> bool {
@@ -941,14 +1077,48 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
 struct BlockWithMeta {
     block: Block,
-    deposit_event_ids: Vec<HashType>,
     withdrawals: Vec<WithdrawArg>,
+}
+
+/// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
+/// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
+fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
+    let receipt_id =
+        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+    state
+        .get_account_by_id_ref(receipt_id)
+        .is_some_and(|receipt| *receipt != lee::Account::default())
+}
+
+/// Whether a cross-zone delivery is already on the chain we are building on.
+///
+/// The inbox records every delivered message key in a seen shard and no-ops a
+/// replay, so that shard is the same kind of answer the deposit receipt gives:
+/// state, not bookkeeping. An orphan reverts the entry with the block, so the
+/// next turn re-delivers with nothing of ours to unwind.
+fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
+    let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
+        programs::cross_zone_inbox().id(),
+        &message.src_zone,
+        message.src_block_id,
+    );
+    state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
+        cross_zone_inbox_core::SeenShard::from_bytes(shard.data.as_ref()).is_ok_and(|seen| {
+            seen.contains(&cross_zone_inbox_core::message_key(
+                &message.src_zone,
+                message.src_block_id,
+                message.src_tx_index,
+            ))
+        })
+    })
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:
 /// revert orphaned, then apply and persist adopted and finalized blocks.
 /// Production builds on this same head. Wired to the publisher via
 /// [`SequencerCore::on_follow`]; a free function so tests can drive it directly.
+///
+/// Everything the event produced lands in one write — see [`StoreUpdate`].
 ///
 /// TODO: unlike the indexer's ingest loop, this path does not retry
 /// `is_retryable` (transient) apply failures — a failed block just parks and
@@ -962,21 +1132,35 @@ fn apply_follow_update(
     update: block_publisher::FollowUpdate,
 ) {
     let block_publisher::FollowUpdate {
+        checkpoint,
         adopted,
         orphaned,
         finalized,
+        deposits,
+        withdrawals,
     } = update;
+
+    let checkpoint_bytes = block_store::checkpoint_bytes(&checkpoint)
+        .unwrap_or_else(|err| panic!("Failed to serialize zone-sdk checkpoint: {err:#}"));
+
+    // NOTE: Theoretically Zone SDK may re-deliver an already seen deposit or
+    // finalization. Both are idempotent here: a deposit already on record is
+    // not re-appended, and a finalization only ever moves the tier forward.
+    let deposit_records: Vec<PendingDepositEventRecord> =
+        deposits.iter().map(pending_deposit_event_record).collect();
+
+    // One reconciliation unit per released note, matching how the intents were
+    // recorded at publish time.
+    let consumed_withdrawals: Vec<WithdrawalReconciliationKey> = withdrawals
+        .iter()
+        .flat_map(|withdraw| withdraw.op.inputs.iter())
+        .map(withdrawal_reconciliation_key)
+        .collect();
 
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
-    let resubmit_txs = {
+    let (resubmit_txs, outcome) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
-
-        // User txs of orphaned blocks, returned to the mempool below.
-        let resubmit_txs: Vec<LeeTransaction> = orphaned
-            .iter()
-            .flat_map(|(_, block)| resubmittable_txs(block))
-            .collect();
 
         // Outcomes align with `adopted`.
         let outcomes = chain.apply_channel_update(&orphaned, &adopted);
@@ -987,18 +1171,46 @@ fn apply_follow_update(
             .map(|((_, block), _)| (block, false))
             .collect();
 
+        // Only blocks the final tier holds drive the bookkeeping below: a parked
+        // one never became irreversible, so marking blocks finalized through it
+        // or dropping its deposit records would lose them for good.
+        let mut irreversible: Vec<&Block> = Vec::new();
         let mut final_advanced = false;
         for (this_msg, block) in &finalized {
-            // FIXME: thread the finalized inscription's L1 slot once the
-            // sdk surfaces it; only used for the invalid-finalized stall.
-            if matches!(
-                chain.apply_finalized(*this_msg, block, Slot::from(0)),
-                AcceptOutcome::Applied
-            ) {
-                to_persist.push((block, true));
-                final_advanced = true;
+            // FIXME: thread the finalized inscription's L1 slot instead of
+            // `Slot::from(0)`; only used for the invalid-finalized stall.
+            // logos-blockchain PR #3147 surfaces it as `FinalizedTx.l1_slot` —
+            // wire it through `FollowUpdate::finalized` once the zone-sdk pin is
+            // bumped past that (a separate PR).
+            match chain.apply_finalized(*this_msg, block, Slot::from(0)) {
+                AcceptOutcome::Applied => {
+                    to_persist.push((block, true));
+                    irreversible.push(block);
+                    final_advanced = true;
+                }
+                // A re-delivery of a block the final tier already holds: no new
+                // payload and the tier does not move, but it is irreversible all
+                // the same, so it still settles its deposits.
+                AcceptOutcome::AlreadyApplied => irreversible.push(block),
+                AcceptOutcome::Parked(_) | AcceptOutcome::RetryableFailure(_) => {}
             }
         }
+
+        // User txs of orphaned blocks, returned to the mempool below.
+        //
+        // Computed after the finalized tier has advanced, and only for blocks
+        // above it: the zone-sdk reports a block as orphaned once LIB pruning
+        // drops its inscription from the channel lineage, so every block of
+        // ours is orphaned a poll or two after it finalizes. Those transactions
+        // are irreversibly included, and returning them to the mempool puts
+        // them back in every block we produce from then on.
+        let final_height = chain.final_tip().map(|tip| tip.block_id);
+        let resubmit_txs: Vec<LeeTransaction> = orphaned
+            .iter()
+            .filter(|(_, block)| final_height.is_none_or(|id| block.header.block_id > id))
+            .flat_map(|(_, block)| resubmittable_txs(block))
+            .collect();
+
         // Snapshot the advanced final tier so a restart re-anchors on it.
         let final_meta = final_advanced.then(|| {
             let tip = chain.final_tip().expect("advanced final tier has a tip");
@@ -1006,91 +1218,79 @@ fn apply_follow_update(
         });
         let head_tip = chain.head_tip().map(|tip| BlockMeta::from(&tip));
 
-        // One atomic write for the whole update: blocks, tip meta and the
-        // state after the last block land together, so a crash can never
-        // leave the stored state ahead of the stored blocks. A persist
-        // failure is fatal: the in-memory chain has already advanced, and
-        // continuing would leave a permanent gap in the store.
-        //
-        // The `panic!` ends the drive task, whose cancellation halts the node.
-        //
-        // TODO: the zone-sdk checkpoint is persisted by `on_checkpoint`
-        // before this write; a crash in between resumes past these blocks
-        // without them ever landing in the store. Full `BlocksProcessed`
-        // atomicity (checkpoint + blocks + state in one batch, per the sdk's
-        // event contract) is a follow-up.
-        dbio.store_followed_blocks(
-            &to_persist,
-            head_tip.as_ref(),
-            chain.head_state(),
-            final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
-        )
-        .unwrap_or_else(|err| panic!("Failed to persist followed blocks: {err:#}"));
+        // Every block at or below the highest finalized one is irreversible, so
+        // stored blocks there can be marked finalized.
+        let last_finalized = irreversible.iter().map(|block| block.header.block_id).max();
 
-        resubmit_txs
+        // A deposit observed in a finalized block is permanently minted (its
+        // receipt is now in the irreversible tier), so its pending record can be
+        // dropped. Keyed by op id, not block id: a record only goes once its own
+        // deposit finalizes, never because some other block finalized at its
+        // height.
+        let finalized_deposit_ids: Vec<HashType> = irreversible
+            .iter()
+            .flat_map(|block| block.body.transactions.iter())
+            .filter_map(extract_bridge_deposit_id)
+            .collect();
+
+        // The same for cross-zone deliveries, keyed by message key: a record
+        // goes once its own delivery is irreversible, never because another
+        // block finalized at its height.
+        let finalized_dispatch_keys: Vec<[u8; 32]> = irreversible
+            .iter()
+            .flat_map(|block| settled_dispatch_keys(dbio, block))
+            .collect();
+
+        // A persist failure is fatal: the in-memory chain has already advanced,
+        // and continuing would leave a permanent gap in the store. The `panic!`
+        // ends the drive task, whose cancellation halts the node.
+        let outcome = dbio
+            .store_update(&StoreUpdate {
+                checkpoint: Some(&checkpoint_bytes),
+                blocks: &to_persist,
+                head_tip: head_tip.as_ref(),
+                final_snapshot: final_meta.as_ref().map(|meta| (chain.final_state(), meta)),
+                finalized_up_to: last_finalized,
+                new_deposit_events: &deposit_records,
+                remove_deposit_records: &finalized_deposit_ids,
+                remove_dispatch_records: &finalized_dispatch_keys,
+                consumed_withdrawals: &consumed_withdrawals,
+                ..StoreUpdate::new(chain.head_state())
+            })
+            .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
+
+        (resubmit_txs, outcome)
     };
+
+    if outcome.accepted_deposits > 0 {
+        info!(
+            "Recorded {} Bedrock Deposit event(s); their mints are drained from the store on our next turn",
+            outcome.accepted_deposits
+        );
+    }
+    for withdrawal in &outcome.unmatched_withdrawals {
+        warn!(
+            "Unexpected Bedrock Withdraw event releasing channel note {}: no matching unseen withdraw found",
+            hex::encode(withdrawal.released_note_id)
+        );
+    }
 
     // Rebuild orphaned work: return its user txs to the mempool so the
     // next on-turn production re-includes them on the new head.
     //
-    // We use [`try_push`] here because this is called from the
-    // publisher's drive task, and only the block production drains the mempool.
-    // A blocking push on a full mempool would deadlock here.
+    // We use [`try_push`] here because this is called from the publisher's
+    // drive task, and only block production drains the mempool. A blocking
+    // push would stall the drive task, and a sequencer that is not on turn
+    // never produces — so nothing would ever drain it again.
+    //
+    // TODO: a full mempool still drops the transaction; a durable resubmit
+    // queue is a follow-up.
     for tx in resubmit_txs {
         let tx_hash = tx.hash();
         if let Err(err) = mempool_handle.try_push((TransactionOrigin::User, tx)) {
             warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
         }
     }
-}
-
-/// Checks the database for any pending deposit events that have not yet been marked as submitted in
-/// a block, and re-queues them in the mempool in a separate async task for inclusion in the next
-/// block.
-fn replay_unfulfilled_deposit_events(
-    store: &SequencerStore,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-) {
-    let replay_records: Vec<PendingDepositEventRecord> = store
-        .get_unfulfilled_deposit_events()
-        .expect("Failed to load unfulfilled deposit events")
-        .into_iter()
-        .filter(|record| record.submitted_in_block_id.is_none())
-        .collect();
-
-    if replay_records.is_empty() {
-        return;
-    }
-
-    info!(
-        "Found {} unfulfilled deposit events in DB, re-queueing",
-        replay_records.len()
-    );
-    tokio::spawn(async move {
-        for record in replay_records {
-            let tx = match build_bridge_deposit_tx_from_event(&record) {
-                Ok(tx) => tx,
-                Err(err) => {
-                    warn!(
-                        "Skipping replay of pending deposit event {} due to tx build failure: {err:#}",
-                        hex::encode(record.deposit_op_id)
-                    );
-                    continue;
-                }
-            };
-
-            if let Err(err) = mempool_handle
-                .push((TransactionOrigin::Sequencer, tx))
-                .await
-            {
-                error!(
-                    "Failed to re-queue unfulfilled deposit event {} from DB: {err:#}",
-                    hex::encode(record.deposit_op_id)
-                );
-                break;
-            }
-        }
-    });
 }
 
 /// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
@@ -1232,7 +1432,6 @@ fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRec
         source_tx_hash: HashType(deposit.tx_hash.0),
         amount: deposit.amount,
         metadata: deposit.metadata.clone().into(),
-        submitted_in_block_id: None,
     }
 }
 
@@ -1244,10 +1443,18 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let vault_program_id = programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
+    // The receipt PDA carries the exactly-once check: the program reads it to
+    // detect a replay, so it must be in the tx's account list.
+    let receipt_id =
+        bridge_core::deposit_receipt_account_id(bridge_program_id, event.deposit_op_id.0);
 
     let message = Message::try_new(
         bridge_program_id,
-        vec![system_accounts::bridge_account_id(), recipient_vault_id],
+        vec![
+            system_accounts::bridge_account_id(),
+            recipient_vault_id,
+            receipt_id,
+        ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
@@ -1283,6 +1490,104 @@ fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
 fn is_sequencer_only_tx(tx: &LeeTransaction) -> bool {
     matches!(tx, LeeTransaction::Public(tx)
         if is_sequencer_only_program(tx.message().program_id))
+}
+
+/// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not
+/// a dispatch.
+#[must_use]
+fn extract_cross_zone_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> {
+    let LeeTransaction::Public(tx) = tx else {
+        return None;
+    };
+
+    let message = tx.message();
+    if message.program_id != programs::cross_zone_inbox().id() {
+        return None;
+    }
+
+    match risc0_zkvm::serde::from_slice::<cross_zone_inbox_core::Instruction, u32>(
+        &message.instruction_data,
+    ) {
+        Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) => Some(msg),
+        Ok(cross_zone_inbox_core::Instruction::InitConfig(_)) | Err(_) => None,
+    }
+}
+
+/// The content-addressed key of the message an inbox dispatch delivers.
+///
+/// A delivery in an irreversible block settles its pending record, so the record
+/// is dropped by identity rather than by the height it happened to land at.
+#[must_use]
+fn extract_cross_zone_dispatch_key(tx: &LeeTransaction) -> Option<[u8; 32]> {
+    extract_cross_zone_dispatch(tx).map(|msg| {
+        cross_zone_inbox_core::message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index)
+    })
+}
+
+/// The keys of the deliveries `block` carries, reporting any whose transaction
+/// is not the one we recorded for that key.
+///
+/// The key covers `(src_zone, src_block_id, src_tx_index)` and nothing about the
+/// payload, and so does the inbox's own replay check, so a sequencer that
+/// publishes a dispatch with the right key and a forged payload settles our
+/// correct record along with it. The forgery is caught downstream by the
+/// indexer, which re-derives every delivery and halts, but the local record is
+/// the last copy of what we believed and it is about to be dropped either way.
+/// Saying so in the log is what makes the halt diagnosable.
+fn settled_dispatch_keys(dbio: &RocksDBIO, block: &Block) -> Vec<[u8; 32]> {
+    let recorded = dbio.get_pending_cross_zone_dispatches().unwrap_or_default();
+    let (keys, forged) = classify_settled_deliveries(&recorded, block);
+    for key in forged {
+        error!(
+            "Cross-zone delivery {} settled with a transaction that is not the one this node recorded for that key. The message key does not cover the payload, so a peer's sequencer can publish a different delivery under it.",
+            hex::encode(key)
+        );
+    }
+    keys
+}
+
+/// Splits the deliveries `block` carries into every settled key, and the subset
+/// whose transaction is not the one `recorded` holds for that key.
+///
+/// Separated from the logging so the detection is testable: a forged delivery
+/// leaves no trace in state that differs from an honest one, precisely because
+/// the key does not cover the payload.
+fn classify_settled_deliveries(
+    recorded: &[PendingCrossZoneDispatchRecord],
+    block: &Block,
+) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
+    let mut keys = Vec::new();
+    let mut forged = Vec::new();
+    for tx in &block.body.transactions {
+        let Some(key) = extract_cross_zone_dispatch_key(tx) else {
+            continue;
+        };
+        let mismatched = recorded
+            .iter()
+            .find(|record| record.message_key == key)
+            .is_some_and(|record| {
+                borsh::to_vec(tx).is_ok_and(|encoded| encoded != record.transaction)
+            });
+        if mismatched {
+            forged.push(key);
+        }
+        keys.push(key);
+    }
+    (keys, forged)
+}
+
+/// Drops the records of deliveries carried by a reconstructed block.
+///
+/// A persist failure is only logged: the deliveries are already irreversible, so
+/// the worst case is a record the next drain drops instead.
+fn settle_reconstructed_deliveries(store: &SequencerStore, block: &Block) {
+    let keys = settled_dispatch_keys(&store.dbio(), block);
+    if keys.is_empty() {
+        return;
+    }
+    if let Err(err) = store.dbio().drop_settled_cross_zone_dispatches(&keys) {
+        warn!("Failed to settle reconstructed delivery records: {err:#}");
+    }
 }
 
 #[must_use]
@@ -1342,35 +1647,21 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     })
 }
 
-fn withdraw_event_reconciliation_key(
-    outputs: &logos_blockchain_core::mantle::ledger::Outputs,
-) -> Result<WithdrawalReconciliationKey> {
-    let [note] = outputs.as_ref().as_slice() else {
-        return Err(anyhow!(
-            "Unsupported withdraw output count for reconciliation: {}",
-            outputs.len()
-        ));
-    };
-
-    // `extract_bridge_withdraw_data` maps [u8;32] LE -> BigUint -> ZkPublicKey.
-    // Reconcile by reversing that direction here.
-    let mut bedrock_account_pk = BigUint::from(note.pk.into_inner()).to_bytes_le();
-    if bedrock_account_pk.len() > 32 {
-        return Err(anyhow!(
-            "Withdraw recipient public key is too large: {} bytes",
-            bedrock_account_pk.len()
-        ));
-    }
-    bedrock_account_pk.resize(32, 0);
-
-    let bedrock_account_pk: [u8; 32] = bedrock_account_pk
+/// The reconciliation identity of one released channel note.
+///
+/// A `ChannelWithdrawOp` releases notes the channel already owns and carries
+/// only their ids — the recipient key and value live in the note itself, which
+/// neither the op nor the Bedrock Withdraw event reports. The note id is
+/// therefore the one handle both sides share, and it is unique: a note is spent
+/// once.
+fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKey {
+    let released_note_id: [u8; 32] = note_id
+        .as_bytes()
+        .as_ref()
         .try_into()
-        .expect("Public key bytes were padded/truncated to 32 bytes");
+        .expect("`NoteId` is a 32-byte field element");
 
-    Ok(WithdrawalReconciliationKey {
-        amount: note.value,
-        bedrock_account_pk,
-    })
+    WithdrawalReconciliationKey { released_note_id }
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.
