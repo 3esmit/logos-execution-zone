@@ -26,6 +26,14 @@ pub enum TxKind {
     ProgramDeployment,
 }
 
+/// Whether applying a transaction to the block's working state succeeded.
+#[derive(Debug, Clone, Copy, strum::IntoStaticStr, strum::EnumIter)]
+#[strum(serialize_all = "snake_case")]
+pub enum ApplyStatus {
+    Applied,
+    Failed,
+}
+
 impl From<common::transaction::TxKind> for TxKind {
     fn from(kind: common::transaction::TxKind) -> Self {
         match kind {
@@ -47,7 +55,11 @@ pub fn init() {
     drop(transactions_per_block_histogram());
     for origin in TransactionOrigin::iter() {
         for kind in TxKind::iter() {
-            drop(mempool_transaction_application_time_histogram(origin, kind));
+            for status in ApplyStatus::iter() {
+                drop(mempool_transaction_application_time_histogram(
+                    origin, kind, status,
+                ));
+            }
         }
     }
 }
@@ -107,6 +119,7 @@ pub fn record_mempool_max_size(size: usize) {
 fn mempool_transaction_application_time_histogram(
     origin: TransactionOrigin,
     kind: TxKind,
+    status: ApplyStatus,
 ) -> Histogram {
     histogram!(
         description: "Time taken to apply a mempool transaction",
@@ -114,15 +127,18 @@ fn mempool_transaction_application_time_histogram(
         names::MEMPOOL_TRANSACTION_APPLICATION_TIME,
         "origin" => <&'static str>::from(origin),
         "kind" => <&'static str>::from(kind),
+        "status" => <&'static str>::from(status),
     )
 }
 
 pub fn record_mempool_transaction_application_time(
     origin: TransactionOrigin,
     kind: TxKind,
+    status: ApplyStatus,
     duration: Duration,
 ) {
-    mempool_transaction_application_time_histogram(origin, kind).record(duration.as_secs_f64());
+    mempool_transaction_application_time_histogram(origin, kind, status)
+        .record(duration.as_secs_f64());
 }
 
 fn transactions_per_block_histogram() -> Histogram {

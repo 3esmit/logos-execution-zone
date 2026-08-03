@@ -902,16 +902,22 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 new_block_timestamp,
                 &mut withdrawals,
             );
-            sequencer_core_metrics::record_mempool_transaction_application_time(
-                origin.into(),
-                tx.kind().into(),
-                before_tx_apply.elapsed(),
-            );
-
             if applied {
+                sequencer_core_metrics::record_mempool_transaction_application_time(
+                    origin.into(),
+                    tx.kind().into(),
+                    sequencer_core_metrics::ApplyStatus::Applied,
+                    before_tx_apply.elapsed(),
+                );
                 valid_transactions.push(tx);
             } else {
                 sequencer_core_metrics::increment_mempool_failed_transactions_total();
+                sequencer_core_metrics::record_mempool_transaction_application_time(
+                    origin.into(),
+                    tx.kind().into(),
+                    sequencer_core_metrics::ApplyStatus::Failed,
+                    before_tx_apply.elapsed(),
+                );
                 // A failed transaction is simply left out of the block, except a
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.

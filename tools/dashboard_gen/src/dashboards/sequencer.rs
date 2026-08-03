@@ -75,8 +75,8 @@ pub fn dashboard() -> Dashboard {
                     .unit(Unit::Seconds)
                     .target(selected_percentile(
                         sequencer_core_metrics::names::MEMPOOL_TRANSACTION_APPLICATION_TIME,
-                        &["kind", "origin"],
-                        "{{kind}} · {{origin}}",
+                        &["kind", "origin", "status"],
+                        "{{kind}} · {{origin}} · {{status}}",
                     )),
                 Panel::timeseries("Transactions per block")
                     .width(12)
