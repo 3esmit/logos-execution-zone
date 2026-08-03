@@ -8,7 +8,7 @@ use std::{
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
-pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
+pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, Balance};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
