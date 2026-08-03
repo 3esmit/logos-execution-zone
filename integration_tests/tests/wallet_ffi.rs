@@ -198,7 +198,7 @@ unsafe extern "C" {
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_register_public_account(
+    fn wallet_ffi_register_public_account_local(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
         out_result: *mut FfiTransferResult,
@@ -813,7 +813,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
+fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -843,7 +843,7 @@ fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     // Call the init funciton
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        wallet_ffi_register_public_account(
+        wallet_ffi_register_public_account_local(
             wallet_ffi_handle,
             &raw const out_account_id,
             &raw mut transfer_result,
