@@ -353,3 +353,34 @@ jobs:
             exit 1
           fi
           echo "✅ Artifacts are up to date"
+
+  # The dashboard generator is plain Rust (no Docker), so this runs directly in
+  # the CI image container rather than through `run-in-ci-image`.
+  dashboards:
+    needs: ci-image
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.ci-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 30
+
+    name: dashboards
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - name: Regenerate dashboards
+        run: just regenerate-dashboards
+
+      - name: Check if dashboards match repository
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if ! git diff --exit-code monitoring/grafana/dashboards/; then
+            echo "❌ Dashboards in the repository are out of date!"
+            echo "Please run 'just regenerate-dashboards' and commit the changes."
+            exit 1
+          fi
+          echo "✅ Dashboards are up to date"
