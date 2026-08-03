@@ -172,32 +172,20 @@ async fn multiseq_proff_of_concept_comm() -> Result<()> {
     };
 
     let ctx = TestContext::builder(
-        vec![
-            MultiNodeTestContextConfig {
-                num_nodes: 2,
-                bedrock_channel: bedrock_channel_id,
-            },
-        ],
+        vec![MultiNodeTestContextConfig {
+            num_nodes: 2,
+            bedrock_channel: bedrock_channel_id,
+        }],
         None,
     )
     .with_sequencer_partial_config(bedrock_channel_id, partial)
     .build()
     .await?;
 
-    let mut seq_iterator = ctx
-        .sequencer_components_iter(bedrock_channel_id)
-        .unwrap();
+    let mut seq_iterator = ctx.sequencer_components_iter(bedrock_channel_id).unwrap();
 
-    let seq_client_a = &(seq_iterator
-        .next()
-        .unwrap()
-        .1
-        .sequencer_client);
-    let seq_client_b = &(seq_iterator
-        .next()
-        .unwrap()
-        .1
-        .sequencer_client);
+    let seq_client_a = &(seq_iterator.next().unwrap().1.sequencer_client);
+    let seq_client_b = &(seq_iterator.next().unwrap().1.sequencer_client);
 
     let indexer = ctx.indexer_client();
 
@@ -222,7 +210,12 @@ async fn multiseq_proff_of_concept_comm() -> Result<()> {
         "the chain to advance across turn windows",
     )
     .await?;
-    wait_for_height(seq_client_b, rotation_target, "B to follow across turn windows").await?;
+    wait_for_height(
+        seq_client_b,
+        rotation_target,
+        "B to follow across turn windows",
+    )
+    .await?;
     assert_same_chain(seq_client_a, seq_client_b).await?;
 
     // Phase 5: a tx submitted only to B is included by B and visible on A.
@@ -240,7 +233,8 @@ async fn multiseq_proff_of_concept_comm() -> Result<()> {
         TRANSFER_AMOUNT,
         &sign_key,
     );
-    seq_client_b.send_transaction(tx)
+    seq_client_b
+        .send_transaction(tx)
         .await
         .context("Failed to submit the transfer to B")?;
 

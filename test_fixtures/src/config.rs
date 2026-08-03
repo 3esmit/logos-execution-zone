@@ -163,6 +163,7 @@ pub fn sequencer_config_with_channel_and_signing_key(
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
+            funding_key: bedrock_funding_key(),
         },
         cross_zone,
     })

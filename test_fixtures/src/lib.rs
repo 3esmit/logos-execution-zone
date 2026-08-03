@@ -25,7 +25,9 @@ use wallet::{
 };
 
 use crate::{
-    config::{MultiNodeTestContextConfig, bedrock_funding_key}, indexer_client::IndexerClient, setup::{
+    config::{MultiNodeTestContextConfig, bedrock_funding_key},
+    indexer_client::IndexerClient,
+    setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
         setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
         setup_wallet, sync_wallet_from_prebuilt,
@@ -729,7 +731,9 @@ impl MultiZoneTestContextBuilder {
             reason = "Zones can be started in any order"
         )]
         for (channel_id, zone_builder) in self.zone_builders {
-            log::info!("##########################Trying to build {zone_builder:#?} \n at {channel_id:#?}");
+            log::info!(
+                "##########################Trying to build {zone_builder:#?} \n at {channel_id:#?}"
+            );
 
             let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
