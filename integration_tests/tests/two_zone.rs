@@ -26,6 +26,8 @@ const MIN_BLOCK_ID: u64 = 2;
 
 #[test]
 async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
+    env_logger::init();
+
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await

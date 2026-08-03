@@ -145,6 +145,8 @@ impl SequencerSetup {
         )
         .context("Failed to create Sequencer config")?;
 
+        log::info!("################################## Running sequecner from config {config:#?}");
+
         sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
             .await
             .context("Failed to run Sequencer Service")

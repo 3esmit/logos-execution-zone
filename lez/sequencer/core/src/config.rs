@@ -35,7 +35,7 @@ pub enum GenesisAction {
 }
 
 // TODO: Provide default values
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
@@ -65,7 +65,7 @@ pub struct SequencerConfig {
     pub cross_zone: Option<CrossZoneConfig>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
     /// Bedrock channel ID.
     pub channel_id: ChannelId,

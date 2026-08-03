@@ -11,10 +11,9 @@ use lee::{AccountId, PrivacyPreservingTransaction};
 use lee_core::Commitment;
 use log::{debug, error};
 use sequencer_core::{
-    block_publisher::{Ed25519Key, post_channel_config},
     config::GenesisAction,
 };
-use sequencer_service::{BedrockConfig, CrossZoneConfig, SequencerHandle};
+use sequencer_service::{CrossZoneConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
@@ -25,12 +24,11 @@ use wallet::{
 };
 
 use crate::{
-    config::{MultiNodeTestContextConfig, bedrock_funding_key},
+    config::{MultiNodeTestContextConfig},
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet, sync_wallet_from_prebuilt,
+        setup_wallet,
     },
 };
 
@@ -565,7 +563,7 @@ impl ZoneTestContextBuilder {
 
         // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
         // must build live. Otherwise load the fixture (fails if it is missing).
-        let use_prebuilt = !from_scratch && genesis_transactions.is_none();
+        let _use_prebuilt = !from_scratch && genesis_transactions.is_none();
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) =
@@ -600,50 +598,56 @@ impl ZoneTestContextBuilder {
             })
             .collect::<Vec<_>>();
 
-        post_channel_config(
-            &BedrockConfig {
-                channel_id: mn_config.bedrock_channel,
-                node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-                auth: None,
-                funding_key: bedrock_funding_key(),
-            },
-            &Ed25519Key::from_bytes(
-                sequencer_keys
-                    .first()
-                    .expect("Must be at least one sequencer"),
-            ),
-            sequencer_keys
-                .clone()
-                .into_iter()
-                .map(|key| Ed25519Key::from_bytes(&key).public_key())
-                .collect(),
-            20,
-            30,
-            1,
-            1,
-        )
-        .await
-        .context("Failed to configure the channel committee")?;
+        // post_channel_config(
+        //     &BedrockConfig {
+        //         channel_id: mn_config.bedrock_channel,
+        //         node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+        //         auth: None,
+        //         funding_key: bedrock_funding_key(),
+        //     },
+        //     &Ed25519Key::from_bytes(
+        //         sequencer_keys
+        //             .first()
+        //             .expect("Must be at least one sequencer"),
+        //     ),
+        //     sequencer_keys
+        //         .clone()
+        //         .into_iter()
+        //         .map(|key| Ed25519Key::from_bytes(&key).public_key())
+        //         .collect(),
+        //     20,
+        //     30,
+        //     1,
+        //     1,
+        // )
+        // .await
+        // .context("Failed to configure the channel committee")?;
 
         for sequencer_key in sequencer_keys {
             let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
-            if !use_prebuilt {
-                // Wallet genesis must always be present so that
-                // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
-                // When a test supplies custom genesis, merge rather than replace.
-                let wallet_genesis = config::genesis_from_accounts(
-                    &initial_public_accounts,
-                    &initial_private_accounts,
-                );
-                let genesis = match genesis_transactions.clone() {
-                    Some(mut custom) => {
-                        custom.extend(wallet_genesis);
-                        custom
-                    }
-                    None => wallet_genesis,
-                };
-                sequencer_setup = sequencer_setup.with_genesis(genesis);
+
+            if let Some(genesis_actions) = genesis_transactions.clone() {
+                sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
             }
+
+            // if !use_prebuilt {
+            //     // Wallet genesis must always be present so that
+            //     // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
+            //     // When a test supplies custom genesis, merge rather than replace.
+            //     let wallet_genesis = config::genesis_from_accounts(
+            //         &initial_public_accounts,
+            //         &initial_private_accounts,
+            //     );
+            //     let genesis = match genesis_transactions.clone() {
+            //         Some(mut custom) => {
+            //             custom.extend(wallet_genesis);
+            //             custom
+            //         }
+            //         None => wallet_genesis,
+            //     };
+                
+            // }
+
             sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
             sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
 
@@ -666,7 +670,7 @@ impl ZoneTestContextBuilder {
             );
         }
 
-        let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
+        let (wallet, temp_wallet_dir, wallet_password) = setup_wallet(
             &sequencer_addrs,
             &initial_public_accounts,
             &initial_private_accounts,
@@ -675,20 +679,20 @@ impl ZoneTestContextBuilder {
         .await
         .context("Failed to setup wallet")?;
 
-        if use_prebuilt {
-            // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming live.
-            sync_wallet_from_prebuilt(&mut wallet)
-                .await
-                .context("Failed to sync wallet from prebuilt database")?;
-        } else {
-            setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-                .await
-                .context("Failed to initialize public accounts in wallet")?;
+        // if use_prebuilt {
+        //     // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming live.
+        //     sync_wallet_from_prebuilt(&mut wallet)
+        //         .await
+        //         .context("Failed to sync wallet from prebuilt database")?;
+        // } else {
+        //     setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
+        //         .await
+        //         .context("Failed to initialize public accounts in wallet")?;
 
-            setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-                .await
-                .context("Failed to initialize private accounts in wallet")?;
-        }
+        //     setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
+        //         .await
+        //         .context("Failed to initialize private accounts in wallet")?;
+        // }
 
         Ok(TestContextZone {
             wallet,
@@ -736,6 +740,10 @@ impl MultiZoneTestContextBuilder {
             );
 
             let zone_ctx = zone_builder.build(bedrock_addr).await?;
+
+            log::info!(
+                "########################## BUILT CONTEXT AT at {channel_id:#?}"
+            );
 
             zones.insert(channel_id, zone_ctx);
         }
