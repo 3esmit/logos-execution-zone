@@ -24,7 +24,11 @@ use wallet::{
 use crate::{
     config::MultiNodeTestContextConfig,
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, setup_bedrock_node, setup_indexer, setup_wallet},
+    setup::{
+        SequencerSetup, setup_bedrock_node, setup_indexer,
+        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
+        setup_wallet, sync_wallet_from_prebuilt,
+    },
 };
 
 pub mod config;
@@ -74,11 +78,14 @@ pub struct SequencerComponent {
     pub sequencer_client: SequencerClient,
 }
 
-pub struct TestContextZone {
-    /// Every zone must have its own wallet, otherwise multi-sequecner client loses sence.
+pub struct WalletComponent {
     wallet: WalletCore,
     wallet_password: String,
     temp_wallet_dir: TempDir,
+}
+
+pub struct TestContextZone {
+    wallet_components: Option<WalletComponent>,
     /// Each sequencer component is mapped from sequencer `SocketAddr`.
     sequencer_components: HashMap<SocketAddr, SequencerComponent>,
     indexer_components: Option<IndexerComponents>,
@@ -189,37 +196,60 @@ impl TestContext {
     /// Get reference to the deafault wallet.
     #[must_use]
     pub fn wallet(&self) -> &WalletCore {
-        &self.default_zone().wallet
+        &self
+            .default_zone()
+            .wallet_components
+            .as_ref()
+            .unwrap()
+            .wallet
     }
 
     /// Get password of the default wallet.
     #[must_use]
     pub fn wallet_password(&self) -> &str {
-        &self.default_zone().wallet_password
+        &self
+            .default_zone()
+            .wallet_components
+            .as_ref()
+            .unwrap()
+            .wallet_password
     }
 
     /// Get mutable reference to default the wallet.
     pub fn wallet_mut(&mut self) -> &mut WalletCore {
-        &mut self.default_zone_mut().wallet
+        &mut self
+            .default_zone_mut()
+            .wallet_components
+            .as_mut()
+            .unwrap()
+            .wallet
     }
 
     /// Get reference to the zone wallet.
     #[must_use]
     pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
-        self.zones.get(&channel_id).map(|val| &val.wallet)
+        self.zones
+            .get(&channel_id)
+            .map(|val| &val.wallet_components.as_ref().unwrap().wallet)
     }
 
     /// Get password of the zone wallet.
     #[must_use]
     pub fn wallet_password_zone(&self, channel_id: ChannelId) -> Option<&str> {
-        self.zones
-            .get(&channel_id)
-            .map(|val| val.wallet_password.as_str())
+        self.zones.get(&channel_id).map(|val| {
+            val.wallet_components
+                .as_ref()
+                .unwrap()
+                .wallet_password
+                .as_str()
+        })
     }
 
     /// Get mutable reference to the zone wallet.
     pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
-        self.zones.get_mut(&channel_id).map(|val| &mut val.wallet)
+        self.zones
+            .get_mut(&channel_id)
+            .map(|val| &mut val.wallet_components.as_mut().unwrap().wallet)
     }
 
     /// Get reference to the sequencer client in default case (1 zone, 1 sequencer).
@@ -350,7 +380,13 @@ impl TestContext {
                 )
             }),
             wallet_bytes: self.zones.values().fold(0, |acc, zone| {
-                acc.saturating_add(dir_size_bytes(zone.temp_wallet_dir.path()))
+                acc.saturating_add(dir_size_bytes(
+                    zone.wallet_components
+                        .as_ref()
+                        .unwrap()
+                        .temp_wallet_dir
+                        .path(),
+                ))
             }),
         }
     }
@@ -359,6 +395,9 @@ impl TestContext {
     #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
+            .wallet_components
+            .as_ref()
+            .unwrap()
             .wallet
             .storage()
             .key_chain()
@@ -371,6 +410,9 @@ impl TestContext {
     #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
+            .wallet_components
+            .as_ref()
+            .unwrap()
             .wallet
             .storage()
             .key_chain()
@@ -419,9 +461,7 @@ impl Drop for TestContext {
             reason = "Zones can be stopped in any order"
         )]
         for TestContextZone {
-            wallet: _,
-            wallet_password: _,
-            temp_wallet_dir: _,
+            wallet_components: _,
             sequencer_components,
             indexer_components: _,
         } in zones.values_mut()
@@ -477,6 +517,7 @@ pub struct ZoneTestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
+    enable_wallet: bool,
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
     mn_config: MultiNodeTestContextConfig,
@@ -492,6 +533,7 @@ impl ZoneTestContextBuilder {
             genesis_transactions: None,
             sequencer_partial_config: None,
             enable_indexer: true,
+            enable_wallet: true,
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
             mn_config,
@@ -548,6 +590,7 @@ impl ZoneTestContextBuilder {
             genesis_transactions,
             sequencer_partial_config,
             enable_indexer,
+            enable_wallet,
             wallet_config_overrides,
             from_scratch,
             mn_config,
@@ -558,7 +601,7 @@ impl ZoneTestContextBuilder {
 
         // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
         // must build live. Otherwise load the fixture (fails if it is missing).
-        let _use_prebuilt = !from_scratch && genesis_transactions.is_none();
+        let use_prebuilt = !from_scratch && genesis_transactions.is_none();
 
         let indexer_components = if enable_indexer {
             let (indexer_handle, temp_indexer_dir) =
@@ -621,27 +664,31 @@ impl ZoneTestContextBuilder {
         for sequencer_key in sequencer_keys {
             let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
-            if let Some(genesis_actions) = genesis_transactions.clone() {
-                sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+            if enable_wallet {
+                if !use_prebuilt {
+                    // Wallet genesis must always be present so that
+                    // setup_public/private_accounts_with_initial_supply can claim from the vault
+                    // PDAs. When a test supplies custom genesis, merge rather
+                    // thanreplace.
+                    let wallet_genesis = config::genesis_from_accounts(
+                        &initial_public_accounts,
+                        &initial_private_accounts,
+                    );
+                    let genesis = match genesis_transactions.clone() {
+                        Some(mut custom) => {
+                            custom.extend(wallet_genesis);
+                            custom
+                        }
+                        None => wallet_genesis,
+                    };
+
+                    sequencer_setup = sequencer_setup.with_genesis(genesis);
+                }
+            } else {
+                if let Some(genesis_actions) = genesis_transactions.clone() {
+                    sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+                }
             }
-
-            // if !use_prebuilt {
-            //     // Wallet genesis must always be present so that
-            //     // setup_public/private_accounts_with_initial_supply can claim from the vault
-            // PDAs.     // When a test supplies custom genesis, merge rather than
-            // replace.     let wallet_genesis = config::genesis_from_accounts(
-            //         &initial_public_accounts,
-            //         &initial_private_accounts,
-            //     );
-            //     let genesis = match genesis_transactions.clone() {
-            //         Some(mut custom) => {
-            //             custom.extend(wallet_genesis);
-            //             custom
-            //         }
-            //         None => wallet_genesis,
-            //     };
-
-            // }
 
             sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
             sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
@@ -665,34 +712,43 @@ impl ZoneTestContextBuilder {
             );
         }
 
-        let (wallet, temp_wallet_dir, wallet_password) = setup_wallet(
-            &sequencer_addrs,
-            &initial_public_accounts,
-            &initial_private_accounts,
-            wallet_config_overrides,
-        )
-        .await
-        .context("Failed to setup wallet")?;
+        let wallet_components = if enable_wallet {
+            let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
+                &sequencer_addrs,
+                &initial_public_accounts,
+                &initial_private_accounts,
+                wallet_config_overrides,
+            )
+            .await
+            .context("Failed to setup wallet")?;
 
-        // if use_prebuilt {
-        //     // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming
-        // live.     sync_wallet_from_prebuilt(&mut wallet)
-        //         .await
-        //         .context("Failed to sync wallet from prebuilt database")?;
-        // } else {
-        //     setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-        //         .await
-        //         .context("Failed to initialize public accounts in wallet")?;
+            if use_prebuilt {
+                // Funds already exist on-chain in the prebuilt blocks; sync instead of
+                // claiming live.
+                sync_wallet_from_prebuilt(&mut wallet)
+                    .await
+                    .context("Failed to sync wallet from prebuilt database")?;
+            } else {
+                setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
+                    .await
+                    .context("Failed to initialize public accounts in wallet")?;
 
-        //     setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-        //         .await
-        //         .context("Failed to initialize private accounts in wallet")?;
-        // }
+                setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
+                    .await
+                    .context("Failed to initialize private accounts in wallet")?;
+            }
+
+            Some(WalletComponent {
+                wallet,
+                wallet_password,
+                temp_wallet_dir,
+            })
+        } else {
+            None
+        };
 
         Ok(TestContextZone {
-            wallet,
-            wallet_password,
-            temp_wallet_dir,
+            wallet_components,
             sequencer_components,
             indexer_components,
         })
@@ -814,6 +870,19 @@ impl MultiZoneTestContextBuilder {
         self.zone_builders
             .entry(channel_id)
             .and_modify(|val| val.enable_indexer = false);
+        self
+    }
+
+    /// Exclude wallet from test context.
+    /// Wallet is enabled by default.
+    ///
+    /// Methods like [`TestContext::wallet_*()`] will panic if
+    /// called when wallet is disabled.
+    #[must_use]
+    pub fn disable_wallet(mut self, channel_id: ChannelId) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.enable_wallet = false);
         self
     }
 
