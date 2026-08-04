@@ -37,7 +37,7 @@ use crate::{
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_genesis_state, classify_settled_deliveries,
     config::{
-        BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
+        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
         SequencerConfig,
     },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
@@ -86,6 +86,7 @@ fn setup_sequencer_config() -> SequencerConfig {
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
             funding_key: ZkPublicKey::zero(),
+            priority_fee: config::default_priority_fee(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
