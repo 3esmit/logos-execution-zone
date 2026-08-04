@@ -10,9 +10,7 @@ use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivacyPreservingTransaction};
 use lee_core::Commitment;
 use log::{debug, error};
-use sequencer_core::{
-    config::GenesisAction,
-};
+use sequencer_core::config::GenesisAction;
 use sequencer_service::{CrossZoneConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
@@ -24,12 +22,9 @@ use wallet::{
 };
 
 use crate::{
-    config::{MultiNodeTestContextConfig},
+    config::MultiNodeTestContextConfig,
     indexer_client::IndexerClient,
-    setup::{
-        SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_wallet,
-    },
+    setup::{SequencerSetup, setup_bedrock_node, setup_indexer, setup_wallet},
 };
 
 pub mod config;
@@ -632,9 +627,9 @@ impl ZoneTestContextBuilder {
 
             // if !use_prebuilt {
             //     // Wallet genesis must always be present so that
-            //     // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
-            //     // When a test supplies custom genesis, merge rather than replace.
-            //     let wallet_genesis = config::genesis_from_accounts(
+            //     // setup_public/private_accounts_with_initial_supply can claim from the vault
+            // PDAs.     // When a test supplies custom genesis, merge rather than
+            // replace.     let wallet_genesis = config::genesis_from_accounts(
             //         &initial_public_accounts,
             //         &initial_private_accounts,
             //     );
@@ -645,7 +640,7 @@ impl ZoneTestContextBuilder {
             //         }
             //         None => wallet_genesis,
             //     };
-                
+
             // }
 
             sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
@@ -680,8 +675,8 @@ impl ZoneTestContextBuilder {
         .context("Failed to setup wallet")?;
 
         // if use_prebuilt {
-        //     // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming live.
-        //     sync_wallet_from_prebuilt(&mut wallet)
+        //     // Funds already exist on-chain in the prebuilt blocks; sync instead of claiming
+        // live.     sync_wallet_from_prebuilt(&mut wallet)
         //         .await
         //         .context("Failed to sync wallet from prebuilt database")?;
         // } else {
@@ -741,9 +736,7 @@ impl MultiZoneTestContextBuilder {
 
             let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
-            log::info!(
-                "########################## BUILT CONTEXT AT at {channel_id:#?}"
-            );
+            log::info!("########################## BUILT CONTEXT AT at {channel_id:#?}");
 
             zones.insert(channel_id, zone_ctx);
         }

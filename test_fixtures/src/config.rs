@@ -130,6 +130,7 @@ pub fn sequencer_config(
             auth: None,
         },
         cross_zone,
+        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
     })
 }
 
@@ -166,6 +167,7 @@ pub fn sequencer_config_with_channel_and_signing_key(
             funding_key: bedrock_funding_key(),
         },
         cross_zone,
+        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
     })
 }
 
