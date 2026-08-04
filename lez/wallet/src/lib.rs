@@ -67,6 +67,8 @@ pub struct SharedAccountInfo {
     pub vpk: lee_core::encryption::ViewingPublicKey,
 }
 
+//
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionFailureKind {
     #[error("Failed to get data from sequencer")]
