@@ -9,10 +9,12 @@ use common::{
 use lee::V03State;
 use lee_core::BlockId;
 use log::info;
-use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
+use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
 use storage::sequencer::{
     RocksDBIO,
-    sequencer_cells::{PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord},
+    sequencer_cells::{
+        PeerZoneKey, PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord,
+    },
 };
 pub use storage::{DbResult, sequencer::DbDump};
 
@@ -231,6 +233,36 @@ pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64>
         .iter()
         .map(|transaction| (transaction.hash(), block.header.block_id))
         .collect()
+}
+
+/// A cross-zone watcher's delivery floor on `peer_zone`'s channel.
+///
+/// The highest slot every message of which was delivered, or `None` before it
+/// has delivered anything from that peer. Stored as a little-endian `u64`.
+///
+/// Free functions rather than only [`SequencerStore`] methods because each
+/// watcher runs as its own spawned task and holds an `Arc<RocksDBIO>`;
+/// `SequencerStore` is not `Clone`.
+pub fn get_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<Option<Slot>> {
+    let Some(bytes) = dbio.get_cross_zone_peer_floor_bytes(peer_zone)? else {
+        return Ok(None);
+    };
+    let bytes: [u8; 8] = bytes.as_slice().try_into().with_context(|| {
+        format!(
+            "Stored cross-zone peer floor is {} bytes, expected 8",
+            bytes.len()
+        )
+    })?;
+    Ok(Some(Slot::new(u64::from_le_bytes(bytes))))
+}
+
+pub fn set_cross_zone_peer_floor(
+    dbio: &RocksDBIO,
+    peer_zone: PeerZoneKey,
+    floor: Slot,
+) -> Result<()> {
+    dbio.put_cross_zone_peer_floor_bytes(peer_zone, &floor.to_le_bytes())?;
+    Ok(())
 }
 
 #[cfg(test)]

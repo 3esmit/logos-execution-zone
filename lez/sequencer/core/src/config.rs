@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::BufReader,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -8,10 +9,11 @@ use std::{
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
-pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
+pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use lee::{AccountId, Balance};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -62,6 +64,9 @@ pub struct SequencerConfig {
     /// Cross-zone messaging configuration. `None` disables the watcher.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,
+    /// Address the Prometheus metrics exporter binds to.
+    #[serde(default = "default_metrics_address")]
+    pub metrics_address: Option<SocketAddr>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -72,9 +77,14 @@ pub struct BedrockConfig {
     pub node_url: Url,
     /// Bedrock auth.
     pub auth: Option<BasicAuth>,
+    pub funding_key: ZkPublicKey,
 }
 
 impl SequencerConfig {
+    /// Address [`Self::metrics_address`] falls back to when the config omits it.
+    pub const DEFAULT_METRICS_ADDRESS: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9000);
+
     pub fn from_path(config_home: &Path) -> Result<Self> {
         let file = File::open(config_home)?;
         let reader = BufReader::new(file);
@@ -85,4 +95,9 @@ impl SequencerConfig {
 
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
+}
+
+#[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
+const fn default_metrics_address() -> Option<SocketAddr> {
+    Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }

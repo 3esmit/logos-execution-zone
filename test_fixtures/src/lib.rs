@@ -217,7 +217,7 @@ impl Drop for TestContext {
             temp_wallet_dir: _,
         } = self;
 
-        let sequencer_handle = sequencer_handle
+        let mut sequencer_handle = sequencer_handle
             .take()
             .expect("Sequencer handle should be present in TestContext drop");
         if !sequencer_handle.is_healthy() {

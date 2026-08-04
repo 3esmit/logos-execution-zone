@@ -12,6 +12,7 @@ lee.workspace = true
 lee_core.workspace = true
 chain_state.workspace = true
 common.workspace = true
+sequencer_core_metrics = { workspace = true, features = ["record"] }
 storage.workspace = true
 mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
@@ -26,6 +27,7 @@ cross_zone_inbox_core.workspace = true
 
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-core.workspace = true
+logos-blockchain-http-api-common.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -57,3 +59,4 @@ test_programs.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
 token_core.workspace = true
+ping_core.workspace = true

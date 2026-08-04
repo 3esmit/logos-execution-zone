@@ -8,7 +8,8 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
-        DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
+        DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
+        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
         DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY,
         DB_META_ZONE_CURSOR_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
@@ -245,6 +246,82 @@ pub struct PendingDepositEventRecord {
     pub metadata: Vec<u8>,
 }
 
+/// A cross-zone delivery the watcher has read off a peer block but which is not
+/// yet known to be irreversibly delivered.
+///
+/// The watcher's delivery floor is durable, so once it advances past a peer
+/// block that block is never re-read. This record is what stands in its place:
+/// block production drains it every turn, and it survives a restart. Mirrors
+/// [`PendingDepositEventRecord`], which solves the same problem for deposits,
+/// and like it carries no "submitted" mark: the record is dropped when the
+/// delivery itself finalizes, and re-including one meanwhile is harmless
+/// because the inbox no-ops a replay on chain.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingCrossZoneDispatchRecord {
+    /// Content-addressed replay key of the delivered message, and this record's
+    /// identity.
+    pub message_key: [u8; 32],
+    /// The borsh-encoded dispatch transaction, so production can re-feed it
+    /// without re-reading the peer channel.
+    pub transaction: Vec<u8>,
+    /// Production attempts that ended in an execution failure.
+    ///
+    /// A dispatch's payload and target accounts are chosen on the peer zone and
+    /// validated by nobody in between, so one can fail for good. A failure can
+    /// equally be a property of the moment, so a single one is not enough to
+    /// give up on a delivery. Once too many accumulate the record is dropped
+    /// rather than flagged, since a delivery nothing will retry is also a
+    /// delivery nothing would ever remove.
+    pub failed_attempts: u32,
+}
+
+impl PendingCrossZoneDispatchRecord {
+    /// A delivery the watcher has just read: never attempted.
+    #[must_use]
+    pub const fn recorded(message_key: [u8; 32], transaction: Vec<u8>) -> Self {
+        Self {
+            message_key,
+            transaction,
+            failed_attempts: 0,
+        }
+    }
+}
+
+#[derive(BorshDeserialize)]
+pub struct PendingCrossZoneDispatchesCellOwned(pub Vec<PendingCrossZoneDispatchRecord>);
+
+impl SimpleStorableCell for PendingCrossZoneDispatchesCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for PendingCrossZoneDispatchesCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct PendingCrossZoneDispatchesCellRef<'records>(
+    pub &'records [PendingCrossZoneDispatchRecord],
+);
+
+impl SimpleStorableCell for PendingCrossZoneDispatchesCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for PendingCrossZoneDispatchesCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize pending cross-zone dispatches cell".to_owned()),
+            )
+        })
+    }
+}
+
 #[derive(BorshDeserialize)]
 pub struct PendingDepositEventsCellOwned(pub Vec<PendingDepositEventRecord>);
 
@@ -278,10 +355,78 @@ impl SimpleWritableCell for PendingDepositEventsCellRef<'_> {
     }
 }
 
+/// Identifies which peer channel a cross-zone watcher cursor belongs to. The
+/// 32-byte peer channel id doubles as the peer's zone id.
+pub type PeerZoneKey = [u8; 32];
+
+/// Opaque bytes for one peer's cross-zone read cursor. As with the zone-sdk
+/// checkpoint, the caller owns the encoding, since the cursor type derives serde
+/// rather than borsh.
+#[derive(BorshDeserialize)]
+pub struct PeerFloorCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for PeerFloorCellOwned {
+    type KeyParams = PeerZoneKey;
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_PEER_FLOOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+
+    /// Folds the peer zone into the key so each peer keeps its own cursor.
+    fn key_constructor(peer_zone: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&(Self::CELL_NAME, peer_zone)).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleReadableCell for PeerFloorCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct PeerFloorCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for PeerFloorCellRef<'_> {
+    type KeyParams = PeerZoneKey;
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_PEER_FLOOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+
+    /// Folds the peer zone into the key so each peer keeps its own cursor.
+    fn key_constructor(peer_zone: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&(Self::CELL_NAME, peer_zone)).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleWritableCell for PeerFloorCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize cross-zone peer floor cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// Identity of one withdrawal, shared by the intent recorded when the
+/// sequencer publishes it and the Bedrock Withdraw event that later reports
+/// it: the id of the channel note the withdrawal releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WithdrawalReconciliationKey {
-    pub amount: u64,
-    pub bedrock_account_pk: [u8; 32],
+    pub released_note_id: [u8; 32],
 }
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
@@ -294,12 +439,9 @@ impl SimpleStorableCell for UnseenWithdrawCountCell {
     const CF_NAME: &'static str = CF_META_NAME;
 
     fn key_constructor(key_params: Self::KeyParams) -> DbResult<Vec<u8>> {
-        let WithdrawalReconciliationKey {
-            amount,
-            bedrock_account_pk,
-        } = key_params;
+        let WithdrawalReconciliationKey { released_note_id } = key_params;
 
-        borsh::to_vec(&(Self::CELL_NAME, amount, bedrock_account_pk)).map_err(|err| {
+        borsh::to_vec(&(Self::CELL_NAME, released_note_id)).map_err(|err| {
             DbError::borsh_cast_message(
                 err,
                 Some(format!(

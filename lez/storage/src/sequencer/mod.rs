@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{Arc, Mutex, MutexGuard, PoisonError},
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
@@ -18,7 +22,9 @@ use crate::{
     sequencer::sequencer_cells::{
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
         FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell,
-        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PendingDepositEventRecord,
+        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerFloorCellOwned, PeerFloorCellRef,
+        PeerZoneKey, PendingCrossZoneDispatchRecord, PendingCrossZoneDispatchesCellOwned,
+        PendingCrossZoneDispatchesCellRef, PendingDepositEventRecord,
         PendingDepositEventsCellOwned, PendingDepositEventsCellRef, UnseenWithdrawCountCell,
         WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
         ZoneSdkCheckpointCellRef,
@@ -40,8 +46,24 @@ pub const DB_META_ZONE_CURSOR_KEY: &str = "zone_cursor";
 /// Key base for storing queued deposit events that were not yet
 /// fulfilled on L2.
 pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
+/// Key base for storing a cross-zone watcher's delivery floor on one peer
+/// channel (opaque bytes). Keyed per peer zone.
+pub const DB_META_CROSS_ZONE_PEER_FLOOR_KEY: &str = "cross_zone_peer_floor";
+/// Key base for storing cross-zone deliveries the watcher has recorded but
+/// which are not yet known to be irreversibly delivered.
+pub const DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY: &str = "pending_cross_zone_dispatches";
+
 /// Key base for counting unseen L2 withdraw intents.
 pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
+
+/// How many cross-zone deliveries may be pending at once.
+///
+/// The whole list is a single value, read on every block and rewritten on every
+/// change, and what fills it is chosen by peer zones rather than by us. Refusing
+/// to record past this bound turns "a peer decides how large our store gets"
+/// into "a peer's messages wait", since a watcher that cannot record holds its
+/// delivery floor and reads the slot again later.
+pub const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
@@ -123,6 +145,8 @@ pub struct StoreUpdate<'update> {
     pub new_deposit_events: &'update [PendingDepositEventRecord],
     /// Deposit op ids whose mint finalized: their pending records are dropped.
     pub remove_deposit_records: &'update [HashType],
+    /// Message keys whose delivery finalized: their pending records are dropped.
+    pub remove_dispatch_records: &'update [[u8; 32]],
     /// L1 withdraw events to reconcile against the local unseen counters.
     pub consumed_withdrawals: &'update [WithdrawalReconciliationKey],
     /// L2 withdraw intents this update raises, awaiting their L1 event.
@@ -146,6 +170,7 @@ impl<'update> StoreUpdate<'update> {
             finalized_up_to: None,
             new_deposit_events: &[],
             remove_deposit_records: &[],
+            remove_dispatch_records: &[],
             consumed_withdrawals: &[],
             new_withdraw_intents: &[],
             zone_anchor: None,
@@ -165,8 +190,21 @@ pub struct StoreUpdateOutcome {
     pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
 }
 
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "the pending-record lock is an implementation detail and must stay private"
+)]
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
+    /// Serializes the read-modify-write cycles over the pending cross-zone
+    /// dispatch list.
+    ///
+    /// The list is a single value holding the whole `Vec`, and three tasks
+    /// rewrite it: the watcher recording a delivery, the production loop
+    /// counting a failed attempt, and the publisher's drive task settling
+    /// finalized deliveries. Rocksdb makes the write atomic, not the cycle, so
+    /// without this the writer that read first silently drops the others.
+    pending_records: Mutex<()>,
 }
 
 impl DBIO for RocksDBIO {
@@ -176,6 +214,18 @@ impl DBIO for RocksDBIO {
 }
 
 impl RocksDBIO {
+    /// Held across a pending-record read-modify-write. See
+    /// [`RocksDBIO::pending_records`].
+    ///
+    /// A poisoned lock is recovered rather than propagated: the records behind
+    /// it are a plain `Vec` that a panicking writer cannot leave half-written,
+    /// since the write is a single rocksdb put.
+    fn lock_pending_records(&self) -> MutexGuard<'_, ()> {
+        self.pending_records
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn open(path: &Path) -> DbResult<Self> {
         let db_opts = Options::default();
         Self::open_inner(path, &db_opts)
@@ -289,7 +339,10 @@ impl RocksDBIO {
             additional_info: Some("Failed to open or create DB".to_owned()),
         })?;
 
-        let dbio = Self { db };
+        let dbio = Self {
+            db,
+            pending_records: Mutex::new(()),
+        };
         Ok(dbio)
     }
 
@@ -539,12 +592,191 @@ impl RocksDBIO {
         Ok(accepted)
     }
 
+    /// One cross-zone watcher's delivery floor on `peer_zone`'s channel, or
+    /// `None` before it has delivered anything from that peer.
+    pub fn get_cross_zone_peer_floor_bytes(
+        &self,
+        peer_zone: PeerZoneKey,
+    ) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<PeerFloorCellOwned>(peer_zone)?
+            .map(|cell| cell.0))
+    }
+
+    pub fn put_cross_zone_peer_floor_bytes(
+        &self,
+        peer_zone: PeerZoneKey,
+        bytes: &[u8],
+    ) -> DbResult<()> {
+        self.put(&PeerFloorCellRef(bytes), peer_zone)
+    }
+
+    pub fn get_pending_cross_zone_dispatches(
+        &self,
+    ) -> DbResult<Vec<PendingCrossZoneDispatchRecord>> {
+        Ok(self
+            .get_opt::<PendingCrossZoneDispatchesCellOwned>(())?
+            .map_or_else(Vec::new, |cell| cell.0))
+    }
+
+    fn put_pending_cross_zone_dispatches(
+        &self,
+        records: &[PendingCrossZoneDispatchRecord],
+    ) -> DbResult<()> {
+        self.put(&PendingCrossZoneDispatchesCellRef(records), ())
+    }
+
+    fn put_pending_cross_zone_dispatches_batch(
+        &self,
+        records: &[PendingCrossZoneDispatchRecord],
+        batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&PendingCrossZoneDispatchesCellRef(records), (), batch)
+    }
+
+    /// Records every delivery one peer block carries, in a single write.
+    ///
+    /// Returns how many were new. Ones already recorded are skipped, so a slot
+    /// the watcher re-reads is not double-tracked.
+    ///
+    /// Batched rather than one call per delivery because the whole list is one
+    /// value: recording a block's messages one at a time rewrites the list once
+    /// per message, which is quadratic in a block that carries many.
+    ///
+    /// Fails without writing anything if the list would exceed
+    /// [`MAX_PENDING_CROSS_ZONE_DISPATCHES`]. The caller's floor then stays put
+    /// and the slot is read again later, which is the difference between
+    /// backpressure and an unbounded list a peer controls the size of.
+    pub fn add_pending_cross_zone_dispatches(
+        &self,
+        dispatches: Vec<PendingCrossZoneDispatchRecord>,
+    ) -> DbResult<usize> {
+        if dispatches.is_empty() {
+            return Ok(0);
+        }
+
+        let _pending = self.lock_pending_records();
+        let mut records = self.get_pending_cross_zone_dispatches()?;
+        let before = records.len();
+
+        for dispatch in dispatches {
+            if records
+                .iter()
+                .any(|record| record.message_key == dispatch.message_key)
+            {
+                continue;
+            }
+            records.push(dispatch);
+        }
+
+        let accepted = records.len().saturating_sub(before);
+        if accepted == 0 {
+            return Ok(0);
+        }
+        if records.len() > MAX_PENDING_CROSS_ZONE_DISPATCHES {
+            return Err(DbError::db_interaction_error(format!(
+                "Refusing to hold more than {MAX_PENDING_CROSS_ZONE_DISPATCHES} pending cross-zone deliveries; {before} already pending"
+            )));
+        }
+
+        self.put_pending_cross_zone_dispatches(&records)?;
+        Ok(accepted)
+    }
+
+    /// Counts a failed production attempt against a delivery, dropping its
+    /// record once it reaches `retire_at`. Returns whether it was dropped.
+    ///
+    /// Dropped rather than flagged: a retired record is one the drain will never
+    /// turn into a block transaction again, so nothing would ever remove it, and
+    /// a peer that can make deliveries fail could grow the list without bound.
+    /// The delivery is given up on either way; this way the cost is a log line
+    /// rather than a permanent entry.
+    ///
+    /// A delivery with no record is already retired as far as this is concerned:
+    /// there is nothing left to count against.
+    pub fn record_dispatch_failure(&self, message_key: [u8; 32], retire_at: u32) -> DbResult<bool> {
+        let _pending = self.lock_pending_records();
+        let mut records = self.get_pending_cross_zone_dispatches()?;
+        let Some(position) = records
+            .iter()
+            .position(|record| record.message_key == message_key)
+        else {
+            return Ok(true);
+        };
+
+        let attempts = {
+            let record = &mut records[position];
+            record.failed_attempts = record.failed_attempts.saturating_add(1);
+            record.failed_attempts
+        };
+        let retired = attempts >= retire_at;
+        if retired {
+            records.remove(position);
+        }
+        self.put_pending_cross_zone_dispatches(&records)?;
+        Ok(retired)
+    }
+
+    /// Drops the records of deliveries that are settled for good, outside any
+    /// store update.
+    ///
+    /// The settlement path in [`Self::store_update`] catches a delivery as its
+    /// block becomes irreversible. This catches the ones that path cannot: a
+    /// record re-added after its delivery had already settled, which the watcher
+    /// does whenever it re-reads a slot it has already consumed. Nothing would
+    /// ever put such a key in a block again, so without this it stays for ever.
+    pub fn drop_settled_cross_zone_dispatches(&self, message_keys: &[[u8; 32]]) -> DbResult<usize> {
+        if message_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let _pending = self.lock_pending_records();
+        let to_remove: std::collections::HashSet<&[u8; 32]> = message_keys.iter().collect();
+        let mut records = self.get_pending_cross_zone_dispatches()?;
+        let before = records.len();
+        records.retain(|record| !to_remove.contains(&record.message_key));
+        let removed = before.saturating_sub(records.len());
+
+        if removed > 0 {
+            self.put_pending_cross_zone_dispatches(&records)?;
+        }
+        Ok(removed)
+    }
+
+    /// Drops the pending records of deliveries that just became irreversible,
+    /// staged into `batch` so they go with the update that made them so.
+    ///
+    /// Removal only, unlike [`Self::stage_pending_deposit_events`]: a delivery is
+    /// recorded by the watcher through
+    /// [`Self::add_pending_cross_zone_dispatch`], on its own task and outside
+    /// any store update, so nothing ever adds one here.
+    fn stage_removed_dispatches(
+        &self,
+        remove_keys: &[[u8; 32]],
+        batch: &mut WriteBatch,
+    ) -> DbResult<usize> {
+        if remove_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let to_remove: std::collections::HashSet<&[u8; 32]> = remove_keys.iter().collect();
+        let mut records = self.get_pending_cross_zone_dispatches()?;
+        let before = records.len();
+        records.retain(|record| !to_remove.contains(&record.message_key));
+        let removed = before.saturating_sub(records.len());
+
+        if removed > 0 {
+            self.put_pending_cross_zone_dispatches_batch(&records, batch)?;
+        }
+        Ok(removed)
+    }
+
     /// Stages the unseen-withdraw decrements for one update into `batch`,
     /// returning one entry per occurrence that matched no local counter.
     ///
     /// Occurrences are folded per key for the same reason as the deposit
-    /// records: two withdrawals in one update can share a reconciliation key,
-    /// and a per-occurrence disk read would miss the staged decrement.
+    /// records: should two withdrawals in one update share a reconciliation
+    /// key, a per-occurrence disk read would miss the staged decrement.
     fn stage_consumed_withdrawals(
         &self,
         withdrawals: &[WithdrawalReconciliationKey],
@@ -621,8 +853,8 @@ impl RocksDBIO {
     /// Stages the unseen-withdraw increments for one update into `batch`.
     ///
     /// Occurrences are folded per key for the same reason as
-    /// [`Self::stage_consumed_withdrawals`]: two intents in one update can share
-    /// a reconciliation key, and a per-occurrence disk read would miss the
+    /// [`Self::stage_consumed_withdrawals`]: should two intents in one update
+    /// share a reconciliation key, a per-occurrence disk read would miss the
     /// staged increment and count the pair once.
     fn stage_new_withdraw_intents(
         &self,
@@ -875,6 +1107,7 @@ impl RocksDBIO {
     /// one, most carry nothing else) must not drag a full state serialization
     /// with it.
     pub fn store_update(&self, update: &StoreUpdate<'_>) -> DbResult<StoreUpdateOutcome> {
+        let _pending = self.lock_pending_records();
         let StoreUpdate {
             checkpoint,
             blocks,
@@ -884,6 +1117,7 @@ impl RocksDBIO {
             finalized_up_to,
             new_deposit_events,
             remove_deposit_records,
+            remove_dispatch_records,
             consumed_withdrawals,
             new_withdraw_intents,
             zone_anchor,
@@ -940,6 +1174,7 @@ impl RocksDBIO {
             remove_deposit_records,
             &mut batch,
         )?;
+        self.stage_removed_dispatches(remove_dispatch_records, &mut batch)?;
         let unmatched_withdrawals =
             self.stage_consumed_withdrawals(consumed_withdrawals, &mut batch)?;
         self.stage_new_withdraw_intents(new_withdraw_intents, &mut batch)?;
