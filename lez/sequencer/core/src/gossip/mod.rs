@@ -9,5 +9,6 @@ pub mod announcement;
 pub mod directory;
 pub mod keys_provider;
 pub mod network;
+pub mod validation;
 
 pub use network::{Libp2pNetwork, PeerNetworkTrait};

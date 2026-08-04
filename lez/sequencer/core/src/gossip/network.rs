@@ -33,9 +33,7 @@ const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Sweep interval for redialing disconnected accredited peers.
 const DIAL_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 /// Per-peer dial backoff: base * 2^attempts, capped.
-#[expect(dead_code, reason = "used by Task 6 dialing")]
 const DIAL_BACKOFF_BASE: Duration = Duration::from_secs(1);
-#[expect(dead_code, reason = "used by Task 6 dialing")]
 const DIAL_BACKOFF_MAX: Duration = Duration::from_secs(300);
 /// Isolation warning cadence and startup grace.
 const NO_PEERS_WARN_INTERVAL: Duration = Duration::from_secs(60);
@@ -218,7 +216,6 @@ impl Drop for Libp2pNetwork {
 
 /// Derives the libp2p `PeerId` an Ed25519 public key produces. `None` only
 /// for byte strings that are not a valid curve point.
-#[cfg_attr(not(test), expect(dead_code, reason = "used by Task 6 validation"))]
 pub(crate) fn peer_id_from_ed25519(pubkey: &[u8; 32]) -> Option<PeerId> {
     libp2p::identity::ed25519::PublicKey::try_from_bytes(pubkey)
         .ok()
@@ -262,7 +259,6 @@ struct DriveTask {
     dial_backoff: HashMap<PeerId, (u32, tokio::time::Instant)>,
     connected_tx: watch::Sender<Vec<[u8; 32]>>,
     keys_rx: watch::Receiver<HashSet<[u8; 32]>>,
-    #[expect(dead_code, reason = "used by Task 6 validation")]
     refresh_tx: mpsc::Sender<()>,
     cancellation: CancellationToken,
 }
@@ -311,22 +307,60 @@ impl DriveTask {
         }
     }
 
-    /// Filled in by the validation task (Task 6). Until then: ignore all.
     fn on_gossip_message(
         &mut self,
         source: PeerId,
         message_id: gossipsub::MessageId,
-        _message: &gossipsub::Message,
+        message: &gossipsub::Message,
     ) {
+        use crate::gossip::validation::{Evaluation, evaluate_announcement};
+
+        let evaluation = evaluate_announcement(
+            &message.data,
+            &self.channel_id,
+            &self.own_pubkey,
+            &self.keys_rx.borrow(),
+            &self.directory,
+        );
+
+        let acceptance = match evaluation {
+            Evaluation::Reject(reason) => {
+                debug!("Rejecting gossip announcement from {source}: {reason:?}");
+                gossipsub::MessageAcceptance::Reject
+            }
+            Evaluation::IgnoreUnknownKey => {
+                // Our cached accredited set may be stale; nudge the
+                // refresher (it rate-limits internally). Never blocks.
+                let _ = self.refresh_tx.try_send(());
+                gossipsub::MessageAcceptance::Ignore
+            }
+            Evaluation::IgnoreOwn | Evaluation::IgnoreStale => gossipsub::MessageAcceptance::Ignore,
+            Evaluation::Accept {
+                public_key,
+                peer_id,
+                listen_addrs,
+                seq,
+            } => {
+                info!(
+                    "Learned gossip addresses for sequencer {} ({} addrs)",
+                    hex::encode(public_key),
+                    listen_addrs.len()
+                );
+                self.directory
+                    .upsert(public_key, peer_id, listen_addrs, seq);
+                // A fresh entry may map an already-open connection to its
+                // key, or name a peer we should dial now.
+                self.update_connected_watch();
+                self.dial_missing_peers();
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
         let _ = self
             .swarm
             .behaviour_mut()
             .gossipsub
-            .report_message_validation_result(
-                &message_id,
-                &source,
-                gossipsub::MessageAcceptance::Ignore,
-            );
+            .report_message_validation_result(&message_id, &source, acceptance);
     }
 
     fn publish_announcement(&mut self) {
@@ -364,9 +398,43 @@ impl DriveTask {
         }
     }
 
-    /// Filled in by Task 6 (directory-driven dialing with backoff). Until
-    /// then, only re-dial bootstrap peers while fully disconnected.
+    /// Dial every accredited directory entry we are not connected to, with
+    /// per-peer exponential backoff. Bootstrap addresses are retried only
+    /// while fully disconnected (they may lack a peer id to track).
     fn dial_missing_peers(&mut self) {
+        let now = tokio::time::Instant::now();
+        let accredited = self.keys_rx.borrow().clone();
+
+        let candidates: Vec<(PeerId, Vec<Multiaddr>)> = self
+            .directory
+            .iter()
+            .filter(|(key, entry)| {
+                accredited.contains(*key) && !self.connected.contains(&entry.peer_id)
+            })
+            .map(|(_, entry)| (entry.peer_id, entry.listen_addrs.clone()))
+            .collect();
+
+        for (peer_id, addrs) in candidates {
+            if let Some((_, next_attempt)) = self.dial_backoff.get(&peer_id)
+                && *next_attempt > now
+            {
+                continue;
+            }
+            let (attempts, _) = self.dial_backoff.remove(&peer_id).unwrap_or((0, now));
+            let delay = DIAL_BACKOFF_BASE
+                .saturating_mul(2_u32.saturating_pow(attempts))
+                .min(DIAL_BACKOFF_MAX);
+            self.dial_backoff
+                .insert(peer_id, (attempts.saturating_add(1), now + delay));
+
+            let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
+                .addresses(addrs)
+                .build();
+            if let Err(err) = self.swarm.dial(opts) {
+                debug!("Gossip dial of {peer_id} failed to start: {err}");
+            }
+        }
+
         if self.connected.is_empty() {
             for addr in self.bootstrap.clone() {
                 if let Err(err) = self.swarm.dial(addr.clone()) {
@@ -377,10 +445,12 @@ impl DriveTask {
     }
 
     fn warn_if_isolated(&self, started_at: tokio::time::Instant) {
-        let accredited = self.keys_rx.borrow();
+        // Snapshot the watch once: `connected_accredited` must never
+        // re-borrow `keys_rx` while a guard is held.
+        let accredited = self.keys_rx.borrow().clone();
         if started_at.elapsed() > NO_PEERS_GRACE
             && accredited.len() > 1
-            && self.connected_accredited().next().is_none()
+            && self.connected_accredited(&accredited).next().is_none()
         {
             warn!(
                 "Channel has {} accredited sequencers but no gossip peers are connected — \
@@ -391,15 +461,19 @@ impl DriveTask {
     }
 
     /// Connected peers that map to an accredited key via the directory.
-    fn connected_accredited(&self) -> impl Iterator<Item = [u8; 32]> + '_ {
+    fn connected_accredited<'a>(
+        &'a self,
+        accredited: &'a HashSet<[u8; 32]>,
+    ) -> impl Iterator<Item = [u8; 32]> + 'a {
         self.connected
             .iter()
             .filter_map(|peer_id| self.directory.pubkey_of(peer_id))
-            .filter(|pubkey| self.keys_rx.borrow().contains(pubkey))
+            .filter(move |pubkey| accredited.contains(pubkey))
     }
 
     fn update_connected_watch(&self) {
-        let mut peers: Vec<[u8; 32]> = self.connected_accredited().collect();
+        let accredited = self.keys_rx.borrow().clone();
+        let mut peers: Vec<[u8; 32]> = self.connected_accredited(&accredited).collect();
         peers.sort_unstable();
         self.connected_tx.send_if_modified(|current| {
             if *current == peers {
