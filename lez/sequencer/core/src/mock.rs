@@ -115,6 +115,36 @@ impl BlockPublisherTrait for MockBlockPublisher {
     }
 }
 
+/// No-op peer network: no peers, a token that never fires.
+pub struct MockPeerNetwork {
+    cancellation: CancellationToken,
+}
+
+impl MockPeerNetwork {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            cancellation: CancellationToken::new(),
+        }
+    }
+}
+
+impl Default for MockPeerNetwork {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl crate::gossip::PeerNetworkTrait for MockPeerNetwork {
+    fn connected_peers(&self) -> Vec<[u8; 32]> {
+        Vec::new()
+    }
+
+    fn driver_cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+}
+
 /// The notes the mock reports as released by `withdrawals`.
 ///
 /// Zone-sdk picks the actual channel notes to release, so a mock has to invent
