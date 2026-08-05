@@ -55,18 +55,10 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();
 
     let seq_client_a = &ctx
-        .sequencer_components_iter(channel_a)
-        .unwrap()
-        .next()
-        .unwrap()
-        .1
+        .zone_default_sequencer_component(channel_a)
         .sequencer_client;
     let seq_client_b = &ctx
-        .sequencer_components_iter(channel_b)
-        .unwrap()
-        .next()
-        .unwrap()
-        .1
+        .zone_default_sequencer_component(channel_b)
         .sequencer_client;
 
     let (height_a, height_b) = tokio::try_join!(

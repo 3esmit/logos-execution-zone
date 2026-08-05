@@ -175,6 +175,14 @@ impl TestContext {
             .map(|zone| zone.sequencer_components.iter())
     }
 
+    pub fn zone_default_sequencer_component(&self, channel_id: ChannelId) -> &SequencerComponent {
+        self.sequencer_components_iter(channel_id)
+            .unwrap()
+            .next()
+            .unwrap()
+            .1
+    }
+
     /// Mutable reference for the default zone(in case if only one present).
     pub fn default_zone_mut(&mut self) -> &mut TestContextZone {
         self.zones
@@ -604,10 +612,13 @@ impl ZoneTestContextBuilder {
         let use_prebuilt = !from_scratch && genesis_transactions.is_none();
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) =
-                setup_indexer(bedrock_addr, mn_config.bedrock_channel, cross_zone_config)
-                    .await
-                    .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) = setup_indexer(
+                bedrock_addr,
+                mn_config.bedrock_channel,
+                cross_zone_config.clone(),
+            )
+            .await
+            .context("Failed to setup Indexer")?;
             let indexer_client = setup::indexer_client(indexer_handle.addr())
                 .await
                 .context("Failed to create indexer client")?;
@@ -692,6 +703,9 @@ impl ZoneTestContextBuilder {
 
             sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
             sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
+            if let Some(cross_zone_config) = cross_zone_config.clone() {
+                sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
+            }
 
             let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
                 .setup()
@@ -835,6 +849,17 @@ impl MultiZoneTestContextBuilder {
         self.zone_builders
             .entry(channel_id)
             .and_modify(|val| val.genesis_transactions = Some(genesis_transactions));
+        self
+    }
+
+    pub fn with_cross_zone(
+        mut self,
+        channel_id: ChannelId,
+        cross_zone: sequencer_core::config::CrossZoneConfig,
+    ) -> Self {
+        self.zone_builders
+            .entry(channel_id)
+            .and_modify(|val| val.cross_zone_config = Some(cross_zone));
         self
     }
 
