@@ -78,9 +78,6 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
-        .await
-        .context("Failed to set up zone A indexer")?;
     let (seq_b, _seq_b_home) = setup_sequencer(
         partial,
         bedrock_addr,
@@ -102,12 +99,9 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         sequencer_client(seq_a.addr())?,
         sequencer_client(seq_b.addr())?,
     );
-    let (idx_a_client, idx_b_client) = (
-        indexer_client(idx_a.addr()).await?,
-        indexer_client(idx_b.addr()).await?,
-    );
+    let idx_b_client = indexer_client(idx_b.addr()).await?;
     tokio::try_join!(
-        wait_until_zone_live("A", &seq_a_client, &idx_a_client),
+        wait_until_sequencer_live("A", &seq_a_client),
         wait_until_zone_live("B", &seq_b_client, &idx_b_client),
     )?;
 
@@ -207,6 +201,28 @@ async fn wait_until_zone_live(
     tokio::time::timeout(ZONE_LIVE_TIMEOUT, wait)
         .await
         .with_context(|| format!("Zone {label} did not become live within {ZONE_LIVE_TIMEOUT:?}"))?
+}
+
+/// Wait for a source sequencer to publish beyond its genesis block.
+///
+/// The source indexer is not part of this test's assertion: the destination
+/// indexer verifies the source block directly from Bedrock's finalized stream.
+async fn wait_until_sequencer_live(label: &str, sequencer: &SequencerClient) -> Result<()> {
+    let wait = async {
+        loop {
+            if sequencer.get_last_block_id().await? >= MIN_BLOCK_ID {
+                log::info!("Zone {label} sequencer live");
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+
+    tokio::time::timeout(ZONE_LIVE_TIMEOUT, wait)
+        .await
+        .with_context(|| {
+            format!("Zone {label} sequencer did not become live within {ZONE_LIVE_TIMEOUT:?}")
+        })?
 }
 
 /// Polls zone B's indexer until the ping record PDA holds a payload.
