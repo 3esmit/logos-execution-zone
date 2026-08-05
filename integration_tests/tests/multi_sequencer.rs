@@ -185,8 +185,8 @@ async fn multiseq_proff_of_concept_comm() -> Result<()> {
 
     let mut seq_iterator = ctx.sequencer_components_iter(bedrock_channel_id).unwrap();
 
-    let seq_client_a = &(seq_iterator.next().unwrap().1.sequencer_client);
-    let seq_client_b = &(seq_iterator.next().unwrap().1.sequencer_client);
+    let seq_client_a = &(seq_iterator.next().unwrap().sequencer_client);
+    let seq_client_b = &(seq_iterator.next().unwrap().sequencer_client);
 
     let indexer = ctx.indexer_client();
 

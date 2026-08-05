@@ -10,8 +10,11 @@ use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivacyPreservingTransaction};
 use lee_core::Commitment;
 use log::{debug, error};
-use sequencer_core::config::GenesisAction;
-use sequencer_service::{CrossZoneConfig, SequencerHandle};
+use sequencer_core::{
+    block_publisher::{Ed25519Key, post_channel_config},
+    config::GenesisAction,
+};
+use sequencer_service::{BedrockConfig, CrossZoneConfig, SequencerHandle, default_priority_fee};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
@@ -22,7 +25,7 @@ use wallet::{
 };
 
 use crate::{
-    config::MultiNodeTestContextConfig,
+    config::{MultiNodeTestContextConfig, bedrock_funding_key},
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
@@ -86,8 +89,8 @@ pub struct WalletComponent {
 
 pub struct TestContextZone {
     wallet_components: Option<WalletComponent>,
-    /// Each sequencer component is mapped from sequencer `SocketAddr`.
-    sequencer_components: HashMap<SocketAddr, SequencerComponent>,
+    /// Order of sequecners matter, as first one starts a channel, other ones connect in order.
+    sequencer_components: Vec<SequencerComponent>,
     indexer_components: Option<IndexerComponents>,
 }
 
@@ -152,9 +155,8 @@ impl TestContext {
     pub fn default_sequencer_component(&self) -> &SequencerComponent {
         self.default_zone()
             .sequencer_components
-            .values()
-            .next()
-            .expect("Must be at least one integration component")
+            .first()
+            .expect("Must be at least one sequencer component")
     }
 
     /// Reference for the default sequencer component(in case, if only one zone exists and only
@@ -169,7 +171,7 @@ impl TestContext {
     pub fn sequencer_components_iter(
         &self,
         channel_id: ChannelId,
-    ) -> Option<impl Iterator<Item = (&SocketAddr, &SequencerComponent)>> {
+    ) -> Option<impl Iterator<Item = &SequencerComponent>> {
         self.zones
             .get(&channel_id)
             .map(|zone| zone.sequencer_components.iter())
@@ -180,7 +182,6 @@ impl TestContext {
             .unwrap()
             .next()
             .unwrap()
-            .1
     }
 
     /// Mutable reference for the default zone(in case if only one present).
@@ -196,7 +197,7 @@ impl TestContext {
     pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
         self.default_zone_mut()
             .sequencer_components
-            .values_mut()
+            .iter_mut()
             .next()
             .expect("Must be at least one integration component")
     }
@@ -271,11 +272,11 @@ impl TestContext {
     pub fn sequencer_client_getter(
         &self,
         channel_id: ChannelId,
-        addr: &SocketAddr,
+        id: usize,
     ) -> Option<&SequencerClient> {
         let val = self.zones.get(&channel_id)?;
         val.sequencer_components
-            .get(addr)
+            .get(id)
             .map(|vall| &vall.sequencer_client)
     }
 
@@ -372,13 +373,9 @@ impl TestContext {
     pub fn disk_sizes(&self) -> DiskSizes {
         DiskSizes {
             sequencer_bytes: self.zones.values().fold(0, |acc, zone| {
-                acc.saturating_add(
-                    zone.sequencer_components
-                        .values()
-                        .fold(0, |accc, component| {
-                            accc.saturating_add(dir_size_bytes(component.temp_sequencer_dir.path()))
-                        }),
-                )
+                acc.saturating_add(zone.sequencer_components.iter().fold(0, |accc, component| {
+                    accc.saturating_add(dir_size_bytes(component.temp_sequencer_dir.path()))
+                }))
             }),
             indexer_bytes: self.zones.values().fold(0, |acc, zone| {
                 acc.saturating_add(
@@ -482,7 +479,7 @@ impl Drop for TestContext {
                 sequencer_handle,
                 temp_sequencer_dir: _,
                 sequencer_client: _,
-            } in sequencer_components.values_mut()
+            } in sequencer_components.iter_mut()
             {
                 let mut sequencer_handle = sequencer_handle
                     .take()
@@ -637,7 +634,9 @@ impl ZoneTestContextBuilder {
         let partial_config = sequencer_partial_config.unwrap_or_default();
 
         let mut sequencer_addrs = vec![];
-        let mut sequencer_components = HashMap::new();
+        let mut sequencer_components = vec![];
+
+        let leader_sequencer_key = config::sequencer_signing_key_from_root(9001);
 
         let sequencer_keys = (0..mn_config.num_nodes)
             .map(|root| {
@@ -647,32 +646,69 @@ impl ZoneTestContextBuilder {
             })
             .collect::<Vec<_>>();
 
-        // post_channel_config(
-        //     &BedrockConfig {
-        //         channel_id: mn_config.bedrock_channel,
-        //         node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-        //         auth: None,
-        //         funding_key: bedrock_funding_key(),
-        //     },
-        //     &Ed25519Key::from_bytes(
-        //         sequencer_keys
-        //             .first()
-        //             .expect("Must be at least one sequencer"),
-        //     ),
-        //     sequencer_keys
-        //         .clone()
-        //         .into_iter()
-        //         .map(|key| Ed25519Key::from_bytes(&key).public_key())
-        //         .collect(),
-        //     20,
-        //     30,
-        //     1,
-        //     1,
-        // )
-        // .await
-        // .context("Failed to configure the channel committee")?;
+        // First, need to start a leader.
+        let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
-        for sequencer_key in sequencer_keys {
+        if enable_wallet {
+            if !use_prebuilt {
+                // Wallet genesis must always be present so that
+                // setup_public/private_accounts_with_initial_supply can claim from the vault
+                // PDAs. When a test supplies custom genesis, merge rather
+                // thanreplace.
+                let wallet_genesis = config::genesis_from_accounts(
+                    &initial_public_accounts,
+                    &initial_private_accounts,
+                );
+                let genesis = match genesis_transactions.clone() {
+                    Some(mut custom) => {
+                        custom.extend(wallet_genesis);
+                        custom
+                    }
+                    None => wallet_genesis,
+                };
+
+                sequencer_setup = sequencer_setup.with_genesis(genesis);
+            }
+        } else {
+            if let Some(genesis_actions) = genesis_transactions.clone() {
+                sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+            }
+        }
+
+        sequencer_setup = sequencer_setup.with_bedrock_signing_key(leader_sequencer_key);
+        sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
+        if let Some(cross_zone_config) = cross_zone_config.clone() {
+            sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
+        }
+
+        let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
+            .setup()
+            .await
+            .context("Failed to setup Sequencer")?;
+
+        let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
+            .context("Failed to create sequencer client")?;
+
+        // Wait for genesis to be published
+        wait_untill_genesis(&sequencer_client)
+            .await
+            .context("Encountered an error while waiting for genesis to be published")?;
+
+        sequencer_addrs.push(sequencer_handle.addr());
+        sequencer_components.push(SequencerComponent {
+            sequencer_handle: Some(sequencer_handle),
+            temp_sequencer_dir,
+            sequencer_client,
+        });
+
+        post_chain_config_with_default_parameters(
+            mn_config.bedrock_channel,
+            bedrock_addr,
+            sequencer_keys.clone(),
+        )
+        .await?;
+
+        for sequencer_key in sequencer_keys.into_iter().skip(1) {
             let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
             if enable_wallet {
@@ -716,14 +752,11 @@ impl ZoneTestContextBuilder {
                 .context("Failed to create sequencer client")?;
 
             sequencer_addrs.push(sequencer_handle.addr());
-            sequencer_components.insert(
-                sequencer_handle.addr(),
-                SequencerComponent {
-                    sequencer_handle: Some(sequencer_handle),
-                    temp_sequencer_dir,
-                    sequencer_client,
-                },
-            );
+            sequencer_components.push(SequencerComponent {
+                sequencer_handle: Some(sequencer_handle),
+                temp_sequencer_dir,
+                sequencer_client,
+            });
         }
 
         let wallet_components = if enable_wallet {
@@ -1108,4 +1141,48 @@ fn dir_size_bytes(path: &Path) -> u64 {
         }
     }
     total
+}
+
+async fn post_chain_config_with_default_parameters(
+    channel_id: ChannelId,
+    bedrock_addr: SocketAddr,
+    sequencer_keys: Vec<[u8; 32]>,
+) -> Result<()> {
+    post_channel_config(
+        &BedrockConfig {
+            channel_id,
+            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+            auth: None,
+            funding_key: bedrock_funding_key(),
+            priority_fee: default_priority_fee(),
+        },
+        &Ed25519Key::from_bytes(
+            sequencer_keys
+                .first()
+                .expect("Must be at least one sequencer"),
+        ),
+        sequencer_keys
+            .clone()
+            .into_iter()
+            .map(|key| Ed25519Key::from_bytes(&key).public_key())
+            .collect(),
+        20,
+        30,
+        1,
+        1,
+    )
+    .await
+    .context("Failed to configure the channel committee")
+}
+
+async fn wait_untill_genesis(client: &SequencerClient) -> Result<()> {
+    loop {
+        let last_block_id = client.get_last_block_id().await?;
+
+        if last_block_id > 0 {
+            break Ok(());
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
