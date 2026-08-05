@@ -67,7 +67,10 @@ pub fn compute_circuit_output(
                 };
 
                 match (kind, nullifier) {
-                    (WitnessKind::Regular, _) => assert!(
+                    (
+                        WitnessKind::Regular,
+                        NullifierWitness::Init { .. } | NullifierWitness::Update { .. },
+                    ) => assert!(
                         pre_state.is_authorized,
                         "Regular private account pre-state must be authorized"
                     ),
