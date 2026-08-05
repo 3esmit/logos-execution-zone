@@ -30,6 +30,8 @@ use tokio::{test, time::Instant};
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const DELIVERY_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(360);
+const MIN_BLOCK_ID: u64 = 2;
 const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 
 #[derive(Debug, Default)]
@@ -76,10 +78,10 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let (seq_a, _seq_a_home) = setup_sequencer(partial, bedrock_addr, vec![], channel_a, None)
         .await
         .context("Failed to set up zone A sequencer")?;
-    let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
+    let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
         .await
         .context("Failed to set up zone A indexer")?;
-    let (_seq_b, _seq_b_home) = setup_sequencer(
+    let (seq_b, _seq_b_home) = setup_sequencer(
         partial,
         bedrock_addr,
         vec![],
@@ -92,9 +94,26 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         .await
         .context("Failed to set up zone B indexer")?;
 
+    // Let both sequencers produce and both indexers finalize their local chain
+    // before introducing the cross-zone dispatch. Without this barrier the
+    // first ping can race indexer startup and leave the verifier with no
+    // finalized source block to inspect.
+    let (seq_a_client, seq_b_client) = (
+        sequencer_client(seq_a.addr())?,
+        sequencer_client(seq_b.addr())?,
+    );
+    let (idx_a_client, idx_b_client) = (
+        indexer_client(idx_a.addr()).await?,
+        indexer_client(idx_b.addr()).await?,
+    );
+    tokio::try_join!(
+        wait_until_zone_live("A", &seq_a_client, &idx_a_client),
+        wait_until_zone_live("B", &seq_b_client, &idx_b_client),
+    )?;
+
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);
-    sequencer_client(seq_a.addr())?
+    seq_a_client
         .send_transaction(ping)
         .await
         .context("Failed to submit ping on zone A")?;
@@ -102,13 +121,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // Wait until zone B's indexer records the delivered payload. The indexer only
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
-    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, idx_b.addr())
-        .context("Failed to build indexer URL")?;
-    let indexer = IndexerClient::new(&indexer_url)
-        .await
-        .context("Failed to build indexer client")?;
-
-    let delivered = wait_for_indexer_delivery(&indexer, record_id).await?;
+    let delivered = wait_for_indexer_delivery(&idx_b_client, record_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B's indexer must record the verified cross-zone payload"
@@ -155,6 +168,45 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
     SequencerClientBuilder::default()
         .build(url)
         .context("Failed to build sequencer client")
+}
+
+async fn indexer_client(addr: SocketAddr) -> Result<IndexerClient> {
+    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, addr)
+        .context("Failed to build indexer URL")?;
+    IndexerClient::new(&indexer_url)
+        .await
+        .context("Failed to build indexer client")
+}
+
+async fn wait_until_zone_live(
+    label: &str,
+    sequencer: &SequencerClient,
+    indexer: &IndexerClient,
+) -> Result<()> {
+    let wait = async {
+        loop {
+            if sequencer.get_last_block_id().await? >= MIN_BLOCK_ID {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+
+        let target = sequencer.get_last_block_id().await?;
+        loop {
+            let finalized = indexer.get_last_finalized_block_id().await?.unwrap_or(0);
+            if finalized >= target {
+                log::info!(
+                    "Zone {label} ready: sequencer at {target}, indexer finalized {finalized}"
+                );
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+
+    tokio::time::timeout(ZONE_LIVE_TIMEOUT, wait)
+        .await
+        .with_context(|| format!("Zone {label} did not become live within {ZONE_LIVE_TIMEOUT:?}"))?
 }
 
 /// Polls zone B's indexer until the ping record PDA holds a payload.
