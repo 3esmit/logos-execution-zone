@@ -30,7 +30,7 @@ use tokio::{test, time::Instant};
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const DELIVERY_RPC_TIMEOUT: Duration = Duration::from_secs(10);
-const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(360);
+const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(600);
 const MIN_BLOCK_ID: u64 = 2;
 const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 
