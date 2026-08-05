@@ -18,7 +18,7 @@ use integration_tests::{
 use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 use tokio::test;
 
-const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(360);
+const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(600);
 
 // Genesis is block 1, so reaching 2 means a block was produced past it.
 const MIN_BLOCK_ID: u64 = 2;

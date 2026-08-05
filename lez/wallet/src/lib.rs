@@ -854,15 +854,39 @@ impl WalletCore {
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
         let message = lee::program_deployment_transaction::Message::new(bytecode);
         let transaction = ProgramDeploymentTransaction::new(message);
+        let expected_transaction = LeeTransaction::ProgramDeployment(transaction.clone());
+        let expected_hash = expected_transaction.hash();
+        let expected_bytecode = transaction.message.into_bytecode();
 
-        Ok(self
+        match self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| {
-                client
-                    .send_transaction(LeeTransaction::ProgramDeployment(transaction.clone()))
-                    .await
+                client.send_transaction(expected_transaction.clone()).await
             })
-            .await?)
+            .await
+        {
+            Ok(hash) if hash == expected_hash => Ok(hash),
+            Ok(hash) => anyhow::bail!(
+                "sequencer returned unexpected deployment hash {hash}; expected {expected_hash}"
+            ),
+            Err(submission_error) => {
+                let readback = self
+                    .multi_sequencer_client
+                    .metered_call(async |client: &SequencerClient| {
+                        client.get_transaction(expected_hash).await
+                    })
+                    .await;
+
+                match readback {
+                    Ok(readback) => {
+                        verify_deployment_readback(expected_hash, &expected_bytecode, readback)
+                    }
+                    Err(readback_error) => anyhow::bail!(
+                        "deployment submission outcome is unknown for {expected_hash}: submission failed: {submission_error:#}; hash lookup failed: {readback_error:#}"
+                    ),
+                }
+            }
+        }
     }
 
     fn validate_then_apply_privacy_messages(
@@ -1102,6 +1126,38 @@ impl WalletCore {
     }
 }
 
+fn verify_deployment_readback(
+    expected_hash: HashType,
+    expected_bytecode: &[u8],
+    readback: Option<LeeTransaction>,
+) -> Result<HashType> {
+    let Some(readback) = readback else {
+        anyhow::bail!(
+            "deployment submission outcome is unknown for {expected_hash}: the transaction was not found; do not retry automatically"
+        );
+    };
+
+    let LeeTransaction::ProgramDeployment(deployment) = readback else {
+        anyhow::bail!(
+            "deployment hash lookup returned a non-deployment transaction for {expected_hash}"
+        );
+    };
+
+    let actual_hash = HashType(deployment.hash());
+    anyhow::ensure!(
+        actual_hash == expected_hash,
+        "deployment hash lookup returned {actual_hash}, expected {expected_hash}"
+    );
+
+    let actual_bytecode = deployment.message.into_bytecode();
+    anyhow::ensure!(
+        actual_bytecode == expected_bytecode,
+        "deployment hash lookup returned different bytecode for {expected_hash}"
+    );
+
+    Ok(expected_hash)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{ffi::CString, str::FromStr as _};
@@ -1111,8 +1167,8 @@ mod tests {
 
     use super::{
         Account, AccountId, AccountIdWithPrivacy, Commitment, Label, LeeTransaction, Message,
-        PrivacyPreservingTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS, Storage,
-        SyncPersistenceCheckpoint, WalletCore,
+        PrivacyPreservingTransaction, ProgramDeploymentTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS,
+        Storage, SyncPersistenceCheckpoint, WalletCore,
     };
 
     fn privacy_transaction(message: Message) -> LeeTransaction {
@@ -1120,6 +1176,56 @@ mod tests {
             message,
             WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
         ))
+    }
+
+    fn deployment_transaction(bytecode: Vec<u8>) -> LeeTransaction {
+        LeeTransaction::ProgramDeployment(ProgramDeploymentTransaction::new(
+            lee::program_deployment_transaction::Message::new(bytecode),
+        ))
+    }
+
+    #[test]
+    fn deployment_readback_accepts_matching_transaction() {
+        let bytecode = vec![0x7f, 0x45, 0x4c, 0x46];
+        let transaction = deployment_transaction(bytecode.clone());
+        let expected_hash = transaction.hash();
+
+        let resolved =
+            super::verify_deployment_readback(expected_hash, &bytecode, Some(transaction)).unwrap();
+
+        assert_eq!(resolved, expected_hash);
+    }
+
+    #[test]
+    fn deployment_readback_rejects_mismatched_bytecode() {
+        let transaction = deployment_transaction(vec![1, 2, 3]);
+        let expected_hash = transaction.hash();
+
+        let error = super::verify_deployment_readback(expected_hash, &[9, 9, 9], Some(transaction))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("different bytecode"));
+    }
+
+    #[test]
+    fn deployment_readback_rejects_missing_transaction() {
+        let expected_hash = common::HashType([7; 32]);
+        let error = super::verify_deployment_readback(expected_hash, &[], None).unwrap_err();
+
+        assert!(error.to_string().contains("do not retry automatically"));
+    }
+
+    #[test]
+    fn deployment_readback_rejects_wrong_transaction_type() {
+        let bytecode = vec![1, 2, 3];
+        let deployment = deployment_transaction(bytecode);
+        let expected_hash = deployment.hash();
+        let wrong_type = privacy_transaction(Message::default());
+
+        let error =
+            super::verify_deployment_readback(expected_hash, &[], Some(wrong_type)).unwrap_err();
+
+        assert!(error.to_string().contains("non-deployment"));
     }
 
     #[test]
