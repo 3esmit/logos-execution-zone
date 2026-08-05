@@ -31,10 +31,7 @@ use lee::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{
-    TestContext,
-    config::MultiNodeTestContextConfig,
-};
+use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);

@@ -17,13 +17,13 @@ use cross_zone_outbox_core::outbox_pda;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, indexer_client, sequencer_client, setup_bedrock_node, setup_indexer},
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -31,11 +31,6 @@ const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 
 #[test]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
-    // Declared first so it outlives both zones (drops run in reverse order).
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up shared Bedrock node")?;
-
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
@@ -54,31 +49,40 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         }],
     };
 
+    let ctx = TestContext::builder(
+        vec![
+            MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            },
+            MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            },
+        ],
+        None,
+    )
+    .disable_wallet(channel_a)
+    .disable_wallet(channel_b)
+    .with_sequencer_partial_config(channel_a, partial.clone())
+    .with_sequencer_partial_config(channel_b, partial)
+    .with_genesis(channel_a, vec![])
+    .with_genesis(channel_b, vec![])
+    .with_cross_zone(channel_b, cross_zone)
+    .build()
+    .await?;
+
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.
-    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_a)
-        .with_genesis(vec![])
-        .setup()
-        .await
-        .context("Failed to set up zone A sequencer")?;
-    let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
-        .await
-        .context("Failed to set up zone A indexer")?;
-    let (_seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_b)
-        .with_genesis(vec![])
-        .with_cross_zone(cross_zone.clone())
-        .setup()
-        .await
-        .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, Some(cross_zone))
-        .await
-        .context("Failed to set up zone B indexer")?;
+    let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();
+
+    let seq_client_a = &ctx
+        .zone_default_sequencer_component(channel_a)
+        .sequencer_client;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);
-    sequencer_client(seq_a.addr())?
+    seq_client_a
         .send_transaction(ping)
         .await
         .context("Failed to submit ping on zone A")?;
@@ -86,11 +90,8 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // Wait until zone B's indexer records the delivered payload. The indexer only
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
-    let indexer = indexer_client(idx_b.addr())
-        .await
-        .context("Failed to build indexer client")?;
 
-    let delivered = wait_for_indexer_delivery(&indexer, record_id).await?;
+    let delivered = wait_for_indexer_delivery(&ind_client_b, record_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B's indexer must record the verified cross-zone payload"
