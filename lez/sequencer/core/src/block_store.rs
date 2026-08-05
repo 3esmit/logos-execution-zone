@@ -265,6 +265,13 @@ pub fn set_cross_zone_peer_floor(
     Ok(())
 }
 
+/// Drops the stored floor so the watcher reads `peer_zone`'s channel from the
+/// peer's genesis again.
+pub fn clear_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<()> {
+    dbio.delete_cross_zone_peer_floor(peer_zone)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
