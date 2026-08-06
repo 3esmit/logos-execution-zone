@@ -1,7 +1,5 @@
 //! Executor Actor performs the main logic of the Sequencer.
 
-use std::time::Duration;
-
 use anyhow::{Ok, Result, anyhow, bail};
 use common::{block::Block, transaction::LeeTransaction};
 use kameo::{
@@ -15,13 +13,13 @@ use lee_core::{
     BlockId,
     account::{Balance, Nonce},
 };
-use log::{error, info, warn};
+use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
     SequencerCore, TransactionOrigin,
     block_publisher::{BlockPublisherTrait as _, ZoneSdkPublisher},
     config::SequencerConfig,
-    task_group::{StoreRelease, TaskGroup},
+    task_group::TaskGroup,
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -46,10 +44,6 @@ pub struct ExecutorActor {
     /// handle owns no reference to the core itself, so without these there is
     /// nothing to wait on: aborting the main loop only starts the teardown.
     background_tasks: Vec<TaskGroup>,
-    /// The store, weakly. Every strong reference lives inside something this
-    /// handle stops, so watching the count go to zero is how shutdown knows the
-    /// database file is actually closed rather than assuming it from drop order.
-    store: StoreRelease,
 }
 
 impl ExecutorActor {
@@ -59,14 +53,12 @@ impl ExecutorActor {
 
         let driver_cancellation = sequencer.block_publisher().driver_cancellation();
         let background_tasks = sequencer.background_tasks();
-        let store = sequencer.store_release();
 
         Self {
             sequencer,
             mempool_handle,
             driver_cancellation,
             background_tasks,
-            store,
         }
     }
 }
@@ -113,11 +105,6 @@ impl Actor for ExecutorActor {
         for tasks in &self.background_tasks {
             tasks.shutdown().await;
         }
-
-        // Nothing this handle owns holds the store, so waiting here rather than
-        // after the drop is the same thing, and it keeps the guarantee inside
-        // the call the caller awaits.
-        wait_for_store_release(&self.store).await;
 
         Ok(())
     }
@@ -311,33 +298,5 @@ impl Message<ProduceBlock> for ExecutorActor {
         let id = self.sequencer.produce_new_block().await?;
         info!("Block with id {id} created");
         Ok(())
-    }
-}
-
-/// Waits until nothing holds the store any more.
-///
-/// Everything that holds one lives inside a task or a server this handle has
-/// already stopped, but the last drop happens on whichever thread ran them, not
-/// on this one. Without this the caller can reopen the database a moment too
-/// early and hit a `RocksDB` lock error, which is the kind of failure that shows
-/// up as an occasional flake rather than a bug.
-async fn wait_for_store_release(store: &StoreRelease) {
-    /// Long enough for a drop that is already in flight, short enough that a
-    /// leak is reported rather than hung on.
-    const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
-    const POLL: Duration = Duration::from_millis(10);
-
-    let released = tokio::time::timeout(RELEASE_TIMEOUT, async {
-        while store.holders() > 0 {
-            tokio::time::sleep(POLL).await;
-        }
-    })
-    .await;
-
-    if released.is_err() {
-        error!(
-            "Sequencer store still held by {} reference(s) after shutdown; something outlived the tasks it should have died with",
-            store.holders()
-        );
     }
 }

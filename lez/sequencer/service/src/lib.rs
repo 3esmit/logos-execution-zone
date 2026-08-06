@@ -12,7 +12,7 @@ use tokio::select;
 
 /// Handle to manage the sequencer and its tasks.
 ///
-/// Implements `Drop` to ensure all tasks are aborted and the RPC server is stopped when dropped.
+/// Implements `Drop` to ensure all actors are killed when dropped.
 pub struct SequencerHandle {
     executor_ref: ActorRef<ExecutorActor>,
     rpc_server_ref: ActorRef<RpcServerActor>,
@@ -36,6 +36,10 @@ impl SequencerHandle {
     }
 
     /// Stops the sequencer and waits for every part of it to be gone.
+    ///
+    /// Order matters: the scheduler stops first so nothing new is produced, then
+    /// the RPC server so no request can reach a stopping executor, then the
+    /// executor itself.
     pub async fn shutdown(mut self) {
         let Self {
             executor_ref,
@@ -114,11 +118,38 @@ impl SequencerHandle {
     }
 }
 
+/// Best-effort teardown for callers that drop the handle instead of awaiting
+/// [`SequencerHandle::shutdown`].
+///
+/// Dropping the refs alone is not enough: the `ExecutorActor` reference held by
+/// the RPC module keeps the executor — and the `RocksDB` lock — alive for an
+/// unbounded stretch afterwards, long enough for a restart on the same home
+/// directory to fail outright. Killing runs each actor's `on_stop` and drops its
+/// state, which is the same teardown `shutdown` performs, just without anything
+/// to await it on.
+impl Drop for SequencerHandle {
+    fn drop(&mut self) {
+        let Self {
+            executor_ref,
+            rpc_server_ref,
+            scheduler_ref,
+            addr: _,
+        } = self;
+
+        scheduler_ref.kill();
+        rpc_server_ref.kill();
+        executor_ref.kill();
+    }
+}
+
 pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
-    let executor_ref = ExecutorActor::spawn(ExecutorActor::new(config).await);
+    let executor = ExecutorActor::new(config).await;
+    // Taken while the actor is still owned here: once it is spawned its state
+    // lives on the actor's task and there is no way to reach into it.
+    let executor_ref = ExecutorActor::spawn(executor);
     info!("Executor Actor spawned");
 
     let rpc_server = RpcServerActor::new(executor_ref.clone(), listen_addr, max_block_size).await?;

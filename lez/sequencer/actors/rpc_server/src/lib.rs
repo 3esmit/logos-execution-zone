@@ -97,6 +97,7 @@ impl Actor for RpcServerActor {
     ) -> Result<(), Self::Error> {
         if let Some(server_handle) = self.server_handle.take() {
             server_handle.stop()?;
+            server_handle.stopped().await;
         }
 
         Ok(())
