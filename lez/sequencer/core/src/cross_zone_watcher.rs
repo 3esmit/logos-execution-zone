@@ -774,11 +774,11 @@ mod tests {
     }
 
     /// The tip a watcher holds after delivering up to `block_id`.
-    fn tip_at(block_id: u64) -> Option<PeerChainTip> {
-        Some(PeerChainTip {
+    fn tip_at(block_id: u64) -> PeerChainTip {
+        PeerChainTip {
             block_id,
             block_hash: chain_hash(block_id),
-        })
+        }
     }
 
     fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn only_the_next_block_off_the_tip_links() {
-        let tip = tip_at(2);
+        let tip = Some(tip_at(2));
 
         assert_eq!(
             link_against(tip, &chain_block(3), None),
@@ -988,7 +988,7 @@ mod tests {
         let mut tampered = chain_block(3);
         tampered.header.hash = HashType([9; 32]);
         assert!(matches!(
-            link_against(tip_at(2), &tampered, None),
+            link_against(Some(tip_at(2)), &tampered, None),
             Link::OffChain(_)
         ));
     }
@@ -1023,7 +1023,7 @@ mod tests {
             }
         );
         assert_eq!(
-            resume_from(tip_at(2), Some(Slot::from(7))),
+            resume_from(Some(tip_at(2)), Some(Slot::from(7))),
             Resume {
                 cursor: Some(Slot::from(7)),
                 clear_floor: false
@@ -1201,7 +1201,7 @@ mod tests {
         let mut resumed_tip = dbio.get_cross_zone_peer_tip(PEER_ZONE).unwrap();
         assert_eq!(
             resumed_tip,
-            tip_at(2),
+            Some(tip_at(2)),
             "the tip is durable, not just in memory"
         );
 
@@ -1323,7 +1323,7 @@ mod tests {
             Some(Slot::from(0)),
             "the floor stays below it, so a fixed decoder recovers the messages"
         );
-        assert_eq!(tip, tip_at(1));
+        assert_eq!(tip, Some(tip_at(1)));
     }
 
     #[tokio::test]
@@ -1365,7 +1365,7 @@ mod tests {
             ],
             "the key the peer aimed to burn is never recorded, and nothing else is held up"
         );
-        assert_eq!(tip, tip_at(3));
+        assert_eq!(tip, Some(tip_at(3)));
     }
 
     #[tokio::test]
@@ -1400,7 +1400,7 @@ mod tests {
             vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
             "one delivery per id, whatever the peer publishes under it"
         );
-        assert_eq!(tip, tip_at(2));
+        assert_eq!(tip, Some(tip_at(2)));
     }
 
     #[tokio::test]
@@ -1431,7 +1431,7 @@ mod tests {
             vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
             "the fork is passed over and the peer's own chain continues"
         );
-        assert_eq!(tip, tip_at(2));
+        assert_eq!(tip, Some(tip_at(2)));
     }
 
     #[tokio::test]
@@ -1489,7 +1489,7 @@ mod tests {
             recorded_keys(&dbio),
             vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
         );
-        assert_eq!(tip, tip_at(2));
+        assert_eq!(tip, Some(tip_at(2)));
     }
 
     #[tokio::test]
