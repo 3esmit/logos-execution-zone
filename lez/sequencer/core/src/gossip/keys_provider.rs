@@ -2,6 +2,7 @@
 //! gossip layer to validate announcements.
 //!
 //! FIXME: `NodeKeysProvider` will be replaced by an L2 Join/Leave-derived provider in a follow-up.
+//! The related PR is https://github.com/logos-blockchain/logos-execution-zone/pull/653
 
 use std::{collections::HashSet, future::Future};
 

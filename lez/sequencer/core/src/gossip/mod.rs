@@ -12,3 +12,6 @@ pub mod network;
 pub mod validation;
 
 pub use network::{Libp2pNetwork, PeerNetworkTrait};
+
+#[cfg(test)]
+mod tests;
