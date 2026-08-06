@@ -43,6 +43,9 @@ pub struct SequencerHandle {
     /// handle stops, so watching the count go to zero is how shutdown knows the
     /// database file is actually closed rather than assuming it from drop order.
     store: StoreRelease,
+    /// Held for its lifetime: dropping it aborts the gossip drive task. `None`
+    /// when gossip is unconfigured.
+    _gossip_network: Option<sequencer_core::gossip::Libp2pNetwork>,
 }
 
 impl SequencerHandle {
@@ -53,6 +56,7 @@ impl SequencerHandle {
         driver_cancellation: CancellationToken,
         background_tasks: Vec<TaskGroup>,
         store: StoreRelease,
+        gossip_network: Option<sequencer_core::gossip::Libp2pNetwork>,
     ) -> Self {
         Self {
             addr,
@@ -61,6 +65,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks,
             store,
+            _gossip_network: gossip_network,
         }
     }
 
@@ -113,6 +118,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks: _,
             store: _,
+            _gossip_network: _,
         } = self;
 
         // Cloned rather than taken: `stopped()` consumes a handle, and taking
@@ -146,6 +152,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks,
             store: _,
+            _gossip_network: _,
         } = self;
 
         let stopped = server_handle.is_stopped()
@@ -172,6 +179,7 @@ impl Drop for SequencerHandle {
             driver_cancellation: _,
             background_tasks: _,
             store: _,
+            _gossip_network: _,
         } = self;
 
         main_loop_handle.abort();
@@ -216,10 +224,40 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
+    // Captured before `config` moves into the core; gossip needs them after.
+    let gossip_config = config.gossip.clone();
+    let bedrock_config = config.bedrock_config.clone();
+    let sequencer_home = config.home.clone();
+
     let (sequencer_core, mempool_handle): (SequencerCore, _) =
         SequencerCore::start_from_config(config).await;
 
     info!("Sequencer core set up");
+
+    // Gossip is constructed only when configured; a `None` config means no
+    // sockets and no tasks. Startup failure here is a hard error
+    // (misconfiguration); after startup, gossip never halts the node.
+    let gossip_network = match gossip_config {
+        None => None,
+        Some(gossip_config) => {
+            let key_path = sequencer_home.join("bedrock_signing_key");
+            let secret: [u8; 32] = std::fs::read(&key_path)
+                .with_context(|| format!("Failed to read {}", key_path.display()))?
+                .try_into()
+                .map_err(|_bytes| anyhow!("Bedrock signing key has incorrect length"))?;
+            let channel_id = *bedrock_config.channel_id.as_ref();
+            let network = sequencer_core::gossip::Libp2pNetwork::start(
+                gossip_config,
+                channel_id,
+                secret,
+                sequencer_core::gossip::keys_provider::NodeKeysProvider::new(&bedrock_config),
+            )
+            .await
+            .context("Failed to start sequencer gossip network")?;
+            info!("Gossip network started as {}", network.local_peer_id());
+            Some(network)
+        }
+    };
 
     let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
     // Taken while the core is still owned here: once it is behind the `Arc`
@@ -251,6 +289,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         driver_cancellation,
         background_tasks,
         store,
+        gossip_network,
     ))
 }
 

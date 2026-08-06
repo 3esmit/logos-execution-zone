@@ -1,4 +1,5 @@
 //! The signed address announcement gossiped on the per-channel topic.
+//!
 //! Deliberately libp2p-free: pure wire format, signed with the bedrock
 //! Ed25519 key so receivers validate against the channel's accredited set.
 
@@ -9,12 +10,6 @@ use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519Si
 /// Caps enforced at validation; a violating message is rejected outright.
 pub const MAX_LISTEN_ADDRS: usize = 8;
 pub const MAX_ADDR_LEN: usize = 256;
-
-/// GossipSub topic carrying [`SignedAnnouncement`]s for a channel.
-#[must_use]
-pub fn announcements_topic(channel_id: &[u8; 32]) -> String {
-    format!("/lez/{}/v1/announcements", hex::encode(channel_id))
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Announcement {
@@ -99,6 +94,12 @@ impl SignedAnnouncement {
 
         Ok(signed.announcement)
     }
+}
+
+/// `GossipSub` topic carrying [`SignedAnnouncement`]s for a channel.
+#[must_use]
+pub fn announcements_topic(channel_id: &[u8; 32]) -> String {
+    format!("/lez/{}/v1/announcements", hex::encode(channel_id))
 }
 
 #[cfg(test)]

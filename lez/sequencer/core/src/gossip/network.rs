@@ -1,6 +1,8 @@
-//! The libp2p swarm and its drive task. The drive task owns the [`Swarm`];
-//! [`Libp2pNetwork`] is the handle. A drive-task failure after startup is
-//! log-and-continue: the node keeps running L1-only (see the gossip spec).
+//! The libp2p swarm and its drive task.
+//!
+//! The drive task owns the [`Swarm`]; [`Libp2pNetwork`] is the handle. A
+//! drive-task failure after startup is log-and-continue: the node keeps
+//! running L1-only (see the gossip spec).
 
 use std::{
     collections::{HashMap, HashSet},
@@ -214,36 +216,6 @@ impl Drop for Libp2pNetwork {
     }
 }
 
-/// Derives the libp2p `PeerId` an Ed25519 public key produces. `None` only
-/// for byte strings that are not a valid curve point.
-pub(crate) fn peer_id_from_ed25519(pubkey: &[u8; 32]) -> Option<PeerId> {
-    libp2p::identity::ed25519::PublicKey::try_from_bytes(pubkey)
-        .ok()
-        .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
-}
-
-async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<Multiaddr>> {
-    let deadline = tokio::time::sleep(LISTEN_TIMEOUT);
-    tokio::pin!(deadline);
-    loop {
-        tokio::select! {
-            event = swarm.select_next_some() => match event {
-                SwarmEvent::NewListenAddr { address, .. } => return Ok(vec![address]),
-                SwarmEvent::ListenerError { error, .. } => {
-                    return Err(anyhow!("Gossip listener error during startup: {error}"));
-                }
-                SwarmEvent::ListenerClosed { reason, .. } => {
-                    return Err(anyhow!("Gossip listener closed during startup: {reason:?}"));
-                }
-                _ => {}
-            },
-            () = &mut deadline => {
-                return Err(anyhow!("Timed out waiting for gossip listen address"));
-            }
-        }
-    }
-}
-
 /// Everything the drive task owns.
 struct DriveTask {
     swarm: Swarm<GossipBehaviour>,
@@ -263,26 +235,11 @@ struct DriveTask {
     cancellation: CancellationToken,
 }
 
-async fn run_drive_task(mut task: DriveTask) {
-    // Cancelled on return or panic, so observers learn the driver is gone.
-    let _guard = task.cancellation.clone().drop_guard();
-
-    let started_at = tokio::time::Instant::now();
-    let mut announce_interval = tokio::time::interval(task.announce_interval);
-    let mut dial_interval = tokio::time::interval(DIAL_RETRY_INTERVAL);
-    let mut warn_interval = tokio::time::interval(NO_PEERS_WARN_INTERVAL);
-
-    loop {
-        tokio::select! {
-            event = task.swarm.select_next_some() => task.on_swarm_event(event),
-            _ = announce_interval.tick() => task.publish_announcement(),
-            _ = dial_interval.tick() => task.dial_missing_peers(),
-            _ = warn_interval.tick() => task.warn_if_isolated(started_at),
-        }
-    }
-}
-
 impl DriveTask {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "SwarmEvent is non_exhaustive; only connection and message events are handled"
+    )]
     fn on_swarm_event(&mut self, event: SwarmEvent<GossipBehaviourEvent>) {
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -302,7 +259,7 @@ impl DriveTask {
                 propagation_source,
                 message_id,
                 message,
-            })) => self.on_gossip_message(propagation_source, message_id, &message),
+            })) => self.on_gossip_message(propagation_source, &message_id, &message),
             _ => {}
         }
     }
@@ -310,7 +267,7 @@ impl DriveTask {
     fn on_gossip_message(
         &mut self,
         source: PeerId,
-        message_id: gossipsub::MessageId,
+        message_id: &gossipsub::MessageId,
         message: &gossipsub::Message,
     ) {
         use crate::gossip::validation::{Evaluation, evaluate_announcement};
@@ -330,8 +287,9 @@ impl DriveTask {
             }
             Evaluation::IgnoreUnknownKey => {
                 // Our cached accredited set may be stale; nudge the
-                // refresher (it rate-limits internally). Never blocks.
-                let _ = self.refresh_tx.try_send(());
+                // refresher (it rate-limits internally). Never blocks; a full
+                // channel already has a refresh pending, so a dropped nudge is fine.
+                _ = self.refresh_tx.try_send(());
                 gossipsub::MessageAcceptance::Ignore
             }
             Evaluation::IgnoreOwn | Evaluation::IgnoreStale => gossipsub::MessageAcceptance::Ignore,
@@ -360,7 +318,7 @@ impl DriveTask {
             .swarm
             .behaviour_mut()
             .gossipsub
-            .report_message_validation_result(&message_id, &source, acceptance);
+            .report_message_validation_result(message_id, &source, acceptance);
     }
 
     fn publish_announcement(&mut self) {
@@ -424,8 +382,9 @@ impl DriveTask {
             let delay = DIAL_BACKOFF_BASE
                 .saturating_mul(2_u32.saturating_pow(attempts))
                 .min(DIAL_BACKOFF_MAX);
+            let next_attempt = now.checked_add(delay).unwrap_or(now);
             self.dial_backoff
-                .insert(peer_id, (attempts.saturating_add(1), now + delay));
+                .insert(peer_id, (attempts.saturating_add(1), next_attempt));
 
             let opts = libp2p::swarm::dial_opts::DialOpts::peer_id(peer_id)
                 .addresses(addrs)
@@ -461,10 +420,10 @@ impl DriveTask {
     }
 
     /// Connected peers that map to an accredited key via the directory.
-    fn connected_accredited<'a>(
-        &'a self,
-        accredited: &'a HashSet<[u8; 32]>,
-    ) -> impl Iterator<Item = [u8; 32]> + 'a {
+    fn connected_accredited<'keys>(
+        &'keys self,
+        accredited: &'keys HashSet<[u8; 32]>,
+    ) -> impl Iterator<Item = [u8; 32]> + 'keys {
         self.connected
             .iter()
             .filter_map(|peer_id| self.directory.pubkey_of(peer_id))
@@ -486,6 +445,71 @@ impl DriveTask {
     }
 }
 
+/// Derives the libp2p `PeerId` an Ed25519 public key produces. `None` only
+/// for byte strings that are not a valid curve point.
+pub(crate) fn peer_id_from_ed25519(pubkey: &[u8; 32]) -> Option<PeerId> {
+    libp2p::identity::ed25519::PublicKey::try_from_bytes(pubkey)
+        .ok()
+        .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
+}
+
+#[expect(
+    clippy::integer_division_remainder_used,
+    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+)]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "SwarmEvent is non_exhaustive; only startup listener events are handled here"
+)]
+async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<Multiaddr>> {
+    let deadline = tokio::time::sleep(LISTEN_TIMEOUT);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            event = swarm.select_next_some() => match event {
+                SwarmEvent::NewListenAddr { address, .. } => return Ok(vec![address]),
+                SwarmEvent::ListenerError { error, .. } => {
+                    return Err(anyhow!("Gossip listener error during startup: {error}"));
+                }
+                SwarmEvent::ListenerClosed { reason, .. } => {
+                    return Err(anyhow!("Gossip listener closed during startup: {reason:?}"));
+                }
+                _ => {}
+            },
+            () = &mut deadline => {
+                return Err(anyhow!("Timed out waiting for gossip listen address"));
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::integer_division_remainder_used,
+    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+)]
+async fn run_drive_task(mut task: DriveTask) {
+    // Cancelled on return or panic, so observers learn the driver is gone.
+    let _guard = task.cancellation.clone().drop_guard();
+
+    let started_at = tokio::time::Instant::now();
+    let mut announce_interval = tokio::time::interval(task.announce_interval);
+    let mut dial_interval = tokio::time::interval(DIAL_RETRY_INTERVAL);
+    let mut warn_interval = tokio::time::interval(NO_PEERS_WARN_INTERVAL);
+
+    loop {
+        tokio::select! {
+            event = task.swarm.select_next_some() => task.on_swarm_event(event),
+            _ = announce_interval.tick() => task.publish_announcement(),
+            _ = dial_interval.tick() => task.dial_missing_peers(),
+            _ = warn_interval.tick() => task.warn_if_isolated(started_at),
+        }
+    }
+}
+
+#[expect(
+    clippy::integer_division_remainder_used,
+    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+)]
 async fn run_keys_refresher<P: AccreditedKeysProvider>(
     provider: P,
     refresh_interval: Duration,
@@ -495,7 +519,9 @@ async fn run_keys_refresher<P: AccreditedKeysProvider>(
     /// Minimum spacing for demand-driven (unknown-key) refreshes.
     const MIN_SPACING: Duration = Duration::from_secs(10);
     let mut interval = tokio::time::interval(refresh_interval);
-    let mut last_fetch = tokio::time::Instant::now() - MIN_SPACING;
+    let mut last_fetch = tokio::time::Instant::now()
+        .checked_sub(MIN_SPACING)
+        .unwrap_or_else(tokio::time::Instant::now);
 
     loop {
         tokio::select! {
@@ -542,6 +568,10 @@ fn spawn_death_reminder(cancellation: CancellationToken) {
     });
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "Protocol is non_exhaustive with many variants; only IP variants matter here"
+)]
 fn is_unspecified(addr: &Multiaddr) -> bool {
     addr.iter().any(|proto| match proto {
         libp2p::multiaddr::Protocol::Ip4(ip) => ip.is_unspecified(),

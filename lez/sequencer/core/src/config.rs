@@ -55,18 +55,6 @@ pub struct GossipConfig {
     pub keys_refresh_interval: Duration,
 }
 
-fn default_gossip_listen_addr() -> String {
-    "/ip4/0.0.0.0/udp/0/quic-v1".to_owned()
-}
-
-const fn default_announce_interval() -> Duration {
-    Duration::from_secs(60)
-}
-
-const fn default_keys_refresh_interval() -> Duration {
-    Duration::from_secs(300)
-}
-
 // TODO: Provide default values
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
@@ -134,6 +122,18 @@ const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }
 
+fn default_gossip_listen_addr() -> String {
+    "/ip4/0.0.0.0/udp/0/quic-v1".to_owned()
+}
+
+const fn default_announce_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
+const fn default_keys_refresh_interval() -> Duration {
+    Duration::from_secs(300)
+}
+
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
 const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
@@ -172,13 +172,28 @@ mod tests {
     }
 
     #[test]
-    fn sequencer_config_without_gossip_still_parses() {
-        // The checked-in debug config predates gossip and must keep working.
+    fn debug_config_parses_with_gossip() {
         let config = SequencerConfig::from_path(Path::new(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../service/configs/debug/sequencer_config.json"
         )))
         .unwrap();
+        assert!(config.gossip.is_some());
+    }
+
+    #[test]
+    fn sequencer_config_gossip_defaults_to_none() {
+        let json = r#"{
+            "home": ".", "max_num_tx_in_block": 1, "mempool_max_size": 1,
+            "block_create_timeout": "1s", "retry_pending_blocks_timeout": "1s",
+            "signing_key": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+            "bedrock_config": {
+                "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
+                "node_url": "http://localhost:18080",
+                "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
+            }
+        }"#;
+        let config: SequencerConfig = serde_json::from_str(json).unwrap();
         assert!(config.gossip.is_none());
     }
 }

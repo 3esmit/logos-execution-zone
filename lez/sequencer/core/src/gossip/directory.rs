@@ -71,8 +71,7 @@ impl PeerDirectory {
 mod tests {
     use super::*;
 
-    fn peer(n: u8) -> PeerId {
-        let _n = n; // silences unused warning
+    fn peer(_n: u8) -> PeerId {
         libp2p::identity::Keypair::generate_ed25519()
             .public()
             .to_peer_id()

@@ -31,6 +31,7 @@ pub enum Evaluation {
     },
 }
 
+#[must_use]
 pub fn evaluate_announcement(
     data: &[u8],
     channel_id: &[u8; 32],

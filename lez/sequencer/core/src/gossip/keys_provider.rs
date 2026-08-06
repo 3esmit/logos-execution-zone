@@ -2,12 +2,13 @@
 //! gossip layer to validate announcements.
 //!
 //! FIXME: `NodeKeysProvider` will be replaced by an L2 Join/Leave-derived provider in a follow-up.
-//! The related PR is https://github.com/logos-blockchain/logos-execution-zone/pull/653
+//! The related PR is <https://github.com/logos-blockchain/logos-execution-zone/pull/653>.
 
 use std::{collections::HashSet, future::Future};
 
 use anyhow::{Context as _, Result};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
@@ -54,7 +55,7 @@ impl AccreditedKeysProvider for NodeKeysProvider {
                 state
                     .accredited_keys
                     .iter()
-                    .map(|key| key.to_bytes())
+                    .map(Ed25519PublicKey::to_bytes)
                     .collect()
             })
             .unwrap_or_default())

@@ -36,7 +36,9 @@ async fn start_node(
 
 /// Polls `condition` until it holds or `timeout` elapses.
 async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .expect("test deadline within Instant range");
     while Instant::now() < deadline {
         if condition() {
             return true;
