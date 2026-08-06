@@ -4838,6 +4838,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kameo_actors"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "069ef0ae25f4da6f817ce7d81f7990b3d12c3ae398b59e6e16e37b5fcc92a443"
+dependencies = [
+ "futures",
+ "glob",
+ "kameo",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "kameo_macros"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9572,8 +9585,11 @@ dependencies = [
  "common",
  "kameo",
  "lee_core",
+ "log",
  "mempool",
  "sequencer_core",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -9594,6 +9610,7 @@ dependencies = [
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "tokio",
 ]
 
 [[package]]
@@ -9608,18 +9625,17 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bytesize",
  "clap",
- "common",
  "env_logger",
  "futures",
  "hex",
- "jsonrpsee",
+ "kameo",
+ "kameo_actors",
  "log",
- "mempool",
  "metrics-exporter-prometheus",
  "sequencer_core",
- "sequencer_service_rpc",
+ "sequencer_executor_actor",
+ "sequencer_rpc_server_actor",
  "tokio",
  "tokio-util",
 ]

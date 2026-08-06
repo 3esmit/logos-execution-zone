@@ -135,6 +135,7 @@ tokio-util = "0.7.18"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 kameo = "0.22.2"
+kameo_actors = "0.8.1"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
 num_cpus = "1.13.1"

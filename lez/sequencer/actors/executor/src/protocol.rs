@@ -52,3 +52,6 @@ pub struct GetChannelId;
 pub struct GetChannelIdReply {
     pub channel_id: [u8; 32],
 }
+
+#[derive(Copy, Clone)]
+pub struct ProduceBlock;

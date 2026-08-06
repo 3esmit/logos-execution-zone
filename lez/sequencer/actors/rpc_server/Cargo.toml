@@ -18,6 +18,7 @@ sequencer_rpc_server_actor_metrics = { workspace = true, features = ["record"] }
 sequencer_executor_actor.workspace = true
 
 kameo.workspace = true
+tokio.workspace = true
 log.workspace = true
 jsonrpsee.workspace = true
 borsh.workspace = true

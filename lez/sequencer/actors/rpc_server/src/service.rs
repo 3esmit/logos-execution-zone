@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
@@ -14,13 +15,13 @@ use sequencer_service_protocol::{
 
 pub struct Service {
     executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor>,
-    max_block_size: u64,
+    max_block_size: ByteSize,
 }
 
 impl Service {
     pub fn new(
         executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor>,
-        max_block_size: u64,
+        max_block_size: ByteSize,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
@@ -47,7 +48,10 @@ impl sequencer_service_rpc::RpcServer for Service {
             let tx_size =
                 u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
-            let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+            let max_tx_size = self
+                .max_block_size
+                .as_u64()
+                .saturating_sub(BLOCK_HEADER_OVERHEAD);
 
             if tx_size > max_tx_size {
                 return Err(ErrorObjectOwned::owned(
