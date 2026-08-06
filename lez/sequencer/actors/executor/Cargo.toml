@@ -1,0 +1,17 @@
+[package]
+name = "sequencer_executor_actor"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sequencer_core.workspace = true
+common.workspace = true
+lee_core.workspace = true
+mempool.workspace = true
+
+kameo.workspace = true
+anyhow.workspace = true
