@@ -26,12 +26,8 @@ use crate::{
         PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchRecord,
         PendingCrossZoneDispatchesCellOwned, PendingCrossZoneDispatchesCellRef,
         PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
-        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerFloorCellOwned, PeerFloorCellRef,
-        PeerZoneKey, PendingCrossZoneDispatchRecord, PendingCrossZoneDispatchesCellOwned,
-        PendingCrossZoneDispatchesCellRef, PendingDepositEventRecord,
-        PendingDepositEventsCellOwned, PendingDepositEventsCellRef, PublishedHighWaterCell,
-        UnseenWithdrawCountCell, WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord,
-        ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
+        PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
+        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
