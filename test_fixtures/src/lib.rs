@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{AccountId, PrivacyPreservingTransaction};
+use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
 use lee_core::Commitment;
 use log::{debug, error};
 use sequencer_core::{
@@ -25,7 +25,10 @@ use wallet::{
 };
 
 use crate::{
-    config::{MultiNodeTestContextConfig, bedrock_funding_key},
+    config::{
+        InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig,
+        bedrock_funding_key,
+    },
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
@@ -40,6 +43,10 @@ pub mod setup;
 
 // TODO: Remove this and control time from tests
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
+/// 1 s bedrock slots: rotate the turn every ~20 s of tenure; steal a stalled
+/// turn after ~30 s (bounds the stall while B is accredited but not started).
+const POSTING_TIMEFRAME_SLOTS: u32 = 20;
+const POSTING_TIMEOUT_SLOTS: u32 = 30;
 
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
@@ -88,10 +95,10 @@ pub struct WalletComponent {
 }
 
 pub struct TestContextZone {
-    wallet_components: Option<WalletComponent>,
+    wallet: Option<WalletComponent>,
     /// Order of sequecners matter, as first one starts a channel, other ones connect in order.
-    sequencer_components: Vec<SequencerComponent>,
-    indexer_components: Option<IndexerComponents>,
+    sequencers: Vec<SequencerComponent>,
+    indexer: Option<IndexerComponents>,
 }
 
 /// Test context which sets up a sequencer and a wallet for integration tests.
@@ -154,7 +161,7 @@ impl TestContext {
     #[must_use]
     pub fn default_sequencer_component(&self) -> &SequencerComponent {
         self.default_zone()
-            .sequencer_components
+            .sequencers
             .first()
             .expect("Must be at least one sequencer component")
     }
@@ -174,9 +181,10 @@ impl TestContext {
     ) -> Option<impl Iterator<Item = &SequencerComponent>> {
         self.zones
             .get(&channel_id)
-            .map(|zone| zone.sequencer_components.iter())
+            .map(|zone| zone.sequencers.iter())
     }
 
+    #[must_use]
     pub fn zone_default_sequencer_component(&self, channel_id: ChannelId) -> &SequencerComponent {
         self.sequencer_components_iter(channel_id)
             .unwrap()
@@ -196,7 +204,7 @@ impl TestContext {
     /// only one sequencer exists).
     pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
         self.default_zone_mut()
-            .sequencer_components
+            .sequencers
             .iter_mut()
             .next()
             .expect("Must be at least one integration component")
@@ -205,33 +213,18 @@ impl TestContext {
     /// Get reference to the deafault wallet.
     #[must_use]
     pub fn wallet(&self) -> &WalletCore {
-        &self
-            .default_zone()
-            .wallet_components
-            .as_ref()
-            .unwrap()
-            .wallet
+        &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
     /// Get password of the default wallet.
     #[must_use]
     pub fn wallet_password(&self) -> &str {
-        &self
-            .default_zone()
-            .wallet_components
-            .as_ref()
-            .unwrap()
-            .wallet_password
+        &self.default_zone().wallet.as_ref().unwrap().wallet_password
     }
 
     /// Get mutable reference to default the wallet.
     pub fn wallet_mut(&mut self) -> &mut WalletCore {
-        &mut self
-            .default_zone_mut()
-            .wallet_components
-            .as_mut()
-            .unwrap()
-            .wallet
+        &mut self.default_zone_mut().wallet.as_mut().unwrap().wallet
     }
 
     /// Get reference to the zone wallet.
@@ -239,26 +232,22 @@ impl TestContext {
     pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
         self.zones
             .get(&channel_id)
-            .map(|val| &val.wallet_components.as_ref().unwrap().wallet)
+            .map(|val| &val.wallet.as_ref().unwrap().wallet)
     }
 
     /// Get password of the zone wallet.
     #[must_use]
     pub fn wallet_password_zone(&self, channel_id: ChannelId) -> Option<&str> {
-        self.zones.get(&channel_id).map(|val| {
-            val.wallet_components
-                .as_ref()
-                .unwrap()
-                .wallet_password
-                .as_str()
-        })
+        self.zones
+            .get(&channel_id)
+            .map(|val| val.wallet.as_ref().unwrap().wallet_password.as_str())
     }
 
     /// Get mutable reference to the zone wallet.
     pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
         self.zones
             .get_mut(&channel_id)
-            .map(|val| &mut val.wallet_components.as_mut().unwrap().wallet)
+            .map(|val| &mut val.wallet.as_mut().unwrap().wallet)
     }
 
     /// Get reference to the sequencer client in default case (1 zone, 1 sequencer).
@@ -275,9 +264,7 @@ impl TestContext {
         id: usize,
     ) -> Option<&SequencerClient> {
         let val = self.zones.get(&channel_id)?;
-        val.sequencer_components
-            .get(id)
-            .map(|vall| &vall.sequencer_client)
+        val.sequencers.get(id).map(|vall| &vall.sequencer_client)
     }
 
     /// Get the Bedrock Node address.
@@ -296,7 +283,7 @@ impl TestContext {
     pub fn indexer(&self) -> &IndexerHandle {
         &self
             .default_zone()
-            .indexer_components
+            .indexer
             .as_ref()
             .expect("Called `TestContext::indexer()` on context with disabled indexer")
             .indexer_handle
@@ -322,7 +309,7 @@ impl TestContext {
     pub fn indexer_client(&self) -> &IndexerClient {
         &self
             .default_zone()
-            .indexer_components
+            .indexer
             .as_ref()
             .expect("Called `TestContext::indexer()` on context with disabled indexer")
             .indexer_client
@@ -337,9 +324,7 @@ impl TestContext {
     #[must_use]
     pub fn indexer_getter(&self, channel_id: ChannelId) -> Option<&IndexerHandle> {
         let val = self.zones.get(&channel_id)?;
-        val.indexer_components
-            .as_ref()
-            .map(|val| &val.indexer_handle)
+        val.indexer.as_ref().map(|val| &val.indexer_handle)
     }
 
     /// Get the default indexer's bound socket address.
@@ -362,9 +347,7 @@ impl TestContext {
     #[must_use]
     pub fn indexer_client_getter(&self, channel_id: ChannelId) -> Option<&IndexerClient> {
         let val = self.zones.get(&channel_id)?;
-        val.indexer_components
-            .as_ref()
-            .map(|val| &val.indexer_client)
+        val.indexer.as_ref().map(|val| &val.indexer_client)
     }
 
     /// Recursively-sized bytes on disk for sequencer + indexer + wallet tempdirs.
@@ -373,24 +356,20 @@ impl TestContext {
     pub fn disk_sizes(&self) -> DiskSizes {
         DiskSizes {
             sequencer_bytes: self.zones.values().fold(0, |acc, zone| {
-                acc.saturating_add(zone.sequencer_components.iter().fold(0, |accc, component| {
+                acc.saturating_add(zone.sequencers.iter().fold(0, |accc, component| {
                     accc.saturating_add(dir_size_bytes(component.temp_sequencer_dir.path()))
                 }))
             }),
             indexer_bytes: self.zones.values().fold(0, |acc, zone| {
                 acc.saturating_add(
-                    zone.indexer_components
+                    zone.indexer
                         .as_ref()
                         .map_or(0, |val| dir_size_bytes(val.temp_dir.path())),
                 )
             }),
             wallet_bytes: self.zones.values().fold(0, |acc, zone| {
                 acc.saturating_add(dir_size_bytes(
-                    zone.wallet_components
-                        .as_ref()
-                        .unwrap()
-                        .temp_wallet_dir
-                        .path(),
+                    zone.wallet.as_ref().unwrap().temp_wallet_dir.path(),
                 ))
             }),
         }
@@ -400,7 +379,7 @@ impl TestContext {
     #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
-            .wallet_components
+            .wallet
             .as_ref()
             .unwrap()
             .wallet
@@ -415,7 +394,7 @@ impl TestContext {
     #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
-            .wallet_components
+            .wallet
             .as_ref()
             .unwrap()
             .wallet
@@ -466,20 +445,16 @@ impl Drop for TestContext {
             reason = "Zones can be stopped in any order"
         )]
         for TestContextZone {
-            wallet_components: _,
-            sequencer_components,
-            indexer_components: _,
+            wallet: _,
+            sequencers,
+            indexer: _,
         } in zones.values_mut()
         {
-            #[expect(
-                clippy::iter_over_hash_type,
-                reason = "Sequencers can be stopped in any order"
-            )]
             for SequencerComponent {
                 sequencer_handle,
                 temp_sequencer_dir: _,
                 sequencer_client: _,
-            } in sequencer_components.iter_mut()
+            } in sequencers.iter_mut()
             {
                 let mut sequencer_handle = sequencer_handle
                     .take()
@@ -636,70 +611,40 @@ impl ZoneTestContextBuilder {
         let mut sequencer_addrs = vec![];
         let mut sequencer_components = vec![];
 
-        let leader_sequencer_key = config::sequencer_signing_key_from_root(9001);
+        let mut sequencer_keys = vec![];
 
-        let sequencer_keys = (0..mn_config.num_nodes)
-            .map(|root| {
-                config::sequencer_signing_key_from_root(
-                    u32::try_from(root).expect("Not being able to fit is realistically impossible"),
-                )
-            })
-            .collect::<Vec<_>>();
+        sequencer_keys.push(config::SEQUENCER_SIGNING_KEY);
+
+        for i in 1..mn_config.num_nodes {
+            sequencer_keys.push(config::sequencer_signing_key_from_root(
+                u32::try_from(i).expect("Not being able to fit is realistically impossible"),
+            ));
+        }
 
         // First, need to start a leader.
-        let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
-
-        if enable_wallet {
-            if !use_prebuilt {
-                // Wallet genesis must always be present so that
-                // setup_public/private_accounts_with_initial_supply can claim from the vault
-                // PDAs. When a test supplies custom genesis, merge rather
-                // thanreplace.
-                let wallet_genesis = config::genesis_from_accounts(
-                    &initial_public_accounts,
-                    &initial_private_accounts,
-                );
-                let genesis = match genesis_transactions.clone() {
-                    Some(mut custom) => {
-                        custom.extend(wallet_genesis);
-                        custom
-                    }
-                    None => wallet_genesis,
-                };
-
-                sequencer_setup = sequencer_setup.with_genesis(genesis);
-            }
-        } else {
-            if let Some(genesis_actions) = genesis_transactions.clone() {
-                sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
-            }
-        }
-
-        sequencer_setup = sequencer_setup.with_bedrock_signing_key(leader_sequencer_key);
-        sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
-        if let Some(cross_zone_config) = cross_zone_config.clone() {
-            sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
-        }
-
-        let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-            .setup()
-            .await
-            .context("Failed to setup Sequencer")?;
-
-        let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
-            .context("Failed to create sequencer client")?;
+        let (leader_addr, leader_components) = build_sequencer_components(
+            partial_config,
+            bedrock_addr,
+            enable_wallet,
+            use_prebuilt,
+            &initial_public_accounts,
+            &initial_private_accounts,
+            genesis_transactions.clone(),
+            config::SEQUENCER_SIGNING_KEY,
+            mn_config.bedrock_channel,
+            cross_zone_config.clone(),
+        )
+        .await?;
 
         // Wait for genesis to be published
-        wait_untill_genesis(&sequencer_client)
+        wait_untill_genesis(&leader_components.sequencer_client)
             .await
             .context("Encountered an error while waiting for genesis to be published")?;
 
-        sequencer_addrs.push(sequencer_handle.addr());
-        sequencer_components.push(SequencerComponent {
-            sequencer_handle: Some(sequencer_handle),
-            temp_sequencer_dir,
-            sequencer_client,
-        });
+        log::info!("Passed wait untill genesis");
+
+        sequencer_addrs.push(leader_addr);
+        sequencer_components.push(leader_components);
 
         post_chain_config_with_default_parameters(
             mn_config.bedrock_channel,
@@ -709,54 +654,22 @@ impl ZoneTestContextBuilder {
         .await?;
 
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
-            let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
+            let (sequencer_addr, sequencer_component) = build_sequencer_components(
+                partial_config,
+                bedrock_addr,
+                enable_wallet,
+                use_prebuilt,
+                &initial_public_accounts,
+                &initial_private_accounts,
+                genesis_transactions.clone(),
+                sequencer_key,
+                mn_config.bedrock_channel,
+                cross_zone_config.clone(),
+            )
+            .await?;
 
-            if enable_wallet {
-                if !use_prebuilt {
-                    // Wallet genesis must always be present so that
-                    // setup_public/private_accounts_with_initial_supply can claim from the vault
-                    // PDAs. When a test supplies custom genesis, merge rather
-                    // thanreplace.
-                    let wallet_genesis = config::genesis_from_accounts(
-                        &initial_public_accounts,
-                        &initial_private_accounts,
-                    );
-                    let genesis = match genesis_transactions.clone() {
-                        Some(mut custom) => {
-                            custom.extend(wallet_genesis);
-                            custom
-                        }
-                        None => wallet_genesis,
-                    };
-
-                    sequencer_setup = sequencer_setup.with_genesis(genesis);
-                }
-            } else {
-                if let Some(genesis_actions) = genesis_transactions.clone() {
-                    sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
-                }
-            }
-
-            sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
-            sequencer_setup = sequencer_setup.with_channel_id(mn_config.bedrock_channel);
-            if let Some(cross_zone_config) = cross_zone_config.clone() {
-                sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
-            }
-
-            let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-                .setup()
-                .await
-                .context("Failed to setup Sequencer")?;
-
-            let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
-                .context("Failed to create sequencer client")?;
-
-            sequencer_addrs.push(sequencer_handle.addr());
-            sequencer_components.push(SequencerComponent {
-                sequencer_handle: Some(sequencer_handle),
-                temp_sequencer_dir,
-                sequencer_client,
-            });
+            sequencer_addrs.push(sequencer_addr);
+            sequencer_components.push(sequencer_component);
         }
 
         let wallet_components = if enable_wallet {
@@ -795,9 +708,9 @@ impl ZoneTestContextBuilder {
         };
 
         Ok(TestContextZone {
-            wallet_components,
-            sequencer_components,
-            indexer_components,
+            wallet: wallet_components,
+            sequencers: sequencer_components,
+            indexer: indexer_components,
         })
     }
 
@@ -833,13 +746,9 @@ impl MultiZoneTestContextBuilder {
             reason = "Zones can be started in any order"
         )]
         for (channel_id, zone_builder) in self.zone_builders {
-            log::info!(
-                "##########################Trying to build {zone_builder:#?} \n at {channel_id:#?}"
-            );
-
             let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
-            log::info!("########################## BUILT CONTEXT AT at {channel_id:#?}");
+            log::info!("Built context for {channel_id}");
 
             zones.insert(channel_id, zone_ctx);
         }
@@ -885,6 +794,7 @@ impl MultiZoneTestContextBuilder {
         self
     }
 
+    #[must_use]
     pub fn with_cross_zone(
         mut self,
         channel_id: ChannelId,
@@ -1148,6 +1058,11 @@ async fn post_chain_config_with_default_parameters(
     bedrock_addr: SocketAddr,
     sequencer_keys: Vec<[u8; 32]>,
 ) -> Result<()> {
+    log::info!(
+        "Sequencer comitee is {:?} at {channel_id}",
+        sequencer_keys.iter().map(hex::encode).collect::<Vec<_>>()
+    );
+
     post_channel_config(
         &BedrockConfig {
             channel_id,
@@ -1166,8 +1081,8 @@ async fn post_chain_config_with_default_parameters(
             .into_iter()
             .map(|key| Ed25519Key::from_bytes(&key).public_key())
             .collect(),
-        20,
-        30,
+        POSTING_TIMEFRAME_SLOTS,
+        POSTING_TIMEOUT_SLOTS,
         1,
         1,
     )
@@ -1176,13 +1091,76 @@ async fn post_chain_config_with_default_parameters(
 }
 
 async fn wait_untill_genesis(client: &SequencerClient) -> Result<()> {
-    loop {
-        let last_block_id = client.get_last_block_id().await?;
+    log::info!("Waiting for leader to send genesis");
 
-        if last_block_id > 0 {
-            break Ok(());
+    let wait = async {
+        loop {
+            if client.get_last_block_id().await? >= 1 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| "Timed out waiting for genesis")?
+}
 
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+#[expect(clippy::too_many_arguments, reason = "No need to repackage fields")]
+async fn build_sequencer_components(
+    partial_config: SequencerPartialConfig,
+    bedrock_addr: SocketAddr,
+    enable_wallet: bool,
+    use_prebuilt: bool,
+    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
+    genesis_transactions: Option<Vec<GenesisAction>>,
+    sequencer_key: [u8; 32],
+    bedrock_channel_id: ChannelId,
+    cross_zone_config: Option<CrossZoneConfig>,
+) -> Result<(SocketAddr, SequencerComponent)> {
+    let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
+
+    let genesis_actions = if enable_wallet && !use_prebuilt {
+        // Wallet genesis must always be present so that
+        // setup_public/private_accounts_with_initial_supply can claim from the vault
+        // PDAs. When a test supplies custom genesis, merge rather
+        // thanreplace.
+        let wallet_genesis =
+            config::genesis_from_accounts(initial_public_accounts, initial_private_accounts);
+        match genesis_transactions {
+            Some(mut custom) => {
+                custom.extend(wallet_genesis);
+                custom
+            }
+            None => wallet_genesis,
+        }
+    } else {
+        genesis_transactions.unwrap_or_default()
+    };
+
+    sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+
+    sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
+    sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
+    if let Some(cross_zone_config) = cross_zone_config.clone() {
+        sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
     }
+
+    let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
+        .setup()
+        .await
+        .context("Failed to setup Sequencer")?;
+
+    let sequencer_client = setup::sequencer_client(sequencer_handle.addr())
+        .context("Failed to create sequencer client")?;
+
+    Ok((
+        sequencer_handle.addr(),
+        SequencerComponent {
+            sequencer_handle: Some(sequencer_handle),
+            temp_sequencer_dir,
+            sequencer_client,
+        },
+    ))
 }

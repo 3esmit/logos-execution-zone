@@ -44,7 +44,7 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     )
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
-    .with_sequencer_partial_config(channel_a, partial.clone())
+    .with_sequencer_partial_config(channel_a, partial)
     .with_sequencer_partial_config(channel_b, partial)
     .with_genesis(channel_a, vec![])
     .with_genesis(channel_b, vec![])

@@ -64,7 +64,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     )
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
-    .with_sequencer_partial_config(channel_a, partial.clone())
+    .with_sequencer_partial_config(channel_a, partial)
     .with_sequencer_partial_config(channel_b, partial)
     .with_genesis(channel_a, vec![])
     .with_genesis(channel_b, vec![])
@@ -91,7 +91,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
 
-    let delivered = wait_for_indexer_delivery(&ind_client_b, record_id).await?;
+    let delivered = wait_for_indexer_delivery(ind_client_b, record_id).await?;
     assert_eq!(
         delivered, PING_PAYLOAD,
         "Zone B's indexer must record the verified cross-zone payload"

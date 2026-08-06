@@ -84,7 +84,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
     .disable_indexer(channel_a)
-    .with_sequencer_partial_config(channel_a, partial.clone())
+    .with_sequencer_partial_config(channel_a, partial)
     .with_sequencer_partial_config(channel_b, partial)
     .with_genesis(channel_a, genesis_a)
     .with_genesis(channel_b, vec![])
@@ -108,7 +108,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     // Wait until zone B's indexer reflects the verified mint.
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
-    let minted = wait_for_mint(&ind_client_b, holding_id).await?;
+    let minted = wait_for_mint(ind_client_b, holding_id).await?;
     assert_eq!(
         minted, LOCK_AMOUNT,
         "zone B must mint exactly the locked amount"

@@ -97,6 +97,10 @@ impl Default for MultiNodeTestContextConfig {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All fields are necessary and better to keep separate"
+)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
@@ -105,6 +109,7 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
+    signing_key: Option<[u8; 32]>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -121,51 +126,13 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: SEQUENCER_SIGNING_KEY,
+        signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             funding_key,
             auth: None,
-            priority_fee: sequencer_core::config::default_priority_fee(),
-        },
-        cross_zone,
-        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
-    })
-}
-
-pub fn sequencer_config_with_channel_and_signing_key(
-    partial: SequencerPartialConfig,
-    home: PathBuf,
-    bedrock_addr: SocketAddr,
-    channel_id: ChannelId,
-    genesis_transactions: Vec<GenesisAction>,
-    cross_zone: Option<CrossZoneConfig>,
-    signing_key: [u8; 32],
-) -> Result<SequencerConfig> {
-    let SequencerPartialConfig {
-        max_num_tx_in_block,
-        max_block_size,
-        mempool_max_size,
-        block_create_timeout,
-    } = partial;
-
-    Ok(SequencerConfig {
-        home,
-        max_num_tx_in_block,
-        max_block_size,
-        mempool_max_size,
-        block_create_timeout,
-        retry_pending_blocks_timeout: Duration::from_secs(5),
-        genesis: genesis_transactions,
-        signing_key,
-        bedrock_config: BedrockConfig {
-            channel_id,
-            node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
-                .context("Failed to convert bedrock addr to URL")?,
-            auth: None,
-            funding_key: bedrock_funding_key(),
             priority_fee: sequencer_core::config::default_priority_fee(),
         },
         cross_zone,

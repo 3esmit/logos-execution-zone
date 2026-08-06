@@ -67,7 +67,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     .disable_wallet(channel_b)
     .disable_indexer(channel_a)
     .disable_indexer(channel_b)
-    .with_sequencer_partial_config(channel_a, partial.clone())
+    .with_sequencer_partial_config(channel_a, partial)
     .with_sequencer_partial_config(channel_b, partial)
     .with_genesis(channel_a, vec![])
     .with_genesis(channel_b, vec![])

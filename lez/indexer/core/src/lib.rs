@@ -372,7 +372,7 @@ impl IndexerCore {
                                 verifier.record_seen(verified_keys).await;
                             }
                             retry_gate.reset();
-                            info!("Indexed L2 block {}", block.header.block_id);
+                            info!("Indexed L2 block {} at channel {}", block.header.block_id, self.config.channel_id);
                             self.set_status(IndexerSyncStatus::syncing());
                             yield Ok(block);
                         }

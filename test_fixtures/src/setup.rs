@@ -140,10 +140,9 @@ impl SequencerSetup {
             config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
+            bedrock_signing_key,
         )
         .context("Failed to create Sequencer config")?;
-
-        log::info!("################################## Running sequecner from config {config:#?}");
 
         sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
             .await

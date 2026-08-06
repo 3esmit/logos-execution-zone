@@ -296,6 +296,7 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 
         info!("Our turn: collecting transactions from mempool, creating block");
         let id = state.produce_new_block().await?;
-        info!("Block with id {id} created");
+        let author_identity = hex::encode(state.sequencer_config().signing_key);
+        info!("Block with id {id} created by {author_identity:?}");
     }
 }
