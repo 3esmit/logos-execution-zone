@@ -17,7 +17,7 @@ use test_fixtures::{
 /// Builds from genesis (no prebuilt database) and checks the on-chain state follows the config.
 #[tokio::test]
 async fn genesis_from_scratch_follows_config() -> Result<()> {
-    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
     let default_channel_id = ctx.default_channel_id();
 
     let ctx = ctx.from_scratch(default_channel_id).build().await?;

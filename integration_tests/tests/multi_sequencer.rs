@@ -34,13 +34,10 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         ..SequencerPartialConfig::default()
     };
 
-    let ctx = TestContext::builder(
-        vec![MultiNodeTestContextConfig {
-            num_nodes: 2,
-            bedrock_channel: bedrock_channel_id,
-        }],
-        None,
-    )
+    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig {
+        num_nodes: 2,
+        bedrock_channel: bedrock_channel_id,
+    }])
     .with_sequencer_partial_config(bedrock_channel_id, partial)
     .disable_wallet(bedrock_channel_id)
     .with_genesis(bedrock_channel_id, vec![])

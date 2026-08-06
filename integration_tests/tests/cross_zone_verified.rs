@@ -49,19 +49,16 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         }],
     };
 
-    let ctx = TestContext::builder(
-        vec![
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_a,
-            },
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_b,
-            },
-        ],
-        None,
-    )
+    let ctx = TestContext::builder(vec![
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_a,
+        },
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_b,
+        },
+    ])
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
     .with_sequencer_partial_config(channel_a, partial)

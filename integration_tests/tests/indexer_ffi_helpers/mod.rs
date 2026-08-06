@@ -84,7 +84,7 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
 }
 
 pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
-    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
     let default_channel_id = ctx_b.default_channel_id();
 
     let ctx = ctx_b.disable_indexer(default_channel_id).build_blocking()?;

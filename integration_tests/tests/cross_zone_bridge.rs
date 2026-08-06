@@ -68,19 +68,16 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         amount: INITIAL_BALANCE,
     }];
 
-    let ctx = TestContext::builder(
-        vec![
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_a,
-            },
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_b,
-            },
-        ],
-        None,
-    )
+    let ctx = TestContext::builder(vec![
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_a,
+        },
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_b,
+        },
+    ])
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
     .disable_indexer(channel_a)

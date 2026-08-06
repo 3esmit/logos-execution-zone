@@ -28,13 +28,10 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
 
-    let ctx = TestContext::builder(
-        vec![MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel,
-        }],
-        None,
-    )
+    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig {
+        num_nodes: 1,
+        bedrock_channel: channel,
+    }])
     .disable_indexer(channel)
     .with_sequencer_partial_config(channel, partial)
     .with_genesis(channel, vec![])

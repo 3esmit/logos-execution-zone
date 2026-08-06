@@ -29,19 +29,16 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let channel_b = config::bedrock_channel_id_b();
     let partial = SequencerPartialConfig::default();
 
-    let ctx = TestContext::builder(
-        vec![
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_a,
-            },
-            MultiNodeTestContextConfig {
-                num_nodes: 1,
-                bedrock_channel: channel_b,
-            },
-        ],
-        None,
-    )
+    let ctx = TestContext::builder(vec![
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_a,
+        },
+        MultiNodeTestContextConfig {
+            num_nodes: 1,
+            bedrock_channel: channel_b,
+        },
+    ])
     .disable_wallet(channel_a)
     .disable_wallet(channel_b)
     .with_sequencer_partial_config(channel_a, partial)

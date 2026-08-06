@@ -81,23 +81,22 @@ pub struct DiskSizes {
     pub wallet_bytes: u64,
 }
 
-pub struct SequencerComponent {
-    /// In fact, not optional, just for Drop implementation.
-    pub sequencer_handle: Option<SequencerHandle>,
+pub struct SequencerComponents {
+    pub sequencer_handle: SequencerHandle,
     pub temp_sequencer_dir: TempDir,
     pub sequencer_client: SequencerClient,
 }
 
-pub struct WalletComponent {
+pub struct WalletComponents {
     wallet: WalletCore,
     wallet_password: String,
     temp_wallet_dir: TempDir,
 }
 
 pub struct TestContextZone {
-    wallet: Option<WalletComponent>,
-    /// Order of sequecners matter, as first one starts a channel, other ones connect in order.
-    sequencers: Vec<SequencerComponent>,
+    wallet: Option<WalletComponents>,
+    /// Order of sequencers matter, as first one starts a channel, other ones connect in order.
+    sequencers: Vec<SequencerComponents>,
     indexer: Option<IndexerComponents>,
 }
 
@@ -105,7 +104,6 @@ pub struct TestContextZone {
 ///
 /// It's memory and logically safe to create multiple instances of this struct in parallel tests,
 /// as each instance uses its own temporary directories for sequencer and wallet data.
-// NOTE: Order of fields is important for proper drop order.
 pub struct TestContext {
     zones: HashMap<ChannelId, TestContextZone>,
     bedrock_compose: DockerCompose,
@@ -114,32 +112,25 @@ pub struct TestContext {
 
 impl TestContext {
     /// Create new test context.
-    pub async fn new_custom(
-        configs: Vec<MultiNodeTestContextConfig>,
-        cross_zone_config: Option<&CrossZoneConfig>,
-    ) -> Result<Self> {
-        Self::builder(configs, cross_zone_config).build().await
+    pub async fn new_custom(configs: Vec<MultiNodeTestContextConfig>) -> Result<Self> {
+        Self::builder(configs).build().await
     }
 
     /// Create new test context with default config(1 zone).
     pub async fn new() -> Result<Self> {
-        Self::builder(vec![MultiNodeTestContextConfig::default()], None)
+        Self::builder(vec![MultiNodeTestContextConfig::default()])
             .build()
             .await
     }
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder(
-        configs: Vec<MultiNodeTestContextConfig>,
-        cross_zone_config: Option<&CrossZoneConfig>,
-    ) -> MultiZoneTestContextBuilder {
+    pub fn builder(configs: Vec<MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
         MultiZoneTestContextBuilder {
             zone_builders: configs
                 .into_iter()
                 .map(|mn_config| {
-                    let z_ctx_b =
-                        ZoneTestContextBuilder::new(mn_config, cross_zone_config.cloned());
+                    let z_ctx_b = ZoneTestContextBuilder::new(mn_config);
 
                     (z_ctx_b.mn_config.bedrock_channel, z_ctx_b)
                 })
@@ -159,33 +150,33 @@ impl TestContext {
     /// Reference for the default sequencer component(in case, if only one zone exists and only
     /// one sequencer exists).
     #[must_use]
-    pub fn default_sequencer_component(&self) -> &SequencerComponent {
+    pub fn default_sequencer_component(&self) -> &SequencerComponents {
         self.default_zone()
             .sequencers
             .first()
             .expect("Must be at least one sequencer component")
     }
 
-    /// Reference for the default sequencer component(in case, if only one zone exists and only
-    /// one sequencer exists).
+    /// Iterator over all zones in random order.
     pub fn zones_iter(&self) -> impl Iterator<Item = (&ChannelId, &TestContextZone)> {
         self.zones.iter()
     }
 
-    /// Reference for the default sequencer component(in case, if only one zone exists and only
-    /// one sequencer exists).
+    /// Iterator over all sequencer components in zone in order.
     #[must_use]
     pub fn sequencer_components_iter(
         &self,
         channel_id: ChannelId,
-    ) -> Option<impl Iterator<Item = &SequencerComponent>> {
+    ) -> Option<impl Iterator<Item = &SequencerComponents>> {
         self.zones
             .get(&channel_id)
             .map(|zone| zone.sequencers.iter())
     }
 
     #[must_use]
-    pub fn zone_default_sequencer_component(&self, channel_id: ChannelId) -> &SequencerComponent {
+    /// Reference for the default sequencer component for a zone (in case, if only one sequencer
+    /// exists).
+    pub fn zone_default_sequencer_component(&self, channel_id: ChannelId) -> &SequencerComponents {
         self.sequencer_components_iter(channel_id)
             .unwrap()
             .next()
@@ -202,7 +193,7 @@ impl TestContext {
 
     /// Mutable reference for the default sequencer component(in case, if only one zone exists and
     /// only one sequencer exists).
-    pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponent {
+    pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponents {
         self.default_zone_mut()
             .sequencers
             .iter_mut()
@@ -210,13 +201,13 @@ impl TestContext {
             .expect("Must be at least one integration component")
     }
 
-    /// Get reference to the deafault wallet.
+    /// Get reference to the default wallet.
     #[must_use]
     pub fn wallet(&self) -> &WalletCore {
         &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
-    /// Get password of the default wallet.
+    /// Get password of the default wallet password.
     #[must_use]
     pub fn wallet_password(&self) -> &str {
         &self.default_zone().wallet.as_ref().unwrap().wallet_password
@@ -352,6 +343,7 @@ impl TestContext {
 
     /// Recursively-sized bytes on disk for sequencer + indexer + wallet tempdirs.
     /// Indexer bytes are zero if the indexer is disabled.
+    /// Wallet bytes are zero if the wallet is disabled.
     #[must_use]
     pub fn disk_sizes(&self) -> DiskSizes {
         DiskSizes {
@@ -450,16 +442,12 @@ impl Drop for TestContext {
             indexer: _,
         } in zones.values_mut()
         {
-            for SequencerComponent {
+            for SequencerComponents {
                 sequencer_handle,
                 temp_sequencer_dir: _,
                 sequencer_client: _,
             } in sequencers.iter_mut()
             {
-                let mut sequencer_handle = sequencer_handle
-                    .take()
-                    .expect("Sequencer handle should be present in TestContext drop");
-
                 if !sequencer_handle.is_healthy() {
                     let Err(err) = sequencer_handle
                         .failed()
@@ -505,10 +493,7 @@ pub struct ZoneTestContextBuilder {
 }
 
 impl ZoneTestContextBuilder {
-    fn new(
-        mn_config: MultiNodeTestContextConfig,
-        cross_zone_config: Option<CrossZoneConfig>,
-    ) -> Self {
+    fn new(mn_config: MultiNodeTestContextConfig) -> Self {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
@@ -517,7 +502,9 @@ impl ZoneTestContextBuilder {
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
             mn_config,
-            cross_zone_config,
+            // There is no point providing cross zone config here, it is easier to provide it from
+            // builder pattern.
+            cross_zone_config: None,
         }
     }
 
@@ -531,12 +518,16 @@ impl ZoneTestContextBuilder {
         self
     }
 
+    /// Set the genesis transactions to apply when initializing the sequencer.
+    /// If not set, the sequencer will be initialized from a prebuilt database dump.
     #[must_use]
     pub fn with_genesis(mut self, genesis_transactions: Vec<GenesisAction>) -> Self {
         self.genesis_transactions = Some(genesis_transactions);
         self
     }
 
+    /// Set the sequecner partial config to apply when initializing the sequencer.
+    /// If not set, the sequencer will be initialized with default one.
     #[must_use]
     pub const fn with_sequencer_partial_config(
         mut self,
@@ -698,7 +689,7 @@ impl ZoneTestContextBuilder {
                     .context("Failed to initialize private accounts in wallet")?;
             }
 
-            Some(WalletComponent {
+            Some(WalletComponents {
                 wallet,
                 wallet_password,
                 temp_wallet_dir,
@@ -873,12 +864,8 @@ pub struct BlockingTestContextZone {
 }
 
 impl BlockingTestContextZone {
-    pub fn new(
-        config: MultiNodeTestContextConfig,
-        cross_zone_config: Option<CrossZoneConfig>,
-        bedrock_addr: SocketAddr,
-    ) -> Result<Self> {
-        ZoneTestContextBuilder::new(config, cross_zone_config).build_blocking(bedrock_addr)
+    pub fn new(config: MultiNodeTestContextConfig, bedrock_addr: SocketAddr) -> Result<Self> {
+        ZoneTestContextBuilder::new(config).build_blocking(bedrock_addr)
     }
 
     pub const fn ctx(&self) -> &TestContextZone {
@@ -940,7 +927,7 @@ impl BlockingTestContext {
 
         zone_builders.insert(
             config::bedrock_channel_id(),
-            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default(), None),
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()),
         );
 
         MultiZoneTestContextBuilder { zone_builders }.build_blocking()
@@ -1118,10 +1105,10 @@ async fn build_sequencer_components(
     sequencer_key: [u8; 32],
     bedrock_channel_id: ChannelId,
     cross_zone_config: Option<CrossZoneConfig>,
-) -> Result<(SocketAddr, SequencerComponent)> {
+) -> Result<(SocketAddr, SequencerComponents)> {
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
-    let genesis_actions = if enable_wallet && !use_prebuilt {
+    let genesis_actions = if enable_wallet {
         // Wallet genesis must always be present so that
         // setup_public/private_accounts_with_initial_supply can claim from the vault
         // PDAs. When a test supplies custom genesis, merge rather
@@ -1139,7 +1126,9 @@ async fn build_sequencer_components(
         genesis_transactions.unwrap_or_default()
     };
 
-    sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+    if !use_prebuilt {
+        sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+    }
 
     sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
@@ -1157,8 +1146,8 @@ async fn build_sequencer_components(
 
     Ok((
         sequencer_handle.addr(),
-        SequencerComponent {
-            sequencer_handle: Some(sequencer_handle),
+        SequencerComponents {
+            sequencer_handle,
             temp_sequencer_dir,
             sequencer_client,
         },

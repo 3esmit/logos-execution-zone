@@ -300,6 +300,7 @@ pub fn bedrock_channel_id_b() -> ChannelId {
 }
 
 #[must_use]
+/// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
 pub fn sequencer_signing_key_from_root(root: u32) -> [u8; 32] {
     root.to_le_bytes()
         .repeat(8)
@@ -312,6 +313,9 @@ pub fn sequencer_signing_key_from_root(root: u32) -> [u8; 32] {
     clippy::big_endian_bytes,
     reason = "Make channels and bedrock keys different bytewise"
 )]
+/// Generate bedrock channel id from `u32` number via repeating be bytes 8 times.
+///
+/// It is be to guarantee difference from signing keys.
 pub fn bedrock_channel_id_from_root(root: u32) -> ChannelId {
     let channel_id: [u8; 32] = root
         .to_be_bytes()

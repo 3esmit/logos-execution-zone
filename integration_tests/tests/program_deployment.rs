@@ -69,7 +69,7 @@ async fn deploy_invalid_program_fails() -> Result<()> {
     // An invalid program bytecode is rejected by the sequencer during block production, so the
     // deployment transaction is never included in a block. Shrink the wallet's polling window so
     // the command gives up quickly instead of waiting for the full default timeout.
-    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
     let default_channel_id = ctx_b.default_channel_id();
     let mut ctx = ctx_b
         .with_wallet_config_overrides(

@@ -179,7 +179,7 @@ pub async fn tps_test() -> Result<()> {
 
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
 
-    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()], None);
+    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
     let default_channel_id = ctx_b.default_channel_id();
     let ctx = ctx_b
         .with_sequencer_partial_config(
