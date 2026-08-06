@@ -4372,7 +4372,6 @@ name = "integration_tests"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "associated_token_account_core",
  "authenticated_transfer_core",
  "bridge_core",
  "bridge_lock_core",
@@ -4402,7 +4401,6 @@ dependencies = [
  "test_fixtures",
  "test_programs",
  "testnet_initial_state",
- "token_core",
  "tokio",
  "vault_core",
  "wallet",
