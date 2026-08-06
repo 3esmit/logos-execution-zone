@@ -25,9 +25,9 @@ use crate::{
         LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerFloorCellOwned, PeerFloorCellRef,
         PeerZoneKey, PendingCrossZoneDispatchRecord, PendingCrossZoneDispatchesCellOwned,
         PendingCrossZoneDispatchesCellRef, PendingDepositEventRecord,
-        PendingDepositEventsCellOwned, PendingDepositEventsCellRef, UnseenWithdrawCountCell,
-        WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
-        ZoneSdkCheckpointCellRef,
+        PendingDepositEventsCellOwned, PendingDepositEventsCellRef, PublishedHighWaterCell,
+        UnseenWithdrawCountCell, WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord,
+        ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -55,6 +55,11 @@ pub const DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY: &str = "pending_cross_zone_
 
 /// Key base for counting unseen L2 withdraw intents.
 pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
+
+/// Key base for the highest block id this sequencer has ever inscribed on the
+/// channel. Never decreases, and deliberately survives the block pruning a
+/// head rewind performs.
+pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
 
 /// How many cross-zone deliveries may be pending at once.
 ///
@@ -489,6 +494,25 @@ impl RocksDBIO {
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
     pub fn delete_zone_sdk_checkpoint_bytes(&self) -> DbResult<()> {
         self.del::<ZoneSdkCheckpointCellOwned>(())
+    }
+
+    /// The highest block id this sequencer has ever inscribed, or `None` if it
+    /// has never published. Read fresh: a head rewind prunes blocks, so the
+    /// stored tip is not a safe substitute.
+    pub fn published_high_water(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<PublishedHighWaterCell>(())
+            .map(|val| val.map(|cell| cell.0))
+    }
+
+    /// Raises the published high water mark to `block_id`, never lowering it.
+    pub fn raise_published_high_water(&self, block_id: u64) -> DbResult<()> {
+        if self
+            .published_high_water()?
+            .is_some_and(|mark| mark >= block_id)
+        {
+            return Ok(());
+        }
+        self.put(&PublishedHighWaterCell(block_id), ())
     }
 
     pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
