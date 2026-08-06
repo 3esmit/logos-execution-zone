@@ -2298,7 +2298,7 @@ dependencies = [
  "clap",
  "json-pretty-compact",
  "sequencer_core_metrics",
- "sequencer_service_metrics",
+ "sequencer_rpc_server_actor_metrics",
  "serde",
  "serde_json",
 ]
@@ -9577,11 +9577,37 @@ dependencies = [
 ]
 
 [[package]]
-name = "sequencer_service"
+name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "bytesize",
+ "common",
+ "jsonrpsee",
+ "kameo",
+ "lee",
+ "log",
+ "programs",
+ "sequencer_core",
+ "sequencer_executor_actor",
+ "sequencer_rpc_server_actor_metrics",
+ "sequencer_service_protocol",
+ "sequencer_service_rpc",
+]
+
+[[package]]
+name = "sequencer_rpc_server_actor_metrics"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+]
+
+[[package]]
+name = "sequencer_service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "bytesize",
  "clap",
  "common",
@@ -9589,24 +9615,13 @@ dependencies = [
  "futures",
  "hex",
  "jsonrpsee",
- "lee",
  "log",
  "mempool",
  "metrics-exporter-prometheus",
- "programs",
  "sequencer_core",
- "sequencer_service_metrics",
- "sequencer_service_protocol",
  "sequencer_service_rpc",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "sequencer_service_metrics"
-version = "0.1.0"
-dependencies = [
- "metrics",
 ]
 
 [[package]]

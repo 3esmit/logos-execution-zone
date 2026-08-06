@@ -1,29 +1,20 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, anyhow};
-use bytesize::ByteSize;
-use common::transaction::LeeTransaction;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
 use log::{error, info, warn};
-use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
 use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
 pub use sequencer_core::config::*;
 use sequencer_core::{
-    TransactionOrigin,
     block_publisher::BlockPublisherTrait as _,
     task_group::{StoreRelease, TaskGroup},
 };
-use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
-
-pub mod service;
-
-const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
 /// Handle to manage the sequencer and its tasks.
 ///
@@ -211,8 +202,6 @@ async fn wait_for_store_release(store: &StoreRelease) {
 }
 
 pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
-    sequencer_service_metrics::init();
-
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
@@ -252,35 +241,6 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         background_tasks,
         store,
     ))
-}
-
-async fn run_server(
-    sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    listen_addr: SocketAddr,
-    max_block_size: u64,
-) -> Result<(ServerHandle, SocketAddr)> {
-    let server = jsonrpsee::server::ServerBuilder::with_config(
-        jsonrpsee::server::ServerConfigBuilder::new()
-            .max_request_body_size(
-                u32::try_from(REQUEST_BODY_MAX_SIZE.as_u64())
-                    .expect("REQUEST_BODY_MAX_SIZE should be less than u32::MAX"),
-            )
-            .build(),
-    )
-    .build(listen_addr)
-    .await
-    .context("Failed to build RPC server")?;
-
-    let addr = server
-        .local_addr()
-        .context("Failed to get local address of RPC server")?;
-
-    info!("Starting Sequencer Service RPC server on {addr}");
-
-    let service = service::SequencerService::new(sequencer, mempool_handle, max_block_size);
-    let handle = server.start(service.into_rpc());
-    Ok((handle, addr))
 }
 
 async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration) -> Result<Never> {
