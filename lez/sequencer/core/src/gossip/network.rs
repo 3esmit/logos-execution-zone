@@ -136,6 +136,12 @@ impl Libp2pNetwork {
             );
             gossipsub::MessageId::from(id)
         };
+        // Derived from this node's `max_block_size`, so all nodes on a channel
+        // must agree on it: a node configured smaller would drop a larger frame
+        // its peers send at the codec (an inbound-stream close, not a clean
+        // application-level Reject), i.e. a near-invisible partial partition.
+        // `max_block_size` is already effectively a channel-wide parameter
+        // (block validation depends on it), so this inherits that requirement.
         let max_transmit_size = usize::try_from(max_block_size.saturating_add(GOSSIP_FRAME_MARGIN))
             .unwrap_or(usize::MAX);
         let gossipsub_config = gossipsub::ConfigBuilder::default()
@@ -401,12 +407,13 @@ impl DriveTask {
                     // still forwards to peers (who may have room) without
                     // admitting or marking seen, so a later re-gossip can be
                     // admitted once we drain.
-                    if self
-                        .mempool
-                        .try_push((TransactionOrigin::Gossip, tx))
-                        .is_ok()
-                    {
-                        self.seen.insert(hash);
+                    match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
+                        Ok(()) => {
+                            self.seen.insert(hash);
+                        }
+                        Err(_) => {
+                            debug!("Gossip mempool full; forwarding tx {hash:?} without admitting");
+                        }
                     }
                     gossipsub::MessageAcceptance::Accept
                 }
