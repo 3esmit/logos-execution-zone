@@ -7,6 +7,7 @@ use std::{
     str::FromStr as _,
 };
 
+use common::HashType;
 use lee::{Data, ProgramId, SharedSecretKey};
 use lee_core::{encryption::MlKem768EncapsulationKey, program::PdaSeed, NullifierPublicKey};
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
@@ -170,6 +171,22 @@ impl Default for FfiTransferResult {
             tx_hash: std::ptr::null_mut(),
             success: false,
         }
+    }
+}
+
+impl FfiTransferResult {
+    #[must_use]
+    /// Casting valid results hash into bytes.
+    ///
+    /// # Safety
+    /// Field `tx_hash` must be a valid pointer into transaction hash.
+    pub unsafe fn tx_hash_bytes(&self) -> FfiBytes32 {
+        let cstring = unsafe { CString::from_raw(self.tx_hash) };
+        let rstring = cstring.into_string().expect("Must be a valid Rust string");
+
+        let hash_val = HashType::from_str(&rstring).expect("Must be a valid hex string");
+
+        FfiBytes32 { data: hash_val.0 }
     }
 }
 
