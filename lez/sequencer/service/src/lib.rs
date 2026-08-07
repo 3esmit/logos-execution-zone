@@ -255,7 +255,8 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
                 gossip_config,
                 channel_id,
                 secret,
-                sequencer_core::gossip::keys_provider::NodeKeysProvider::new(&bedrock_config),
+                mempool_handle.clone(),
+                max_block_size.as_u64(),
             )
             .await
             .context("Failed to start sequencer gossip network")?;
@@ -263,6 +264,9 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
             Some(network)
         }
     };
+    let tx_publisher = gossip_network
+        .as_ref()
+        .map(sequencer_core::gossip::Libp2pNetwork::tx_publisher);
 
     let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
     // Taken while the core is still owned here: once it is behind the `Arc`
@@ -278,6 +282,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         mempool_handle_for_server,
         listen_addr,
         max_block_size.as_u64(),
+        tx_publisher,
     )
     .await?;
     info!("RPC server started");
@@ -303,6 +308,7 @@ async fn run_server(
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     listen_addr: SocketAddr,
     max_block_size: u64,
+    tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
 ) -> Result<(ServerHandle, SocketAddr)> {
     let server = jsonrpsee::server::ServerBuilder::with_config(
         jsonrpsee::server::ServerConfigBuilder::new()
@@ -322,7 +328,8 @@ async fn run_server(
 
     info!("Starting Sequencer Service RPC server on {addr}");
 
-    let service = service::SequencerService::new(sequencer, mempool_handle, max_block_size);
+    let service =
+        service::SequencerService::new(sequencer, mempool_handle, max_block_size, tx_publisher);
     let handle = server.start(service.into_rpc());
     Ok((handle, addr))
 }

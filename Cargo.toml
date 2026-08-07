@@ -162,7 +162,9 @@ libp2p = { version = "0.55", features = [
   "ed25519",
   "gossipsub",
   "identify",
+  "kad",
   "macros",
+  "mdns",
   "quic",
   "tokio",
 ] }

@@ -1,231 +1,91 @@
-//! Pure decision function for inbound announcements: everything except the
-//! directory upsert and the gossipsub report, so the whole pipeline is
-//! testable without a swarm.
+//! Pure decision function for an inbound gossiped transaction.
+//!
+//! The same stateless admission the RPC performs, minus mempool/seen-cache
+//! side effects (those live in the drive task). Testable without a swarm.
 
-use std::collections::HashSet;
+use common::transaction::LeeTransaction;
 
-use libp2p::{Multiaddr, PeerId};
-
-use crate::gossip::{
-    announcement::{RejectReason, SignedAnnouncement},
-    directory::PeerDirectory,
-    network::peer_id_from_ed25519,
-};
+/// Reserve ~200 bytes for block header overhead, mirroring the RPC check.
+const BLOCK_HEADER_OVERHEAD: u64 = 200;
 
 #[derive(Debug)]
-pub enum Evaluation {
-    /// Structurally invalid or forged: penalize the propagating peer.
-    Reject(RejectReason),
-    /// Signed by a key outside our (possibly stale) accredited set.
-    IgnoreUnknownKey,
-    /// Our own announcement echoed back (or replayed by another peer).
-    IgnoreOwn,
-    /// At or below the directory's stored seq for this key.
-    IgnoreStale,
-    /// Fresh and accredited: caller upserts the directory and dials.
-    Accept {
-        public_key: [u8; 32],
-        peer_id: PeerId,
-        listen_addrs: Vec<Multiaddr>,
-        seq: u64,
-    },
+pub enum TxEvaluation {
+    /// Structurally valid and authenticated; forward and admit.
+    Accept(LeeTransaction),
+    /// Malformed / forbidden; log the reason, penalize the peer.
+    Reject(String),
+    /// Reserved for the drive task's seen/mempool-full decisions.
+    Ignore,
 }
 
+/// Decodes and stateless-checks a gossiped transaction the same way the RPC
+/// admits a submitted one: size check, signature/witness check, then the
+/// sequencer-only-program guard.
 #[must_use]
-pub fn evaluate_announcement(
-    data: &[u8],
-    channel_id: &[u8; 32],
-    own_pubkey: &[u8; 32],
-    accredited: &HashSet<[u8; 32]>,
-    directory: &PeerDirectory,
-) -> Evaluation {
-    let announcement = match SignedAnnouncement::decode_and_verify(data, channel_id) {
-        Ok(announcement) => announcement,
-        Err(reason) => return Evaluation::Reject(reason),
+pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
+    let tx: LeeTransaction = match borsh::from_slice(data) {
+        Ok(tx) => tx,
+        Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
 
-    if &announcement.public_key == own_pubkey {
-        return Evaluation::IgnoreOwn;
-    }
-    if !accredited.contains(&announcement.public_key) {
-        return Evaluation::IgnoreUnknownKey;
+    let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
+    let max_tx_size = max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+    if tx_size > max_tx_size {
+        return TxEvaluation::Reject(format!("transaction too large: {tx_size} > {max_tx_size}"));
     }
 
-    let listen_addrs: Vec<Multiaddr> = match announcement
-        .listen_addrs
-        .iter()
-        .map(|addr| addr.parse())
-        .collect()
+    let authenticated = match tx.transaction_stateless_check() {
+        Ok(tx) => tx,
+        Err(err) => return TxEvaluation::Reject(format!("stateless check failed: {err:?}")),
+    };
+
+    if let LeeTransaction::Public(public_tx) = &authenticated
+        && crate::is_sequencer_only_program(public_tx.message().program_id)
     {
-        Ok(addrs) => addrs,
-        Err(_err) => return Evaluation::Reject(RejectReason::Undecodable),
-    };
-
-    // The key was verified as a valid curve point by `decode_and_verify`.
-    let Some(peer_id) = peer_id_from_ed25519(&announcement.public_key) else {
-        return Evaluation::Reject(RejectReason::BadSignature);
-    };
-
-    if directory
-        .seq_of(&announcement.public_key)
-        .is_some_and(|stored| stored >= announcement.seq)
-    {
-        return Evaluation::IgnoreStale;
+        return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    Evaluation::Accept {
-        public_key: announcement.public_key,
-        peer_id,
-        listen_addrs,
-        seq: announcement.seq,
-    }
+    TxEvaluation::Accept(authenticated)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
     use super::*;
-    use crate::gossip::announcement::{Announcement, RejectReason};
 
-    const CHANNEL: [u8; 32] = [1; 32];
-    const OWN: [u8; 32] = [0xAA; 32];
-
-    fn key() -> Ed25519Key {
-        Ed25519Key::from_bytes(&[7; 32])
-    }
-
-    fn bytes(key: &Ed25519Key, seq: u64) -> Vec<u8> {
-        Announcement {
-            channel_id: CHANNEL,
-            public_key: key.public_key().to_bytes(),
-            listen_addrs: vec!["/ip4/127.0.0.1/udp/7070/quic-v1".to_owned()],
-            seq,
-        }
-        .sign(key)
-        .to_bytes()
-    }
-
-    fn accredited(key: &Ed25519Key) -> HashSet<[u8; 32]> {
-        HashSet::from([key.public_key().to_bytes()])
+    fn valid_transaction() -> LeeTransaction {
+        let acc1 = initial_public_user_accounts()[0].account_id;
+        let acc2 = initial_public_user_accounts()[1].account_id;
+        let sign_key1 = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1)
     }
 
     #[test]
-    fn accredited_fresh_announcement_is_accepted() {
-        let key = key();
-        let directory = PeerDirectory::default();
-        let evaluation = evaluate_announcement(
-            &bytes(&key, 1),
-            &CHANNEL,
-            &OWN,
-            &accredited(&key),
-            &directory,
-        );
-        let Evaluation::Accept {
-            public_key,
-            listen_addrs,
-            seq,
-            ..
-        } = evaluation
-        else {
-            panic!("expected Accept, got {evaluation:?}");
-        };
-        assert_eq!(public_key, key.public_key().to_bytes());
-        assert_eq!(listen_addrs.len(), 1);
-        assert_eq!(seq, 1);
-    }
-
-    #[test]
-    fn structural_failure_is_reject() {
-        let directory = PeerDirectory::default();
+    fn well_formed_transaction_is_accepted() {
+        let tx = valid_transaction();
+        let bytes = borsh::to_vec(&tx).unwrap();
         assert!(matches!(
-            evaluate_announcement(b"junk", &CHANNEL, &OWN, &HashSet::new(), &directory),
-            Evaluation::Reject(RejectReason::Undecodable)
+            evaluate_transaction(&bytes, 1 << 20),
+            TxEvaluation::Accept(_)
         ));
     }
 
     #[test]
-    fn unknown_key_is_ignored_not_rejected() {
-        let key = key();
-        let directory = PeerDirectory::default();
+    fn garbage_bytes_are_rejected() {
         assert!(matches!(
-            evaluate_announcement(&bytes(&key, 1), &CHANNEL, &OWN, &HashSet::new(), &directory),
-            Evaluation::IgnoreUnknownKey
+            evaluate_transaction(&[0xff, 0xff, 0xff], 1 << 20),
+            TxEvaluation::Reject(_)
         ));
     }
 
     #[test]
-    fn own_echoed_announcement_is_ignored() {
-        let key = key();
-        let own = key.public_key().to_bytes();
-        let directory = PeerDirectory::default();
+    fn oversize_transaction_is_rejected() {
+        let tx = valid_transaction();
+        let bytes = borsh::to_vec(&tx).unwrap();
         assert!(matches!(
-            evaluate_announcement(
-                &bytes(&key, 1),
-                &CHANNEL,
-                &own,
-                &accredited(&key),
-                &directory
-            ),
-            Evaluation::IgnoreOwn
-        ));
-    }
-
-    #[test]
-    fn replayed_seq_is_stale() {
-        let key = key();
-        let mut directory = PeerDirectory::default();
-        let Evaluation::Accept {
-            public_key,
-            peer_id,
-            listen_addrs,
-            seq,
-        } = evaluate_announcement(
-            &bytes(&key, 5),
-            &CHANNEL,
-            &OWN,
-            &accredited(&key),
-            &directory,
-        )
-        else {
-            panic!("expected Accept");
-        };
-        directory.upsert(public_key, peer_id, listen_addrs, seq);
-        assert!(matches!(
-            evaluate_announcement(
-                &bytes(&key, 5),
-                &CHANNEL,
-                &OWN,
-                &accredited(&key),
-                &directory
-            ),
-            Evaluation::IgnoreStale
-        ));
-    }
-
-    #[test]
-    fn unparseable_multiaddr_is_reject() {
-        let key = key();
-        let announcement_bytes = Announcement {
-            channel_id: CHANNEL,
-            public_key: key.public_key().to_bytes(),
-            listen_addrs: vec!["not a multiaddr".to_owned()],
-            seq: 1,
-        }
-        .sign(&key)
-        .to_bytes();
-        let directory = PeerDirectory::default();
-        assert!(matches!(
-            evaluate_announcement(
-                &announcement_bytes,
-                &CHANNEL,
-                &OWN,
-                &accredited(&key),
-                &directory
-            ),
-            Evaluation::Reject(RejectReason::Undecodable)
+            evaluate_transaction(&bytes, 1),
+            TxEvaluation::Reject(_)
         ));
     }
 }

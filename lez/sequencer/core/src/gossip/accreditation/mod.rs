@@ -1,5 +1,6 @@
-//! Source of the channel's current accredited key set, polled by the
-//! gossip layer to validate announcements.
+//! Source of the channel's current accredited key set, read from L1. Retained
+//! for future ChannelConfig-signature work; not currently consumed by the
+//! gossip mesh.
 //!
 //! FIXME: `NodeKeysProvider` will be replaced by an L2 Join/Leave-derived provider in a follow-up.
 //! The related PR is <https://github.com/logos-blockchain/logos-execution-zone/pull/653>.

@@ -53,6 +53,8 @@ default = []
 testnet = []
 # Generate mock external clients implementations for testing
 mock = []
+# Enable mDNS-based local peer discovery for gossip.
+mdns = []
 
 [dev-dependencies]
 futures.workspace = true

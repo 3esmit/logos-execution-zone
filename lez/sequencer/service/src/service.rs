@@ -23,6 +23,7 @@ pub struct SequencerService<BC: BlockPublisherTrait> {
     sequencer: Arc<Mutex<SequencerCore<BC>>>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     max_block_size: u64,
+    tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
 }
 
 impl<BC: BlockPublisherTrait> SequencerService<BC> {
@@ -30,11 +31,13 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
         sequencer: Arc<Mutex<SequencerCore<BC>>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
+        tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
     ) -> Self {
         Self {
             sequencer,
             mempool_handle,
             max_block_size,
+            tx_publisher,
         }
     }
 }
@@ -101,10 +104,14 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
+        let for_gossip = authenticated_tx.clone();
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
             .await
             .expect("Mempool is closed, this is a bug");
+        if let Some(publisher) = &self.tx_publisher {
+            publisher.publish(for_gossip);
+        }
 
         Ok(tx_hash)
     }
