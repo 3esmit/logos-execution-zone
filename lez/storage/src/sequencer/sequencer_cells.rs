@@ -9,10 +9,12 @@ use crate::{
     sequencer::{
         CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
         DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_CROSS_ZONE_PEER_TIP_KEY,
-        DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
-        DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, DB_META_PENDING_DEPOSIT_EVENTS_KEY,
-        DB_META_PUBLISHED_HIGH_WATER_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY,
-        DB_META_ZONE_CURSOR_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
+        DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY,
+        DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
+        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
+        DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_PUBLISHED_HIGH_WATER_KEY,
+        DB_META_UNSEEN_WITHDRAW_COUNT_KEY, DB_META_ZONE_CURSOR_KEY,
+        DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
 
@@ -294,9 +296,10 @@ pub struct PendingCrossZoneDispatchRecord {
     /// A dispatch's payload and target accounts are chosen on the peer zone and
     /// validated by nobody in between, so one can fail for good. A failure can
     /// equally be a property of the moment, so a single one is not enough to
-    /// give up on a delivery. Once too many accumulate the record is dropped
-    /// rather than flagged, since a delivery nothing will retry is also a
-    /// delivery nothing would ever remove.
+    /// give up on a delivery. Once too many accumulate the record leaves this
+    /// list, which the drain re-feeds every turn, and a
+    /// [`DeadLetterDispatchRecord`] is kept in its place so the delivery this
+    /// node stopped attempting is still identifiable.
     pub failed_attempts: u32,
 }
 
@@ -342,6 +345,105 @@ impl SimpleWritableCell for PendingCrossZoneDispatchesCellRef<'_> {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize pending cross-zone dispatches cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// Which peer message a delivery carried, kept so a lost one can be traced back
+/// to the peer block it was in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DispatchOrigin {
+    pub src_zone: PeerZoneKey,
+    pub src_block_id: u64,
+    pub src_tx_index: u32,
+}
+
+/// A cross-zone delivery this node has given up on.
+///
+/// A dispatch that fails execution is left out of the block, so unlike every
+/// other failure in the pipeline this one leaves no on-chain trace that it was
+/// ever attempted. This record is what makes it observable rather than a log
+/// line that scrolls away.
+///
+/// It identifies the message rather than carrying it. The peer block and
+/// transaction index are enough to read the message back off the peer channel,
+/// and the encoded transaction is chosen by the peer zone and can exceed this
+/// node's whole block size limit, so retaining it would bound the list in
+/// entries while leaving it unbounded in bytes.
+///
+/// Giving up is this node's decision, not the network's: another sequencer may
+/// carry the same delivery successfully, and a record here is dropped again if
+/// that happens.
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct DeadLetterDispatchRecord {
+    pub message_key: [u8; 32],
+    pub origin: DispatchOrigin,
+    /// Attempts made before giving up, recording the policy that was in force
+    /// rather than distinguishing one retirement from another.
+    pub failed_attempts: u32,
+    /// Size of the delivery transaction that would not execute, which is the
+    /// diagnostic for the one failure mode that is about size.
+    pub transaction_bytes: u32,
+}
+
+#[derive(BorshDeserialize)]
+pub struct DeadLetterCrossZoneDispatchesCellOwned(pub Vec<DeadLetterDispatchRecord>);
+
+impl SimpleStorableCell for DeadLetterCrossZoneDispatchesCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for DeadLetterCrossZoneDispatchesCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct DeadLetterCrossZoneDispatchesCellRef<'records>(pub &'records [DeadLetterDispatchRecord]);
+
+impl SimpleStorableCell for DeadLetterCrossZoneDispatchesCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for DeadLetterCrossZoneDispatchesCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize dead-letter cross-zone dispatches cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// Deliveries given up on since this store was created.
+///
+/// Counted separately from the retained list because that list both evicts at
+/// its cap and drops entries whose delivery later settles, so its length is not
+/// how many times this node has given up. A node that gave up hundreds of times
+/// would otherwise look like one that gave up at the cap.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct DeadLetterCrossZoneDispatchCountCell(pub u64);
+
+impl SimpleStorableCell for DeadLetterCrossZoneDispatchCountCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for DeadLetterCrossZoneDispatchCountCell {}
+
+impl SimpleWritableCell for DeadLetterCrossZoneDispatchCountCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize dead-letter cross-zone dispatch count".to_owned()),
             )
         })
     }

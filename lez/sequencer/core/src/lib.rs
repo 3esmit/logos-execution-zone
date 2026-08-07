@@ -33,10 +33,10 @@ pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 pub use storage::error::DbError;
 use storage::sequencer::{
-    RocksDBIO, StoreUpdate,
+    DispatchFailure, RocksDBIO, StoreUpdate,
     sequencer_cells::{
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, WithdrawalReconciliationKey,
-        ZoneAnchorRecord,
+        DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -1074,8 +1074,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// A delivery's payload and target accounts are chosen on the peer zone and
     /// validated by nobody in between, so one can fail for good; but a failure
     /// can equally be a property of the moment, so give up only after several.
-    /// Giving up drops the record, which is also what keeps a peer from growing
-    /// the pending list with deliveries that can never execute.
+    /// Giving up moves the record to the dead letter, which is what keeps a peer
+    /// from growing the pending list with deliveries that can never execute
+    /// while still leaving the delivery somewhere an operator can find it.
     fn count_dispatch_failure(&self, tx: &LeeTransaction) {
         let Some(message) = extract_cross_zone_dispatch(tx) else {
             return;
@@ -1085,17 +1086,33 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             message.src_block_id,
             message.src_tx_index,
         );
+        let origin = DispatchOrigin {
+            src_zone: message.src_zone,
+            src_block_id: message.src_block_id,
+            src_tx_index: message.src_tx_index,
+        };
         match self
             .store
             .dbio()
-            .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES)
+            .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES, origin)
         {
-            Ok(true) => error!(
-                "Giving up on cross-zone delivery {} after {RETIRE_DISPATCH_AFTER_FAILURES} failed attempts; it will not be retried",
+            Ok(DispatchFailure::Retired(record)) => error!(
+                "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
+                hex::encode(key),
+                hex::encode(origin.src_zone),
+                origin.src_block_id,
+                origin.src_tx_index,
+                record.transaction_bytes,
+                record.failed_attempts
+            ),
+            Ok(DispatchFailure::Retried { failed_attempts }) => warn!(
+                "Cross-zone delivery {} failed to execute ({failed_attempts} of {RETIRE_DISPATCH_AFTER_FAILURES} attempts), will retry next block",
                 hex::encode(key)
             ),
-            Ok(false) => warn!(
-                "Cross-zone delivery {} failed to execute, will retry next block",
+            // Not a give-up: the ordinary case is a delivery that already
+            // settled, so its record is gone and there is nothing left to lose.
+            Ok(DispatchFailure::Absent) => debug!(
+                "Cross-zone delivery {} failed to execute but has no pending record; nothing to count",
                 hex::encode(key)
             ),
             Err(err) => error!(

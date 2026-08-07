@@ -20,6 +20,8 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
+        DeadLetterCrossZoneDispatchCountCell, DeadLetterCrossZoneDispatchesCellOwned,
+        DeadLetterCrossZoneDispatchesCellRef, DeadLetterDispatchRecord, DispatchOrigin,
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
         FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell,
         LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerChainTip, PeerFloorCellOwned,
@@ -55,6 +57,12 @@ pub const DB_META_CROSS_ZONE_PEER_TIP_KEY: &str = "cross_zone_peer_tip";
 /// Key base for storing cross-zone deliveries the watcher has recorded but
 /// which are not yet known to be irreversibly delivered.
 pub const DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY: &str = "pending_cross_zone_dispatches";
+/// Key base for storing cross-zone deliveries this node has given up on.
+pub const DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCHES_KEY: &str = "dead_letter_cross_zone_dispatches";
+/// Key base for counting every cross-zone delivery given up on, including ones
+/// since evicted from the retained list or reconciled out of it.
+pub const DB_META_DEAD_LETTER_CROSS_ZONE_DISPATCH_COUNT_KEY: &str =
+    "dead_letter_cross_zone_dispatch_count";
 
 /// Key base for counting unseen L2 withdraw intents.
 pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
@@ -73,6 +81,20 @@ pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
 /// delivery floor and reads the slot again later.
 pub const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 
+/// How many given-up-on cross-zone deliveries are kept for inspection.
+///
+/// Retaining them is the point, but a peer chooses how many deliveries fail, so
+/// this list cannot be unbounded any more than the pending one can. At the cap
+/// the oldest is dropped, which keeps the entries an operator reaching for this
+/// after an alert actually wants. Nothing is concealed by that: every
+/// retirement is counted separately and that count does not evict.
+///
+/// A count is a real bound here only because a record identifies a delivery
+/// instead of carrying it. Each is a fixed 84 bytes, so the whole list is 21 KB
+/// at the cap, bounded in bytes as well as in entries. That matters because it
+/// is one value rewritten under the lock that block production needs.
+pub const MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES: usize = 256;
+
 /// Key base for storing the LEE state.
 pub const DB_LEE_STATE_KEY: &str = "lee_state";
 /// Key base for storing the LEE state at the last L1-finalized block.
@@ -82,6 +104,22 @@ pub const DB_FINAL_BLOCK_META_KEY: &str = "final_block_meta";
 
 /// Name of state column family.
 pub const CF_LEE_STATE_NAME: &str = "cf_lee_state";
+
+/// What counting a failed production attempt did to a delivery's record.
+///
+/// Three outcomes rather than a bool because the caller reports each
+/// differently and only one of them means this node stopped trying. A delivery
+/// that has already settled has no pending record, so it is [`Self::Absent`]
+/// rather than a give-up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchFailure {
+    /// Counted; the delivery is still pending and will be attempted again.
+    Retried { failed_attempts: u32 },
+    /// Given up on: moved out of the pending list and into the dead letter.
+    Retired(Box<DeadLetterDispatchRecord>),
+    /// No pending record, so nothing was counted and nothing was given up on.
+    Absent,
+}
 
 /// A single key/value entry from a column family, used inside [`DbDump`].
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -742,38 +780,111 @@ impl RocksDBIO {
         Ok(accepted)
     }
 
-    /// Counts a failed production attempt against a delivery, dropping its
-    /// record once it reaches `retire_at`. Returns whether it was dropped.
+    /// Counts a failed production attempt against a delivery, retiring it once
+    /// it reaches `retire_at`.
     ///
-    /// Dropped rather than flagged: a retired record is one the drain will never
-    /// turn into a block transaction again, so nothing would ever remove it, and
-    /// a peer that can make deliveries fail could grow the list without bound.
-    /// The delivery is given up on either way; this way the cost is a log line
-    /// rather than a permanent entry.
+    /// Retiring moves the record out of the pending list and into the dead
+    /// letter. The pending list has to lose it, or the drain would re-feed a
+    /// transaction that never executes for ever; the dead letter is what keeps
+    /// the delivery identifiable, since a dispatch that fails execution is left
+    /// out of the block and so leaves no trace anywhere else. It is bounded on
+    /// its own terms, so a peer that can make deliveries fail still cannot grow
+    /// the store without limit.
     ///
-    /// A delivery with no record is already retired as far as this is concerned:
-    /// there is nothing left to count against.
-    pub fn record_dispatch_failure(&self, message_key: [u8; 32], retire_at: u32) -> DbResult<bool> {
+    /// A delivery with no pending record is reported as [`DispatchFailure::Absent`]
+    /// rather than as a retirement: there is nothing to count against, and the
+    /// two are different events. It is the ordinary shape of a delivery that
+    /// settled and then failed to execute on a later attempt.
+    pub fn record_dispatch_failure(
+        &self,
+        message_key: [u8; 32],
+        retire_at: u32,
+        origin: DispatchOrigin,
+    ) -> DbResult<DispatchFailure> {
         let _pending = self.lock_pending_records();
         let mut records = self.get_pending_cross_zone_dispatches()?;
         let Some(position) = records
             .iter()
             .position(|record| record.message_key == message_key)
         else {
-            return Ok(true);
+            return Ok(DispatchFailure::Absent);
         };
 
-        let attempts = {
+        let failed_attempts = {
             let record = &mut records[position];
             record.failed_attempts = record.failed_attempts.saturating_add(1);
             record.failed_attempts
         };
-        let retired = attempts >= retire_at;
-        if retired {
-            records.remove(position);
+        if failed_attempts < retire_at {
+            self.put_pending_cross_zone_dispatches(&records)?;
+            return Ok(DispatchFailure::Retried { failed_attempts });
         }
-        self.put_pending_cross_zone_dispatches(&records)?;
-        Ok(retired)
+
+        let retired = records.remove(position);
+        let dead_letter = DeadLetterDispatchRecord {
+            message_key,
+            origin,
+            failed_attempts,
+            transaction_bytes: u32::try_from(retired.transaction.len()).unwrap_or(u32::MAX),
+        };
+
+        // One entry per delivery, not per retirement. The same delivery can be
+        // recorded again after its record is gone, since a watcher rebuilding a
+        // peer tip re-reads that channel from the peer's genesis and a delivery
+        // that never executes never reaches the inbox seen-set to be recognised
+        // as delivered. Without this, one message that always fails would fill
+        // the list with copies of itself and evict every other one.
+        let mut dead_letters = self.get_dead_letter_cross_zone_dispatches()?;
+        if !dead_letters
+            .iter()
+            .any(|record| record.message_key == message_key)
+        {
+            dead_letters.push(dead_letter.clone());
+            while dead_letters.len() > MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES {
+                dead_letters.remove(0);
+            }
+        }
+        // Counted per retirement even so: it measures how often this node gave
+        // up, which the retained list cannot, since that both evicts and drops
+        // entries whose delivery later settles.
+        let count = self
+            .get_dead_letter_cross_zone_dispatch_count()?
+            .saturating_add(1);
+
+        // One batch: the record leaving the pending list and arriving in the
+        // dead letter is one event, and a crash between the two halves would
+        // either lose the message silently or leave the drain retrying a
+        // delivery already recorded as given up on.
+        let mut batch = WriteBatch::default();
+        self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
+        self.put_batch(
+            &DeadLetterCrossZoneDispatchesCellRef(&dead_letters),
+            (),
+            &mut batch,
+        )?;
+        self.put_batch(&DeadLetterCrossZoneDispatchCountCell(count), (), &mut batch)?;
+        self.db.write(batch).map_err(|rerr| {
+            DbError::rocksdb_cast_message(
+                rerr,
+                Some("Failed to retire a cross-zone dispatch into the dead letter".to_owned()),
+            )
+        })?;
+
+        Ok(DispatchFailure::Retired(Box::new(dead_letter)))
+    }
+
+    /// The cross-zone deliveries given up on and still retained, oldest first.
+    pub fn get_dead_letter_cross_zone_dispatches(&self) -> DbResult<Vec<DeadLetterDispatchRecord>> {
+        Ok(self
+            .get_opt::<DeadLetterCrossZoneDispatchesCellOwned>(())?
+            .map_or_else(Vec::new, |cell| cell.0))
+    }
+
+    /// Every cross-zone delivery given up on, including ones since evicted.
+    pub fn get_dead_letter_cross_zone_dispatch_count(&self) -> DbResult<u64> {
+        Ok(self
+            .get_opt::<DeadLetterCrossZoneDispatchCountCell>(())?
+            .map_or(0, |cell| cell.0))
     }
 
     /// Drops the records of deliveries that are settled for good, outside any
@@ -796,10 +907,54 @@ impl RocksDBIO {
         records.retain(|record| !to_remove.contains(&record.message_key));
         let removed = before.saturating_sub(records.len());
 
+        // Both lists in one batch, for the same reason the retire path batches:
+        // a crash between them leaves the pending record gone and a dead letter
+        // behind saying the delivery was abandoned, and nothing recomputes these
+        // keys on a later pass to correct it.
+        let mut batch = WriteBatch::default();
         if removed > 0 {
-            self.put_pending_cross_zone_dispatches(&records)?;
+            self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
+        }
+        self.stage_reconciled_dead_letters(&to_remove, &mut batch)?;
+        if !batch.is_empty() {
+            self.db.write(batch).map_err(|rerr| {
+                DbError::rocksdb_cast_message(
+                    rerr,
+                    Some("Failed to drop settled cross-zone dispatches".to_owned()),
+                )
+            })?;
         }
         Ok(removed)
+    }
+
+    /// Stages the removal of dead letters whose delivery turned out to settle.
+    ///
+    /// Giving up is this node's decision and every sequencer makes it alone,
+    /// against its own head and its own mempool ordering, so a delivery this one
+    /// stopped attempting can still reach a block another one produced. Left
+    /// alone, the entry would report that delivery as abandoned for as long as
+    /// the store lives, and nothing else removes one.
+    ///
+    /// The count is deliberately not decremented. It records how often this node
+    /// gave up, which stays true whatever happened next.
+    fn stage_reconciled_dead_letters(
+        &self,
+        settled: &std::collections::HashSet<&[u8; 32]>,
+        batch: &mut WriteBatch,
+    ) -> DbResult<usize> {
+        let mut dead_letters = self.get_dead_letter_cross_zone_dispatches()?;
+        let before = dead_letters.len();
+        dead_letters.retain(|record| !settled.contains(&record.message_key));
+        let reconciled = before.saturating_sub(dead_letters.len());
+
+        if reconciled > 0 {
+            self.put_batch(
+                &DeadLetterCrossZoneDispatchesCellRef(&dead_letters),
+                (),
+                batch,
+            )?;
+        }
+        Ok(reconciled)
     }
 
     /// Drops the pending records of deliveries that just became irreversible,
@@ -827,6 +982,11 @@ impl RocksDBIO {
         if removed > 0 {
             self.put_pending_cross_zone_dispatches_batch(&records, batch)?;
         }
+
+        // A settled delivery this node had given up on is not one it abandoned,
+        // and this is the path that catches the ordinary case: another sequencer
+        // carries it into a block that then becomes irreversible.
+        self.stage_reconciled_dead_letters(&to_remove, batch)?;
         Ok(removed)
     }
 

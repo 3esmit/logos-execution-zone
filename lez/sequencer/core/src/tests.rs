@@ -25,7 +25,7 @@ use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda};
 use storage::sequencer::sequencer_cells::{
-    PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+    DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
 };
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -697,14 +697,41 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         );
     }
 
-    // The attempt at the limit gives up on it, and giving up drops the record.
-    // Anything else leaves an entry no later block can ever remove, which is how
-    // a peer that can make deliveries fail would grow this list without bound.
+    // The attempt at the limit gives up on it, which takes the record out of the
+    // pending list. Anything else leaves an entry no later block can ever
+    // remove, which is how a peer that can make deliveries fail would grow this
+    // list without bound.
     sequencer.produce_new_block().await.unwrap();
     assert!(
         pending_dispatches(&sequencer).is_empty(),
-        "giving up on a delivery must drop its record, not flag it"
+        "giving up on a delivery must take its record out of the pending list"
     );
+
+    // A dispatch that fails execution is left out of the block, so the dead
+    // letter is the only place recording that this happened at all. The origin
+    // is the point of the record: it is what identifies which message stopped
+    // being attempted, and this is the only place that builds one.
+    let dbio = sequencer.store.dbio();
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(dead_letters.len(), 1);
+    assert_eq!(
+        dead_letters[0].origin,
+        DispatchOrigin {
+            src_zone: PEER_ZONE,
+            src_block_id: 13,
+            src_tx_index: 0,
+        }
+    );
+    assert_eq!(
+        dead_letters[0].message_key,
+        cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
+    );
+    assert!(dead_letters[0].transaction_bytes > 0);
+    assert_eq!(
+        dead_letters[0].failed_attempts,
+        RETIRE_DISPATCH_AFTER_FAILURES
+    );
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
 
     // And nothing re-feeds it, so it stops costing a guest execution per block.
     let block_id = sequencer.produce_new_block().await.unwrap();
