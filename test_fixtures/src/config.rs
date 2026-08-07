@@ -112,6 +112,7 @@ pub fn sequencer_config(
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        gossip: None, // no gossip needed for standalone sequencers
     })
 }
 
