@@ -1005,7 +1005,6 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     assert!(is_included);
 
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 

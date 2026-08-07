@@ -157,6 +157,7 @@ impl Default for FfiAccountList {
 
 /// Result of a transfer operation.
 #[repr(C)]
+#[derive(Debug)]
 pub struct FfiTransferResult {
     // TODO: Replace with HashType FFI representation
     /// Transaction hash (null-terminated string, or null on failure).
@@ -176,11 +177,11 @@ impl Default for FfiTransferResult {
 
 impl FfiTransferResult {
     #[must_use]
-    /// Casting valid results hash into bytes.
+    /// Casting valid results hash into bytes. Effectively frees `FfiTransferResult`.
     ///
     /// # Safety
     /// Field `tx_hash` must be a valid pointer into transaction hash.
-    pub unsafe fn tx_hash_bytes(&self) -> FfiBytes32 {
+    pub unsafe fn tx_hash_bytes(self) -> FfiBytes32 {
         let cstring = unsafe { CString::from_raw(self.tx_hash) };
         let rstring = cstring.into_string().expect("Must be a valid Rust string");
 
