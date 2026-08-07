@@ -7,12 +7,14 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Source blocks per seen-set shard, so no single seen account grows without bound.
-pub const EPOCH_BLOCKS: u64 = 10_000;
-
 const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00000/";
 const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
-const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/00/";
+/// Not `/00/`, which keyed a shard by `src_block_id / 10_000`: an epoch and a
+/// block id collide under one domain, so a shard carrying the older layout would
+/// land at a new address and decode as nonsense. Belt and braces, since the
+/// image id is what actually relocates every PDA here, and it moves with any
+/// change to this crate.
+const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -122,12 +124,43 @@ impl InboxConfig {
     }
 }
 
-/// The replay keys seen for one `(src_zone, epoch)` shard.
+/// What one peer block has already delivered.
+///
+/// One shard per peer block, holding transaction indices rather than message
+/// keys. The shard's own address binds `(src_zone, src_block_id)`, so hashing
+/// those into a 32-byte key and storing it back inside that account records
+/// nothing the address does not.
+///
+/// Indices rather than keys are what make a per-block shard affordable, not
+/// free. A shard costs a new account plus a 36-byte header, so at one delivery
+/// per peer block it holds more state per message than one shard shared across
+/// ten thousand blocks did, and it breaks even around five. What it buys is that
+/// a shard cannot saturate: at 32 bytes per delivery, one peer block's own
+/// messages could overflow the account, and the guest's only way to say so is a
+/// panic that costs the message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct SeenShard(pub BTreeSet<MessageKey>);
+pub struct SeenShard {
+    /// Recomputed hash of the peer block this shard records deliveries from.
+    /// All-zero until the first delivery claims it.
+    pub src_block_hash: [u8; 32],
+    /// Indices of that block's transactions already delivered.
+    pub delivered: BTreeSet<u32>,
+}
 
 impl SeenShard {
-    /// Decodes a shard from account data; empty data is an empty shard.
+    /// Deliveries one shard can hold before it exceeds `DATA_MAX_LENGTH`.
+    ///
+    /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
+    /// this is exactly the 100 KiB an account may carry.
+    ///
+    /// What keeps it out of reach is the L1 inscription limit rather than
+    /// anything a peer configures: a whole block is inscribed as one op, capped
+    /// near 1.75 MiB, and a minimal emitting transaction is about 257 bytes, so
+    /// one peer block tops out around 7,100 deliveries. Raising that L1 cap past
+    /// roughly 6.3 MiB would put this back in reach.
+    pub const MAX_DELIVERIES: usize = 25_591;
+
+    /// Decodes a shard from account data; empty data is an unclaimed shard.
     pub fn from_bytes(bytes: &[u8]) -> borsh::io::Result<Self> {
         if bytes.is_empty() {
             return Ok(Self::default());
@@ -140,14 +173,35 @@ impl SeenShard {
         borsh::to_vec(self).expect("SeenShard serializes")
     }
 
+    /// Whether a delivery from the block with this hash may be recorded here.
+    ///
+    /// An unclaimed shard binds to whoever claims it first. Unclaimed is the
+    /// whole value being default rather than the hash being all zero, so a shard
+    /// that has recorded anything can never read as unclaimed even if a hash
+    /// somehow were.
     #[must_use]
-    pub fn contains(&self, key: &MessageKey) -> bool {
-        self.0.contains(key)
+    pub fn binds(&self, src_block_hash: &[u8; 32]) -> bool {
+        *self == Self::default() || self.src_block_hash == *src_block_hash
     }
 
-    /// Inserts a key; returns true if it was newly inserted.
-    pub fn insert(&mut self, key: MessageKey) -> bool {
-        self.0.insert(key)
+    #[must_use]
+    pub fn contains(&self, src_tx_index: u32) -> bool {
+        self.delivered.contains(&src_tx_index)
+    }
+
+    /// Binds the shard if unclaimed and records the delivery; returns true if it
+    /// was newly recorded.
+    ///
+    /// A hash the shard does not bind records nothing. The guest asserts
+    /// [`Self::binds`] before reaching this, so that refusal is a backstop
+    /// against a later caller rebinding a claimed shard and quietly erasing
+    /// which peer block delivered what.
+    pub fn insert(&mut self, src_block_hash: [u8; 32], src_tx_index: u32) -> bool {
+        if !self.binds(&src_block_hash) {
+            return false;
+        }
+        self.src_block_hash = src_block_hash;
+        self.delivered.insert(src_tx_index)
     }
 }
 
@@ -214,7 +268,7 @@ pub const fn inbox_config_seed() -> PdaSeed {
     PdaSeed::new(INBOX_CONFIG_SEED)
 }
 
-/// The seen-set shard for the `(src_zone, epoch)` the message falls in.
+/// The seen-set shard for the peer block the message came from.
 #[must_use]
 pub fn inbox_seen_shard_account_id(
     inbox_id: ProgramId,
@@ -225,15 +279,17 @@ pub fn inbox_seen_shard_account_id(
 }
 
 /// Seed of the seen-shard PDA, exposed so the guest can claim the account.
+///
+/// One shard per peer block, so what it can hold is bounded by that block, and a
+/// peer cannot accumulate deliveries into one account across many of them.
 #[must_use]
 pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
-    let src_epoch = src_block_id.wrapping_div(EPOCH_BLOCKS);
     let mut bytes = [0_u8; 72];
     bytes[..32].copy_from_slice(&INBOX_SEEN_SEED_DOMAIN);
     bytes[32..64].copy_from_slice(src_zone);
-    bytes[64..].copy_from_slice(&src_epoch.to_le_bytes());
+    bytes[64..].copy_from_slice(&src_block_id.to_le_bytes());
 
     let seed: [u8; 32] = Impl::hash_bytes(&bytes)
         .as_bytes()
@@ -243,6 +299,8 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
 }
 #[cfg(test)]
 mod tests {
+    use lee_core::account::data::DATA_MAX_LENGTH;
+
     use super::*;
 
     fn zone(b: u8) -> ZoneId {
@@ -315,15 +373,86 @@ mod tests {
     }
 
     #[test]
-    fn seen_shards_split_on_epoch_boundary() {
+    fn every_peer_block_gets_its_own_seen_shard() {
         let id: ProgramId = [9; 8];
         assert_eq!(
-            inbox_seen_shard_account_id(id, &zone(1), 0),
-            inbox_seen_shard_account_id(id, &zone(1), EPOCH_BLOCKS - 1),
+            inbox_seen_shard_account_id(id, &zone(1), 7),
+            inbox_seen_shard_account_id(id, &zone(1), 7),
         );
         assert_ne!(
-            inbox_seen_shard_account_id(id, &zone(1), EPOCH_BLOCKS - 1),
-            inbox_seen_shard_account_id(id, &zone(1), EPOCH_BLOCKS),
+            inbox_seen_shard_account_id(id, &zone(1), 7),
+            inbox_seen_shard_account_id(id, &zone(1), 8),
+        );
+        assert_ne!(
+            inbox_seen_shard_account_id(id, &zone(1), 7),
+            inbox_seen_shard_account_id(id, &zone(2), 7),
+        );
+    }
+
+    #[test]
+    fn a_shard_binds_to_the_first_block_that_claims_it() {
+        let mut shard = SeenShard::default();
+        assert!(shard.binds(&[1; 32]), "an unclaimed shard binds to anyone");
+        assert!(shard.binds(&[2; 32]));
+
+        shard.insert([1; 32], 0);
+        assert!(shard.binds(&[1; 32]), "and to that block thereafter");
+        assert!(
+            !shard.binds(&[2; 32]),
+            "a second block claiming the same block id cannot share this shard"
+        );
+    }
+
+    #[test]
+    fn a_shard_records_deliveries_by_transaction_index() {
+        let mut shard = SeenShard::default();
+        assert!(!shard.contains(3));
+        assert!(shard.insert([1; 32], 3));
+        assert!(shard.contains(3));
+        assert!(
+            !shard.insert([1; 32], 3),
+            "a replay of the same delivery records nothing new"
+        );
+        assert!(shard.insert([1; 32], 4));
+    }
+
+    #[test]
+    fn an_unclaimed_shard_reads_as_empty_and_round_trips() {
+        assert_eq!(
+            SeenShard::from_bytes(&[]).expect("empty data decodes"),
+            SeenShard::default(),
+            "an absent account is an unclaimed shard, not a decode failure"
+        );
+
+        let mut shard = SeenShard::default();
+        shard.insert([5; 32], 1);
+        shard.insert([5; 32], 9);
+        assert_eq!(
+            SeenShard::from_bytes(&shard.to_bytes()).expect("shard decodes"),
+            shard
+        );
+    }
+
+    #[test]
+    fn a_full_shard_fits_in_account_data() {
+        let mut shard = SeenShard::default();
+        for index in 0..SeenShard::MAX_DELIVERIES {
+            shard.insert([5; 32], u32::try_from(index).expect("index fits"));
+        }
+        let max = usize::try_from(DATA_MAX_LENGTH.as_u64()).expect("cap fits in usize");
+        assert_eq!(
+            shard.to_bytes().len(),
+            max,
+            "MAX_DELIVERIES is exactly what an account can carry"
+        );
+
+        shard.insert(
+            [5; 32],
+            u32::try_from(SeenShard::MAX_DELIVERIES).expect("index fits"),
+        );
+        assert!(
+            shard.to_bytes().len() > max,
+            "and one more does not fit, so the guest would fail rather than truncate"
         );
     }
 }

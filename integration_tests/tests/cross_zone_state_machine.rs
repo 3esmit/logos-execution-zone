@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use cross_zone_inbox_core::{
     CrossZoneMessage, CrossZoneRoute, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id, message_key,
+    inbox_config_account_id, inbox_seen_shard_account_id,
 };
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
@@ -447,12 +447,13 @@ fn mint_replay_rejected() {
     );
     seed_wrapped_config(&mut state);
 
-    // Seed the seen-shard as already containing this message's key, so the inbox
-    // takes the replay no-op branch. The shard is inbox-owned (claimed on a prior
-    // delivery), so the guest leaves it untouched.
+    // Seed the seen-shard as already holding this delivery, so the inbox takes
+    // the replay no-op branch. The shard is inbox-owned (claimed on a prior
+    // delivery) and bound to the same source block, so the guest leaves it
+    // untouched.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
-    shard.insert(message_key(&src_zone, src_block_id, src_tx_index));
+    shard.insert(SRC_BLOCK_HASH, src_tx_index);
     state = state.with_public_accounts([(
         seen_id,
         Account {
@@ -510,4 +511,122 @@ fn mint_replay_rejected() {
             SeenShard::from_bytes(&seen.data.clone().into_inner()).expect("seen shard decodes");
         assert_eq!(shard_after, shard, "replay must not modify the seen-shard");
     }
+}
+
+/// A peer that publishes two different blocks claiming one block id gets at most
+/// one of them delivered from.
+///
+/// The shard's address covers the zone and the block id but not which block
+/// claimed them, so both resolve to the same account. The first delivery binds
+/// it to its own source block and the second cannot execute against it. Failing
+/// is the point: were the second merely no-op'd as a replay, a peer could pick
+/// which of two messages at one coordinate the target program ever sees.
+#[test]
+fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let receiver_id = programs::ping_receiver().id();
+
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+    let other_block_hash = [8_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
+
+    // The shard as the first delivery left it: bound to SRC_BLOCK_HASH, holding
+    // that block's transaction 0.
+    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
+    let mut shard = SeenShard::default();
+    shard.insert(SRC_BLOCK_HASH, 0);
+    state = state.with_public_accounts([(
+        seen_id,
+        Account {
+            program_owner: inbox_id,
+            balance: 0,
+            data: shard
+                .to_bytes()
+                .try_into()
+                .expect("shard fits in account data"),
+            nonce: 0_u128.into(),
+        },
+    )]);
+
+    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"from-the-other-block".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+
+    // A different transaction index, so this is not a replay: only the source
+    // block differs from what the shard is bound to.
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: other_block_hash,
+        src_tx_index: 1,
+        src_program_id: [9_u32; 8],
+        target_program_id: receiver_id,
+        payload,
+        l1_inclusion_witness: None,
+    };
+
+    let record_id = ping_record_pda(receiver_id);
+    let message = Message::try_new(
+        inbox_id,
+        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    assert!(
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_err(),
+        "a delivery from a block the shard is not bound to must not execute"
+    );
+
+    // The control, so the refusal above is the binding and not the shape of the
+    // transaction: the same second delivery, differing only in naming the block
+    // the shard is bound to, executes and is recorded alongside the first.
+    let control_words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"from-the-bound-block".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let control_msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 1,
+        src_program_id: [9_u32; 8],
+        target_program_id: receiver_id,
+        payload: control_words
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect(),
+        l1_inclusion_witness: None,
+    };
+    let control_message = Message::try_new(
+        inbox_id,
+        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        vec![],
+        InboxInstruction::Dispatch(control_msg),
+    )
+    .expect("build dispatch message");
+    let control_tx = PublicTransaction::new(control_message, WitnessSet::from_raw_parts(vec![]));
+
+    let diff = ValidatedStateDiff::from_public_transaction(&control_tx, &state, 1, 0)
+        .expect("a second delivery from the bound block executes");
+    let public_diff = diff.public_diff();
+    let seen_after = public_diff
+        .get(&seen_id)
+        .expect("the shard records the new delivery");
+    let shard_after =
+        SeenShard::from_bytes(&seen_after.data.clone().into_inner()).expect("seen shard decodes");
+    assert!(shard_after.contains(0), "the first delivery is still there");
+    assert!(shard_after.contains(1), "and the second is recorded");
+    assert_eq!(
+        shard_after.src_block_hash, SRC_BLOCK_HASH,
+        "a shard stays bound to the block that claimed it"
+    );
 }

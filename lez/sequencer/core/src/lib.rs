@@ -1230,10 +1230,16 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
 ///
-/// The inbox records every delivered message key in a seen shard and no-ops a
-/// replay, so that shard is the same kind of answer the deposit receipt gives:
-/// state, not bookkeeping. An orphan reverts the entry with the block, so the
-/// next turn re-delivers with nothing of ours to unwind.
+/// The inbox records each peer block's delivered transaction indices in that
+/// block's seen shard and no-ops a replay, so the shard is the same kind of
+/// answer the deposit receipt gives: state, not bookkeeping. An orphan reverts
+/// the entry with the block, so the next turn re-delivers with nothing of ours
+/// to unwind.
+///
+/// Both halves matter. A shard bound to a different peer block is not this
+/// delivery's replay record; it is what will make this delivery abort, and
+/// calling that delivered would drop the record instead of retrying it and
+/// dead-lettering it where an operator can see it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
         programs::cross_zone_inbox().id(),
@@ -1242,11 +1248,7 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
     );
     state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
         cross_zone_inbox_core::SeenShard::from_bytes(shard.data.as_ref()).is_ok_and(|seen| {
-            seen.contains(&cross_zone_inbox_core::message_key(
-                &message.src_zone,
-                message.src_block_id,
-                message.src_tx_index,
-            ))
+            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
         })
     })
 }
