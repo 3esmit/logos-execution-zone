@@ -240,6 +240,12 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let gossip_network = match gossip_config {
         None => None,
         Some(gossip_config) => {
+            // On-disk format matches `sequencer_core::load_or_create_signing_key`
+            // (raw 32-byte secret). `Ed25519Key` has no accessor for the raw
+            // secret outside the `unsafe` feature, and `Libp2pNetwork::start`
+            // needs it directly, so this reads the file itself rather than
+            // going through the KMS type. The node's L1 bedrock signing key is
+            // deliberately reused as the libp2p identity.
             let key_path = sequencer_home.join("bedrock_signing_key");
             let secret: [u8; 32] = std::fs::read(&key_path)
                 .with_context(|| format!("Failed to read {}", key_path.display()))?

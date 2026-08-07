@@ -12,10 +12,9 @@ const BLOCK_HEADER_OVERHEAD: u64 = 200;
 pub enum TxEvaluation {
     /// Structurally valid and authenticated; forward and admit.
     Accept(LeeTransaction),
-    /// Malformed / forbidden; log the reason, penalize the peer.
+    /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
+    /// configured, so this does not currently penalize the propagating peer.
     Reject(String),
-    /// Reserved for the drive task's seen/mempool-full decisions.
-    Ignore,
 }
 
 /// Decodes and stateless-checks a gossiped transaction the same way the RPC
@@ -23,16 +22,16 @@ pub enum TxEvaluation {
 /// sequencer-only-program guard.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
-    let tx: LeeTransaction = match borsh::from_slice(data) {
-        Ok(tx) => tx,
-        Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
-    };
-
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
     let max_tx_size = max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
     if tx_size > max_tx_size {
         return TxEvaluation::Reject(format!("transaction too large: {tx_size} > {max_tx_size}"));
     }
+
+    let tx: LeeTransaction = match borsh::from_slice(data) {
+        Ok(tx) => tx,
+        Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
+    };
 
     let authenticated = match tx.transaction_stateless_check() {
         Ok(tx) => tx,

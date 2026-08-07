@@ -104,14 +104,16 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
 
-        let for_gossip = authenticated_tx.clone();
+        // Publish to the gossip mesh before the (blocking) local mempool push so
+        // a full mempool doesn't delay propagation. Fire-and-forget; the clone
+        // only happens when gossip is enabled.
+        if let Some(publisher) = &self.tx_publisher {
+            publisher.publish(authenticated_tx.clone());
+        }
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
             .await
             .expect("Mempool is closed, this is a bug");
-        if let Some(publisher) = &self.tx_publisher {
-            publisher.publish(for_gossip);
-        }
 
         Ok(tx_hash)
     }

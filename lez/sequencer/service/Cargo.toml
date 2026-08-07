@@ -35,3 +35,5 @@ borsh.workspace = true
 default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
+# Enable mDNS-based local peer discovery for gossip.
+mdns = ["sequencer_core/mdns"]

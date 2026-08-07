@@ -686,9 +686,20 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
                     Ok(diff) => diff,
                     Err(err) => {
-                        error!(
-                            "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                        );
+                        // A gossiped tx the leader already included is
+                        // expected to fail here (e.g. on nonce) for every
+                        // other node on its turn; that is steady-state noise,
+                        // not an error. User-submitted failures still warrant
+                        // `error!`.
+                        if matches!(origin, TransactionOrigin::Gossip) {
+                            debug!(
+                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                            );
+                        } else {
+                            error!(
+                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                            );
+                        }
                         return false;
                     }
                 };

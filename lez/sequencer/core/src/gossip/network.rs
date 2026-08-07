@@ -6,6 +6,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -36,6 +40,10 @@ const DEATH_REMINDER_INTERVAL: Duration = Duration::from_secs(300);
 const SEEN_CACHE_CAPACITY: usize = 4096;
 /// Outbound local-publish channel depth; `try_send` drops on overflow.
 const TX_PUBLISH_CHANNEL_CAPACITY: usize = 1024;
+/// Headroom over `max_block_size` for `GossipSub` protobuf framing (signature,
+/// source, seqno, topic) so a maximum-size transaction still fits the transmit
+/// limit instead of being dropped at the transport before validation.
+const GOSSIP_FRAME_MARGIN: u64 = 4096;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -63,6 +71,9 @@ pub struct Libp2pNetwork {
     connected_rx: watch::Receiver<Vec<[u8; 32]>>,
     driver_cancellation: CancellationToken,
     driver: tokio::task::JoinHandle<()>,
+    /// Set before `driver_cancellation.cancel()` on graceful `Drop`, so the
+    /// death reminder can tell an intentional teardown from a driver crash.
+    graceful_shutdown: Arc<AtomicBool>,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
     tx_tx: mpsc::Sender<LeeTransaction>,
@@ -115,14 +126,23 @@ impl Libp2pNetwork {
         let topic = gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)));
 
         let message_id_fn = |msg: &gossipsub::Message| {
-            let id = borsh::from_slice::<LeeTransaction>(&msg.data)
-                .map_or_else(|_| msg.data.clone(), |tx| tx.hash().0.to_vec());
+            // Undecodable messages still need a message-id, but it must be a
+            // deterministic digest, not the attacker-controlled bytes
+            // themselves and not a process-local hash (`DefaultHasher`):
+            // every peer has to derive the same id from the same data.
+            let id = borsh::from_slice::<LeeTransaction>(&msg.data).map_or_else(
+                |_| common::block::OwnHasher::hash(&msg.data).0.to_vec(),
+                |tx| tx.hash().0.to_vec(),
+            );
             gossipsub::MessageId::from(id)
         };
+        let max_transmit_size = usize::try_from(max_block_size.saturating_add(GOSSIP_FRAME_MARGIN))
+            .unwrap_or(usize::MAX);
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Strict)
             .message_id_fn(message_id_fn)
             .validate_messages()
+            .max_transmit_size(max_transmit_size)
             .build()
             .map_err(|err| anyhow!("Failed to build gossipsub config: {err}"))?;
         let gossipsub_behaviour = gossipsub::Behaviour::new(
@@ -209,12 +229,14 @@ impl Libp2pNetwork {
             max_block_size,
             tx_rx,
         }));
-        spawn_death_reminder(driver_cancellation.clone());
+        let graceful_shutdown = Arc::new(AtomicBool::new(false));
+        spawn_death_reminder(driver_cancellation.clone(), Arc::clone(&graceful_shutdown));
 
         Ok(Self {
             connected_rx,
             driver_cancellation,
             driver,
+            graceful_shutdown,
             listen_addrs,
             local_peer_id,
             tx_tx,
@@ -250,6 +272,9 @@ impl PeerNetworkTrait for Libp2pNetwork {
 
 impl Drop for Libp2pNetwork {
     fn drop(&mut self) {
+        // Set before aborting/cancelling so the death reminder can distinguish this
+        // graceful teardown from the driver dying unexpectedly.
+        self.graceful_shutdown.store(true, Ordering::SeqCst);
         self.driver.abort();
         self.driver_cancellation.cancel();
     }
@@ -312,7 +337,11 @@ impl DriveTask {
                     self.pubkeys.insert(peer_id, ed25519_pubkey.to_bytes());
                     self.update_connected_watch();
                 }
-                for addr in info.listen_addrs {
+                for addr in info
+                    .listen_addrs
+                    .into_iter()
+                    .filter(|addr| !is_unspecified(addr))
+                {
                     self.swarm
                         .behaviour_mut()
                         .kademlia
@@ -363,19 +392,22 @@ impl DriveTask {
                 debug!("Rejecting gossiped tx from {source}: {reason}");
                 gossipsub::MessageAcceptance::Reject
             }
-            TxEvaluation::Ignore => gossipsub::MessageAcceptance::Ignore,
             TxEvaluation::Accept(tx) => {
                 let hash = tx.hash();
-                if !self.seen.insert(hash) {
-                    gossipsub::MessageAcceptance::Ignore
-                } else if self
-                    .mempool
-                    .try_push((TransactionOrigin::Gossip, tx))
-                    .is_err()
-                {
-                    debug!("Mempool full; dropping gossiped tx {hash:?}");
+                if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
+                    // Mark seen only on a successful push. A full local mempool
+                    // still forwards to peers (who may have room) without
+                    // admitting or marking seen, so a later re-gossip can be
+                    // admitted once we drain.
+                    if self
+                        .mempool
+                        .try_push((TransactionOrigin::Gossip, tx))
+                        .is_ok()
+                    {
+                        self.seen.insert(hash);
+                    }
                     gossipsub::MessageAcceptance::Accept
                 }
             }
@@ -401,6 +433,21 @@ impl DriveTask {
             debug!("Skipping local tx publish {hash:?}: {err}");
         }
     }
+}
+
+/// True if `addr` carries an unspecified (`0.0.0.0` / `::`) IP component.
+/// Peers behind a default `0.0.0.0` listen address advertise these; feeding
+/// them to Kademlia would pollute the routing table with unroutable entries.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "Protocol is non_exhaustive; only the IP variants matter here"
+)]
+fn is_unspecified(addr: &Multiaddr) -> bool {
+    addr.iter().any(|proto| match proto {
+        Protocol::Ip4(ip) => ip.is_unspecified(),
+        Protocol::Ip6(ip) => ip.is_unspecified(),
+        _ => false,
+    })
 }
 
 /// Derives the libp2p `PeerId` an Ed25519 public key produces. `None` only
@@ -464,10 +511,15 @@ async fn run_drive_task(mut task: DriveTask) {
     }
 }
 
-/// After the driver dies, remind operators the node is running L1-only.
-fn spawn_death_reminder(cancellation: CancellationToken) {
+/// After the driver dies unexpectedly, remind operators the node is running
+/// L1-only. Silent on graceful shutdown (`Libp2pNetwork` dropped), since that
+/// cancels the same token.
+fn spawn_death_reminder(cancellation: CancellationToken, graceful_shutdown: Arc<AtomicBool>) {
     tokio::spawn(async move {
         cancellation.cancelled().await;
+        if graceful_shutdown.load(Ordering::SeqCst) {
+            return;
+        }
         loop {
             error!(
                 "Sequencer gossip network is down; continuing L1-only. \
