@@ -69,6 +69,13 @@ pub struct CrossZoneConfig {
 pub struct CrossZoneMessage {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
+    /// The source block's recomputed hash, never the `header.hash` it declares.
+    ///
+    /// The signature does not cover that field, so a correctly signed block can
+    /// carry a bogus one. Both the watcher and the verifier hash the block's
+    /// contents themselves and fill this from that, so the two agree on it
+    /// without either trusting what the peer wrote.
+    pub src_block_hash: [u8; 32],
     pub src_tx_index: u32,
     pub src_program_id: ProgramId,
     pub target_program_id: ProgramId,

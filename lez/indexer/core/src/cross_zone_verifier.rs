@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::anyhow;
 use common::{block::Block, transaction::LeeTransaction};
-use cross_zone::{build_dispatch_from_emission, extract_emission};
+use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission};
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
@@ -455,11 +455,18 @@ impl CrossZoneVerifier {
             )));
         }
 
+        // Recomputed here rather than read from `msg`, which would make the
+        // field attest to itself. `accept_peer_block` already proved this equals
+        // the `header.hash` of every cached block, so it costs one hash and the
+        // fact stays local.
         Ok(build_dispatch_from_emission(
-            msg.src_zone,
-            msg.src_block_id,
-            msg.src_tx_index,
-            message.program_id,
+            &EmissionSource {
+                src_zone: msg.src_zone,
+                src_block_id: msg.src_block_id,
+                src_block_hash: peer_block.recompute_hash().0,
+                src_tx_index: msg.src_tx_index,
+                src_program_id: message.program_id,
+            },
             emission.target_program_id,
             &emission.target_accounts,
             emission.payload,
@@ -808,12 +815,29 @@ mod tests {
 
     /// The dispatch a watcher would inject for a `PEER_BLOCK_ID` emission of `payload`.
     fn dispatch(payload: &[u8]) -> LeeTransaction {
+        dispatch_naming_block_hash(payload, source_block_hash(payload))
+    }
+
+    /// The recomputed hash of the `PEER_BLOCK_ID` block carrying `payload`,
+    /// which is what an honest watcher puts in the dispatch.
+    fn source_block_hash(payload: &[u8]) -> [u8; 32] {
+        peer_chain(payload)
+            .last()
+            .expect("chain reaches PEER_BLOCK_ID")
+            .recompute_hash()
+            .0
+    }
+
+    fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         LeeTransaction::Public(build_dispatch_from_emission(
-            PEER_ZONE,
-            PEER_BLOCK_ID,
-            0,
-            programs::ping_sender().id(),
+            &EmissionSource {
+                src_zone: PEER_ZONE,
+                src_block_id: PEER_BLOCK_ID,
+                src_block_hash,
+                src_tx_index: 0,
+                src_program_id: programs::ping_sender().id(),
+            },
             receiver_id,
             &[ping_record_pda(receiver_id).into_value()],
             payload.to_vec(),
@@ -830,6 +854,26 @@ mod tests {
             .verify_block(&block)
             .await
             .expect("dispatch matching the peer emission verifies");
+    }
+
+    #[tokio::test]
+    async fn rejects_dispatch_naming_the_wrong_source_block_hash() {
+        let verifier = verifier();
+        cache_chain(&verifier, peer_chain(b"hi")).await;
+
+        // Everything else matches the peer's block, so only the claimed source
+        // hash is wrong. The verifier recomputes it from the block it resolved
+        // rather than reading the field, which is what makes this detectable at
+        // all; trusting the message would make the field attest to itself.
+        let block =
+            produce_dummy_block(9, None, vec![dispatch_naming_block_hash(b"hi", [0xab; 32])]);
+        assert!(
+            matches!(
+                verifier.verify_block(&block).await,
+                Err(CrossZoneVerifyError::Forged(_))
+            ),
+            "a delivery claiming a source block hash the peer block does not have is forged"
+        );
     }
 
     #[tokio::test]

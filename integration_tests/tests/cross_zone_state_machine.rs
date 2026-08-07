@@ -27,6 +27,9 @@ use ping_core::{ReceiverInstruction, ping_record_pda};
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
+/// The source block a delivery names. These tests drive the guest directly, so
+/// there is no peer block to hash and any fixed value does.
+const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
 
 /// State registering the cross-zone builtins these tests exercise.
 fn base_state() -> V03State {
@@ -129,6 +132,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         src_program_id: [9_u32; 8],
         target_program_id: receiver_id,
@@ -261,6 +265,7 @@ fn inbox_dispatch_mints_wrapped_token() {
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         src_program_id: [9_u32; 8],
         target_program_id: wrapped_token_id,
@@ -326,6 +331,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         // The emitter a user can drive directly, aimed at the bridge's target.
         src_program_id: programs::ping_sender().id(),
@@ -384,6 +390,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
         src_tx_index: 0,
         src_program_id: bridge_lock_id,
         target_program_id: wrapped_token_id,
@@ -462,6 +469,7 @@ fn mint_replay_rejected() {
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
         src_tx_index,
         src_program_id: [9_u32; 8],
         target_program_id: wrapped_token_id,

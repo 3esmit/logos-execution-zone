@@ -208,14 +208,27 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver().id();
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        PEER_ZONE,
-        src_block_id,
-        0,
-        programs::ping_sender().id(),
+        &cross_zone::EmissionSource {
+            src_zone: PEER_ZONE,
+            src_block_id,
+            src_block_hash: peer_block_hash(src_block_id),
+            src_tx_index: 0,
+            src_program_id: programs::ping_sender().id(),
+        },
         receiver_id,
         &[ping_record_pda(receiver_id).into_value()],
         payload,
     ))
+}
+
+/// A stand-in for the peer block's recomputed hash, distinct per block id.
+///
+/// These records are seeded straight into the store rather than read off a peer
+/// channel, so no real block exists to hash. Only its consistency matters.
+fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
+    let mut hash = [0_u8; 32];
+    hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
+    hash
 }
 
 /// The pending record the watcher would leave behind for that dispatch.
