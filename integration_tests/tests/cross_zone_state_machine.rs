@@ -97,12 +97,84 @@ fn seed_wrapped_config(state: &mut V03State) {
 /// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
 /// payload (risc0 words, little-endian bytes).
 fn mint_payload() -> Vec<u8> {
+    mint_payload_of(LOCK_AMOUNT)
+}
+
+fn mint_payload_of(amount: u128) -> Vec<u8> {
     let mint = wrapped_token_core::Instruction::Mint {
         recipient: RECIPIENT,
-        amount: LOCK_AMOUNT,
+        amount,
     };
     let words = risc0_zkvm::serde::to_vec(&mint).expect("serialize mint");
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// Runs a bridge mint of `amount` through the inbox, as the watcher would.
+fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+    let src_block_id = 5;
+
+    let mut state = base_state();
+    seed_inbox_config(
+        &mut state,
+        self_zone,
+        src_zone,
+        [9_u32; 8],
+        wrapped_token_id,
+    );
+    seed_wrapped_config(&mut state);
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: [9_u32; 8],
+        target_program_id: wrapped_token_id,
+        payload: mint_payload_of(amount),
+        l1_inclusion_witness: None,
+    };
+
+    let message = Message::try_new(
+        inbox_id,
+        vec![
+            inbox_config_account_id(inbox_id),
+            inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id),
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+        ],
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+}
+
+/// One message must not be able to pin a holding near `u128::MAX`, which would
+/// make every later honest mint to that recipient overflow and fail for good.
+#[test]
+fn a_mint_above_the_cap_is_rejected() {
+    assert!(
+        dispatch_mint(wrapped_token_core::MAX_MINT_AMOUNT + 1).is_err(),
+        "an amount over the per-mint cap must not execute"
+    );
+}
+
+#[test]
+fn a_mint_at_the_cap_is_accepted() {
+    let diff = dispatch_mint(wrapped_token_core::MAX_MINT_AMOUNT)
+        .expect("the cap itself is a legitimate amount");
+    let holding_id =
+        wrapped_token_core::holding_account_id(programs::wrapped_token().id(), &RECIPIENT);
+    let minted = wrapped_token_core::read_balance(
+        &diff.public_diff()[&holding_id].data.clone().into_inner(),
+    );
+    assert_eq!(minted, wrapped_token_core::MAX_MINT_AMOUNT);
 }
 
 /// Drives `cross_zone_inbox::Dispatch` directly through the state machine
@@ -245,54 +317,9 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 /// and asserts it chains into `wrapped_token::Mint`, crediting the recipient.
 #[test]
 fn inbox_dispatch_mints_wrapped_token() {
-    let inbox_id = programs::cross_zone_inbox().id();
-    let wrapped_token_id = programs::wrapped_token().id();
-
-    let self_zone = [1_u8; 32];
-    let src_zone = [2_u8; 32];
-    let src_block_id = 5;
-
-    let mut state = base_state();
-    seed_inbox_config(
-        &mut state,
-        self_zone,
-        src_zone,
-        [9_u32; 8],
-        wrapped_token_id,
-    );
-    seed_wrapped_config(&mut state);
-
-    let msg = CrossZoneMessage {
-        src_zone,
-        src_block_id,
-        src_block_hash: SRC_BLOCK_HASH,
-        src_tx_index: 0,
-        src_program_id: [9_u32; 8],
-        target_program_id: wrapped_token_id,
-        payload: mint_payload(),
-        l1_inclusion_witness: None,
-    };
-
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
-    let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
-    let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
-
-    let message = Message::try_new(
-        inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
-        vec![],
-        InboxInstruction::Dispatch(msg),
-    )
-    .expect("build dispatch message");
-    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
-
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("dispatch must validate and execute");
+    let diff = dispatch_mint(LOCK_AMOUNT).expect("dispatch must validate and execute");
+    let holding_id =
+        wrapped_token_core::holding_account_id(programs::wrapped_token().id(), &RECIPIENT);
     let minted = wrapped_token_core::read_balance(
         &diff.public_diff()[&holding_id].data.clone().into_inner(),
     );
