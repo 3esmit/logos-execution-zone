@@ -733,6 +733,11 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     );
     assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
 
+    // The same view the RPC serves, so an operator sees what the store holds.
+    let (total_retired, retained) = sequencer.cross_zone_dead_letters().unwrap();
+    assert_eq!(total_retired, 1);
+    assert_eq!(retained, dead_letters);
+
     // And nothing re-feeds it, so it stops costing a guest execution per block.
     let block_id = sequencer.produce_new_block().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();

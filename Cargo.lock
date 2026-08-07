@@ -9573,6 +9573,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 

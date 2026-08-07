@@ -12,8 +12,8 @@ use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -216,6 +216,32 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned> {
         let channel_id = self.sequencer.lock().await.block_publisher().channel_id();
         Ok(ChannelId(*channel_id.as_ref()))
+    }
+
+    async fn get_cross_zone_dead_letters(
+        &self,
+    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned> {
+        let (total_retired, records) = self
+            .sequencer
+            .lock()
+            .await
+            .cross_zone_dead_letters()
+            .map_err(|err| internal_error(&err))?;
+
+        Ok(CrossZoneDeadLetterReport {
+            total_retired,
+            retained: records
+                .into_iter()
+                .map(|record| CrossZoneDeadLetter {
+                    message_key: HashType(record.message_key),
+                    src_zone: ChannelId(record.origin.src_zone),
+                    src_block_id: record.origin.src_block_id,
+                    src_tx_index: record.origin.src_tx_index,
+                    failed_attempts: record.failed_attempts,
+                    transaction_bytes: record.transaction_bytes,
+                })
+                .collect(),
+        })
     }
 }
 

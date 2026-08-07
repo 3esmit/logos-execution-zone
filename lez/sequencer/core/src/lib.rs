@@ -32,6 +32,9 @@ use mempool::{MemPool, MemPoolHandle};
 pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 pub use storage::error::DbError;
+// Re-exported because `cross_zone_dead_letters` returns it and the service
+// crate does not depend on `storage`, so it could not otherwise name the type.
+pub use storage::sequencer::sequencer_cells::DeadLetterDispatchRecord;
 use storage::sequencer::{
     DispatchFailure, RocksDBIO, StoreUpdate,
     sequencer_cells::{
@@ -333,6 +336,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
+        record_dead_letter_gauge(&sequencer_core.store.dbio());
 
         (sequencer_core, mempool_handle)
     }
@@ -794,18 +798,22 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             (prev, height, chain.head_state().clone(), pending)
         };
 
-        if !settled.is_empty()
-            && let Err(err) = self
+        if !settled.is_empty() {
+            if let Err(err) = self
                 .store
                 .dbio()
                 .drop_settled_cross_zone_dispatches(&settled)
-        {
-            // Only bookkeeping: the deliveries themselves are irreversible, and
-            // the next turn tries again.
-            warn!(
-                "Failed to drop {} settled delivery record(s): {err:#}",
-                settled.len()
-            );
+            {
+                // Only bookkeeping: the deliveries themselves are irreversible,
+                // and the next turn tries again.
+                warn!(
+                    "Failed to drop {} settled delivery record(s): {err:#}",
+                    settled.len()
+                );
+            }
+            // A settled delivery may be one this node had given up on, which
+            // takes its dead letter with it.
+            record_dead_letter_gauge(&self.store.dbio());
         }
 
         let mut valid_transactions = Vec::new();
@@ -1096,15 +1104,19 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .dbio()
             .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES, origin)
         {
-            Ok(DispatchFailure::Retired(record)) => error!(
-                "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
-                hex::encode(key),
-                hex::encode(origin.src_zone),
-                origin.src_block_id,
-                origin.src_tx_index,
-                record.transaction_bytes,
-                record.failed_attempts
-            ),
+            Ok(DispatchFailure::Retired(record)) => {
+                sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
+                record_dead_letter_gauge(&self.store.dbio());
+                error!(
+                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
+                    hex::encode(key),
+                    hex::encode(origin.src_zone),
+                    origin.src_block_id,
+                    origin.src_tx_index,
+                    record.transaction_bytes,
+                    record.failed_attempts
+                );
+            }
             Ok(DispatchFailure::Retried { failed_attempts }) => warn!(
                 "Cross-zone delivery {} failed to execute ({failed_attempts} of {RETIRE_DISPATCH_AFTER_FAILURES} attempts), will retry next block",
                 hex::encode(key)
@@ -1120,6 +1132,19 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 hex::encode(key)
             ),
         }
+    }
+
+    /// The deliveries this node has given up on, with how many times it has done
+    /// so, which is the larger number once entries evict or reconcile away.
+    ///
+    /// Retained is read first so the pair can only skew towards a total that
+    /// leads its list, which is an ordinary evicted or settled state. The other
+    /// order would report entries against a total of zero.
+    pub fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>), DbError> {
+        let dbio = self.store.dbio();
+        let retained = dbio.get_dead_letter_cross_zone_dispatches()?;
+        let total = dbio.get_dead_letter_cross_zone_dispatch_count()?;
+        Ok((total, retained))
     }
 
     /// A weak reference to this sequencer's store, for a shutdown path that
@@ -1238,6 +1263,24 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
 /// relies on a valid successor or a restart. `ChainState` never emits
 /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
 /// follow-up.
+/// Publishes how many given-up-on deliveries are retained.
+///
+/// Read from the store rather than tracked in memory because the list falls as
+/// well as rises: it evicts at its cap, and an entry is dropped when its
+/// delivery turns out to settle on a block another sequencer produced. Called
+/// only where one of those can have happened, since it costs a read and a
+/// decode.
+fn record_dead_letter_gauge(dbio: &RocksDBIO) {
+    match dbio.get_dead_letter_cross_zone_dispatches() {
+        Ok(records) => {
+            sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
+        }
+        Err(err) => {
+            warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
+        }
+    }
+}
+
 fn apply_follow_update(
     dbio: &RocksDBIO,
     chain: &Mutex<ChainState>,
@@ -1416,6 +1459,10 @@ fn apply_follow_update(
     };
 
     sequencer_core_metrics::record_chain_height(head_height);
+    // This is the runtime path that reconciles: a delivery this node gave up on
+    // reaches a block another sequencer produced, and finalizing that block
+    // drops its dead letter.
+    record_dead_letter_gauge(dbio);
 
     if outcome.accepted_deposits > 0 {
         info!(

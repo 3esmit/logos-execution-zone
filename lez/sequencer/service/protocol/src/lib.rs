@@ -5,10 +5,37 @@ use std::{fmt::Display, str::FromStr};
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
 pub use lee::{Account, AccountId, ProgramId};
 pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
+use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
+
+/// A cross-zone delivery a sequencer gave up on after repeated execution
+/// failures.
+///
+/// Identifies the message rather than carrying it: the peer zone, block id and
+/// transaction index are what locate it on the peer's channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrossZoneDeadLetter {
+    pub message_key: HashType,
+    pub src_zone: ChannelId,
+    pub src_block_id: u64,
+    pub src_tx_index: u32,
+    pub failed_attempts: u32,
+    pub transaction_bytes: u32,
+}
+
+/// What a sequencer has given up delivering.
+///
+/// `total_retired` counts every give-up; `retained` holds the ones still kept.
+/// The two differ once entries evict at the cap, or once a delivery this node
+/// abandoned settles on a block another sequencer produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrossZoneDeadLetterReport {
+    pub total_retired: u64,
+    pub retained: Vec<CrossZoneDeadLetter>,
+}
 
 impl Display for ChannelId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
