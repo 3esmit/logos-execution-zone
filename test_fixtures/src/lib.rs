@@ -382,7 +382,7 @@ impl TestContext {
             .collect()
     }
 
-    /// Get default(1 zone) existing private account IDs in the wallet.
+    /// Get default (1 zone) existing private account IDs in the wallet.
     #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
@@ -607,7 +607,7 @@ impl ZoneTestContextBuilder {
         sequencer_keys.push(config::SEQUENCER_SIGNING_KEY);
 
         for i in 1..mn_config.num_nodes {
-            sequencer_keys.push(config::sequencer_signing_key_from_root(
+            sequencer_keys.push(config::sequencer_signing_key_from_seed(
                 u32::try_from(i).expect("Not being able to fit is realistically impossible"),
             ));
         }

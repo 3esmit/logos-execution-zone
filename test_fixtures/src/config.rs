@@ -81,8 +81,6 @@ impl std::fmt::Display for UrlProtocol {
 
 #[derive(Debug, Clone, Copy)]
 /// Config for test context in multi-node case.
-///
-/// For now have only one field: `num_nodes`.
 pub struct MultiNodeTestContextConfig {
     pub num_nodes: usize,
     pub bedrock_channel: ChannelId,
@@ -301,24 +299,23 @@ pub fn bedrock_channel_id_b() -> ChannelId {
 
 #[must_use]
 /// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
-pub fn sequencer_signing_key_from_root(root: u32) -> [u8; 32] {
-    root.to_le_bytes()
+pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
+    seed.to_le_bytes()
         .repeat(8)
         .try_into()
         .unwrap_or_else(|_| unreachable!())
 }
 
 #[must_use]
-#[expect(
-    clippy::big_endian_bytes,
-    reason = "Make channels and bedrock keys different bytewise"
-)]
-/// Generate bedrock channel id from `u32` number via repeating be bytes 8 times.
+/// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.
 ///
-/// It is be to guarantee difference from signing keys.
-pub fn bedrock_channel_id_from_root(root: u32) -> ChannelId {
-    let channel_id: [u8; 32] = root
-        .to_be_bytes()
+/// Counting from the end of `u32` to guarantee, that it is different from
+/// `sequencer_signing_key_from_seed`.
+pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
+    let channel_id: [u8; 32] =
+    // Useless in this case, but will make clippy happy
+    u32::MAX.saturating_sub(seed)
+        .to_le_bytes()
         .repeat(8)
         .try_into()
         .unwrap_or_else(|_| unreachable!());

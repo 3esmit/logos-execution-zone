@@ -8,7 +8,6 @@ use integration_tests::{TestContext, get_account, new_account, private_mention};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;
-use log::info;
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -33,7 +32,7 @@ async fn get_existing_account() -> Result<()> {
     assert!(account.data.is_empty());
     assert_eq!(account.nonce.0, 1);
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
@@ -60,7 +59,7 @@ async fn new_public_account_with_label() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Public(account_id)));
 
-    info!("Successfully created public account with label");
+    log::info!("Successfully created public account with label");
 
     Ok(())
 }
@@ -82,7 +81,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Private(account_id)));
 
-    info!("Successfully set label on existing private account");
+    log::info!("Successfully set label on existing private account");
 
     Ok(())
 }
@@ -103,7 +102,7 @@ async fn new_public_account_without_label() -> Result<()> {
         "No label should be stored when not provided"
     );
 
-    info!("Successfully created public account without label");
+    log::info!("Successfully created public account without label");
 
     Ok(())
 }

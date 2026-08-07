@@ -11,7 +11,6 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, create_token, get_account, new_account,
     public_mention, token_send_claiming_new_account,
 };
-use log::info;
 use tokio::test;
 use wallet::{
     account::Label,
@@ -75,7 +74,7 @@ async fn amm_public() -> Result<()> {
     token_send_claiming_new_account(&mut ctx, supply_account_id_2, recipient_account_id_2, 7)
         .await?;
 
-    info!("=================== SETUP FINISHED ===============");
+    log::info!("=================== SETUP FINISHED ===============");
 
     // Create new AMM
 
@@ -93,7 +92,7 @@ async fn amm_public() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let user_holding_a_acc = get_account(&ctx, recipient_account_id_1).await?;
@@ -117,7 +116,7 @@ async fn amm_public() -> Result<()> {
         3
     );
 
-    info!("=================== AMM DEFINITION FINISHED ===============");
+    log::info!("=================== AMM DEFINITION FINISHED ===============");
 
     // Make swap
 
@@ -130,7 +129,7 @@ async fn amm_public() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let user_holding_a_acc = get_account(&ctx, recipient_account_id_1).await?;
@@ -154,7 +153,7 @@ async fn amm_public() -> Result<()> {
         3
     );
 
-    info!("=================== FIRST SWAP FINISHED ===============");
+    log::info!("=================== FIRST SWAP FINISHED ===============");
 
     // Make swap
 
@@ -167,7 +166,7 @@ async fn amm_public() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let user_holding_a_acc = get_account(&ctx, recipient_account_id_1).await?;
@@ -191,7 +190,7 @@ async fn amm_public() -> Result<()> {
         3
     );
 
-    info!("=================== SECOND SWAP FINISHED ===============");
+    log::info!("=================== SECOND SWAP FINISHED ===============");
 
     // Add liquidity
 
@@ -205,7 +204,7 @@ async fn amm_public() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let user_holding_a_acc = get_account(&ctx, recipient_account_id_1).await?;
@@ -229,7 +228,7 @@ async fn amm_public() -> Result<()> {
         4
     );
 
-    info!("=================== ADD LIQ FINISHED ===============");
+    log::info!("=================== ADD LIQ FINISHED ===============");
 
     // Remove liquidity
 
@@ -243,7 +242,7 @@ async fn amm_public() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let user_holding_a_acc = get_account(&ctx, recipient_account_id_1).await?;
@@ -267,7 +266,7 @@ async fn amm_public() -> Result<()> {
         2
     );
 
-    info!("Success!");
+    log::info!("Success!");
 
     Ok(())
 }
@@ -380,7 +379,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         3
     );
 
-    info!("Successfully created AMM pool using account labels");
+    log::info!("Successfully created AMM pool using account labels");
 
     Ok(())
 }

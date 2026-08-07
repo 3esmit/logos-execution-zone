@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
-use log::{error, info};
+use log::error;
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
 use sequencer_core::SequencerCore;
@@ -219,7 +219,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let (sequencer_core, mempool_handle): (SequencerCore, _) =
         SequencerCore::start_from_config(config).await;
 
-    info!("Sequencer core set up");
+    log::info!("Sequencer core set up");
 
     let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
     // Taken while the core is still owned here: once it is behind the `Arc`
@@ -237,9 +237,9 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         max_block_size.as_u64(),
     )
     .await?;
-    info!("RPC server started");
+    log::info!("RPC server started");
 
-    info!("Starting main sequencer loop");
+    log::info!("Starting main sequencer loop");
     let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
 
     let _ = mempool_handle;
@@ -276,7 +276,7 @@ async fn run_server(
         .local_addr()
         .context("Failed to get local address of RPC server")?;
 
-    info!("Starting Sequencer Service RPC server on {addr}");
+    log::info!("Starting Sequencer Service RPC server on {addr}");
 
     let service = service::SequencerService::new(sequencer, mempool_handle, max_block_size);
     let handle = server.start(service.into_rpc());
@@ -294,9 +294,9 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
             continue;
         }
 
-        info!("Our turn: collecting transactions from mempool, creating block");
+        log::info!("Our turn: collecting transactions from mempool, creating block");
         let id = state.produce_new_block().await?;
         let author_identity = hex::encode(state.sequencer_config().signing_key);
-        info!("Block with id {id} created by {author_identity:?}");
+        log::info!("Block with id {id} created by {author_identity:?}");
     }
 }

@@ -12,7 +12,6 @@ use integration_tests::{
     public_mention, sync_private, token_send_claiming_new_account, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use log::info;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
 use wallet::{
@@ -48,7 +47,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account
@@ -125,7 +124,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account after burn
@@ -167,7 +166,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account after mint
@@ -195,7 +194,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         }
     );
 
-    info!("Successfully created and transferred public token");
+    log::info!("Successfully created and transferred public token");
 
     Ok(())
 }
@@ -225,7 +224,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account
@@ -262,7 +261,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment1 = ctx
@@ -287,7 +286,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the token definition account after burn
@@ -324,7 +323,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         }
     );
 
-    info!("Successfully created and transferred token with private supply");
+    log::info!("Successfully created and transferred token with private supply");
 
     Ok(())
 }
@@ -351,7 +350,7 @@ async fn create_token_with_private_definition() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify private definition commitment
@@ -394,7 +393,7 @@ async fn create_token_with_private_definition() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify definition account has updated supply
@@ -439,7 +438,7 @@ async fn create_token_with_private_definition() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify private recipient commitment
@@ -464,7 +463,9 @@ async fn create_token_with_private_definition() -> Result<()> {
         }
     );
 
-    info!("Successfully created token with private definition and minted to both account types");
+    log::info!(
+        "Successfully created token with private definition and minted to both account types"
+    );
 
     Ok(())
 }
@@ -491,7 +492,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify definition commitment
@@ -540,7 +541,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify both commitments updated
@@ -583,7 +584,9 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         }
     );
 
-    info!("Successfully created and transferred token with both private definition and supply");
+    log::info!(
+        "Successfully created and transferred token with both private definition and supply"
+    );
 
     Ok(())
 }
@@ -613,7 +616,7 @@ async fn shielded_token_transfer() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Perform shielded transfer: public supply -> private recipient
@@ -630,7 +633,7 @@ async fn shielded_token_transfer() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify supply account balance
@@ -665,7 +668,7 @@ async fn shielded_token_transfer() -> Result<()> {
         }
     );
 
-    info!("Successfully performed shielded token transfer");
+    log::info!("Successfully performed shielded token transfer");
 
     Ok(())
 }
@@ -695,7 +698,7 @@ async fn deshielded_token_transfer() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Perform deshielded transfer: private supply -> public recipient
@@ -712,7 +715,7 @@ async fn deshielded_token_transfer() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify supply account commitment exists
@@ -747,7 +750,7 @@ async fn deshielded_token_transfer() -> Result<()> {
         }
     );
 
-    info!("Successfully performed deshielded token transfer");
+    log::info!("Successfully performed deshielded token transfer");
 
     Ok(())
 }
@@ -774,7 +777,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create new private account for claiming path
@@ -805,7 +808,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync to claim the account
@@ -832,7 +835,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         }
     );
 
-    info!("Successfully minted tokens using claiming path");
+    log::info!("Successfully minted tokens using claiming path");
 
     Ok(())
 }
@@ -886,7 +889,7 @@ async fn create_token_using_labels() -> Result<()> {
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let definition_acc = get_account(&ctx, definition_account_id).await?;
@@ -912,7 +915,7 @@ async fn create_token_using_labels() -> Result<()> {
         }
     );
 
-    info!("Successfully created token using definition and supply account labels");
+    log::info!("Successfully created token using definition and supply account labels");
 
     Ok(())
 }
@@ -954,7 +957,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Confirm the label resolves to the account created for it.
@@ -990,7 +993,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         }
     );
 
-    info!("Successfully transferred token using from_label");
+    log::info!("Successfully transferred token using from_label");
 
     Ok(())
 }

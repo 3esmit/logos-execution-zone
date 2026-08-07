@@ -11,7 +11,6 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, new_account, private_mention,
     public_mention, sync_private, verify_commitment_is_in_state, wait_for_indexer_to_catch_up,
 };
-use log::info;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -99,10 +98,10 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    info!("Checking correct balance move");
+    log::info!("Checking correct balance move");
     let pinata_balance_post = account_balance(&ctx, system_accounts::pinata_account_id()).await?;
 
     let winner_balance_post = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
@@ -110,7 +109,7 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
     assert_eq!(winner_balance_post, 10000 + pinata_prize);
 
-    info!("Successfully claimed pinata to public account");
+    log::info!("Successfully claimed pinata to public account");
 
     Ok(())
 }
@@ -125,10 +124,10 @@ async fn claim_pinata_indexer_keeps_up() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;
 
     let winner_ind_state = indexer_service_rpc::RpcClient::get_account(
@@ -145,7 +144,7 @@ async fn claim_pinata_indexer_keeps_up() -> Result<()> {
 
     assert_eq!(winner_ind_state, winner_seq_state.into());
 
-    info!("Indexer correctly indexed the pinata claim");
+    log::info!("Indexer correctly indexed the pinata claim");
 
     Ok(())
 }
@@ -166,10 +165,10 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    info!("Syncing private accounts");
+    log::info!("Syncing private accounts");
     sync_private(&mut ctx).await?;
 
     let new_commitment = ctx
@@ -182,7 +181,7 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 
-    info!("Successfully claimed pinata to existing private account");
+    log::info!("Successfully claimed pinata to existing private account");
 
     Ok(())
 }
@@ -202,7 +201,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment = ctx
@@ -220,7 +219,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment = ctx
@@ -233,7 +232,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 
-    info!("Successfully claimed pinata to new private account");
+    log::info!("Successfully claimed pinata to new private account");
 
     Ok(())
 }

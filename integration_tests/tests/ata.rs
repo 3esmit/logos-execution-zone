@@ -12,7 +12,6 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, create_token, get_account, new_account,
     private_mention, public_mention, token_send, verify_commitment_is_in_state,
 };
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
@@ -47,7 +46,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
@@ -104,7 +103,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create the ATA a second time — must succeed (idempotent)
@@ -117,7 +116,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // State must be unchanged
@@ -196,7 +195,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Fund sender's ATA from the supply account (direct token transfer)
@@ -222,7 +221,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance decreased
@@ -259,7 +258,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance after burn
@@ -316,7 +315,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Derive expected ATA address and check on-chain state
@@ -402,7 +401,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Fund sender's ATA from the supply account (direct token transfer)
@@ -428,7 +427,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify sender ATA balance decreased
@@ -500,7 +499,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Fund holder's ATA from the supply account
@@ -525,7 +524,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify holder ATA balance after burn

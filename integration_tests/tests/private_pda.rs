@@ -26,7 +26,6 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::PdaSeed,
 };
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{AccountIdentity, WalletCore};
@@ -176,7 +175,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // ── Receive ──────────────────────────────────────────────────────────────────────────────────
 
-    info!("Sending to alice_pda_0 (identifier=0)");
+    log::info!("Sending to alice_pda_0 (identifier=0)");
     fund_private_pda(
         ctx.wallet_mut(),
         sender_0,
@@ -190,7 +189,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Sending to alice_pda_1 (identifier=1)");
+    log::info!("Sending to alice_pda_1 (identifier=1)");
     fund_private_pda(
         ctx.wallet_mut(),
         sender_1,
@@ -204,7 +203,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for block");
+    log::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
@@ -258,7 +257,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let amount_spend_0: u128 = 13;
     let amount_spend_1: u128 = 37;
 
-    info!("Alice spending from alice_pda_0");
+    log::info!("Alice spending from alice_pda_0");
     spend_private_pda(
         ctx.wallet_mut(),
         alice_pda_0_id,
@@ -271,7 +270,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Alice spending from alice_pda_1");
+    log::info!("Alice spending from alice_pda_1");
     spend_private_pda(
         ctx.wallet_mut(),
         alice_pda_1_id,
@@ -284,7 +283,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     )
     .await?;
 
-    info!("Waiting for block");
+    log::info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     sync_private(&mut ctx).await?;
@@ -321,6 +320,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         "alice_pda_1 post-spend commitment not in state"
     );
 
-    info!("Private PDA family member receive-and-spend test passed");
+    log::info!("Private PDA family member receive-and-spend test passed");
     Ok(())
 }
