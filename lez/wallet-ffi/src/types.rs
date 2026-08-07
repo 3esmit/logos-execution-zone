@@ -10,7 +10,7 @@ use std::{
 use lee::{Data, ProgramId, SharedSecretKey};
 use lee_core::{
     encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
-    NullifierPublicKey,
+    NullifierPublicKey, NullifierSecretKey,
 };
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
@@ -462,9 +462,13 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     ptr::null()
                 };
 
+                let nsk = NullifierSecretKey::from(&ask);
+
                 Self {
                     kind: FfiAccountIdentityKind::PrivateShared,
                     authorization_secret_key: ask.0.into(),
+                    nullifier_secret_key: nsk.into(),
+                    nullifier_public_key: NullifierPublicKey::from(&nsk).0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -490,6 +494,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
                     account_id: account_id.into(),
                     nullifier_secret_key: nsk.into(),
+                    nullifier_public_key: NullifierPublicKey::from(&nsk).0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -579,8 +584,16 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
+                let ask = AuthorizationSecretKey(value.authorization_secret_key.data);
+                let nsk = NullifierSecretKey::from(&ask);
+                if value.nullifier_secret_key.data != nsk
+                    || value.nullifier_public_key.data != NullifierPublicKey::from(&nsk).0
+                {
+                    return Err(WalletFfiError::InvalidKeyValue);
+                }
+
                 Ok(Self::PrivateShared {
-                    ask: AuthorizationSecretKey(value.authorization_secret_key.data),
+                    ask,
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -599,9 +612,14 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     Err(WalletFfiError::InvalidKeyValue)
                 }?;
 
+                let nsk = value.nullifier_secret_key.data;
+                if value.nullifier_public_key.data != NullifierPublicKey::from(&nsk).0 {
+                    return Err(WalletFfiError::InvalidKeyValue);
+                }
+
                 Ok(Self::PrivatePdaShared {
                     account_id: value.account_id.into(),
-                    nsk: value.nullifier_secret_key.data,
+                    nsk,
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -663,7 +681,7 @@ mod tests {
     };
     use wallet::AccountIdentity;
 
-    use crate::{FfiAccountIdentity, FfiAccountIdentityKind};
+    use crate::{error::WalletFfiError, FfiAccountIdentity, FfiAccountIdentityKind, FfiBytes32};
 
     #[test]
     fn account_identity_roundtrip() {
@@ -766,6 +784,10 @@ mod tests {
             FfiAccountIdentityKind::PrivatePdaShared
         );
 
+        assert_eq!(ffi_acc_identity_7.nullifier_secret_key.data, nsk);
+        assert_eq!(ffi_acc_identity_7.nullifier_public_key.data, npk.0);
+        assert_eq!(ffi_acc_identity_8.nullifier_public_key.data, npk.0);
+
         let acc_identity_res_1: AccountIdentity = (&ffi_acc_identity_1).try_into().unwrap();
         let acc_identity_res_2: AccountIdentity = (&ffi_acc_identity_2).try_into().unwrap();
         let acc_identity_res_2_5: AccountIdentity = (&ffi_acc_identity_2_5).try_into().unwrap();
@@ -785,5 +807,50 @@ mod tests {
         assert_eq!(acc_identity_res_6, acc_identity_6);
         assert_eq!(acc_identity_res_7, acc_identity_7);
         assert_eq!(acc_identity_res_8, acc_identity_8);
+    }
+
+    #[test]
+    fn inconsistent_derived_keys_are_rejected() {
+        let ask = AuthorizationSecretKey([43; 32]);
+        let nsk = NullifierSecretKey::from(&ask);
+        let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
+        let identifier = u128::from_le_bytes([45; 16]);
+
+        let shared = AccountIdentity::PrivateShared {
+            ask,
+            vpk: vpk.clone(),
+            identifier,
+        };
+        let pda_shared = AccountIdentity::PrivatePdaShared {
+            account_id: AccountId::new([46; 32]),
+            nsk,
+            vpk,
+            identifier,
+        };
+
+        let mut tampered_nsk: FfiAccountIdentity = shared.clone().into();
+        tampered_nsk.nullifier_secret_key.data[0] ^= 1;
+        let mut tampered_npk: FfiAccountIdentity = shared.clone().into();
+        tampered_npk.nullifier_public_key.data[0] ^= 1;
+        let mut zeroed: FfiAccountIdentity = shared.into();
+        zeroed.nullifier_secret_key = FfiBytes32::default();
+        zeroed.nullifier_public_key = FfiBytes32::default();
+        let mut tampered_pda_npk: FfiAccountIdentity = pda_shared.clone().into();
+        tampered_pda_npk.nullifier_public_key.data[0] ^= 1;
+        let mut zeroed_pda: FfiAccountIdentity = pda_shared.into();
+        zeroed_pda.nullifier_public_key = FfiBytes32::default();
+
+        for inconsistent in [
+            &tampered_nsk,
+            &tampered_npk,
+            &zeroed,
+            &tampered_pda_npk,
+            &zeroed_pda,
+        ] {
+            assert_eq!(
+                AccountIdentity::try_from(inconsistent).unwrap_err(),
+                WalletFfiError::InvalidKeyValue
+            );
+        }
     }
 }
