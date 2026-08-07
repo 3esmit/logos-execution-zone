@@ -327,8 +327,8 @@ impl DriveTask {
         let addrs: Vec<String> = self
             .swarm
             .listeners()
-            .filter(|addr| !is_unspecified(addr))
             .chain(self.swarm.external_addresses())
+            .filter(|addr| !is_unspecified(addr))
             .map(ToString::to_string)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()

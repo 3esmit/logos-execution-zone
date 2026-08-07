@@ -244,7 +244,12 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
             let secret: [u8; 32] = std::fs::read(&key_path)
                 .with_context(|| format!("Failed to read {}", key_path.display()))?
                 .try_into()
-                .map_err(|_bytes| anyhow!("Bedrock signing key has incorrect length"))?;
+                .map_err(|bytes: Vec<u8>| {
+                    anyhow!(
+                        "Bedrock signing key has incorrect length: expected 32 bytes, got {}",
+                        bytes.len()
+                    )
+                })?;
             let channel_id = *bedrock_config.channel_id.as_ref();
             let network = sequencer_core::gossip::Libp2pNetwork::start(
                 gossip_config,

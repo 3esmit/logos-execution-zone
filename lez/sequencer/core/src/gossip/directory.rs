@@ -54,6 +54,12 @@ impl PeerDirectory {
         self.entries.iter()
     }
 
+    /// The stored freshness seq for `public_key`, if an entry exists.
+    #[must_use]
+    pub fn seq_of(&self, public_key: &[u8; 32]) -> Option<u64> {
+        self.entries.get(public_key).map(|entry| entry.seq)
+    }
+
     #[must_use]
     pub fn pubkey_of(&self, peer_id: &PeerId) -> Option<[u8; 32]> {
         self.entries

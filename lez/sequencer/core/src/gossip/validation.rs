@@ -67,8 +67,8 @@ pub fn evaluate_announcement(
     };
 
     if directory
-        .iter()
-        .any(|(key, entry)| key == &announcement.public_key && entry.seq >= announcement.seq)
+        .seq_of(&announcement.public_key)
+        .is_some_and(|stored| stored >= announcement.seq)
     {
         return Evaluation::IgnoreStale;
     }
