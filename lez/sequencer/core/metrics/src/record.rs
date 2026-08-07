@@ -180,8 +180,8 @@ pub fn increment_cross_zone_dispatches_retired_total() {
     cross_zone_dispatches_retired_total_counter().increment(1);
 }
 
-/// Retained dead letters, which both evict at their cap and drop when a
-/// delivery turns out to settle, so this falls as well as rises.
+/// Retained dead letters. A gauge, not a counter: eviction and reconciliation
+/// make this fall as well as rise.
 pub fn record_cross_zone_dead_letter_dispatches(count: usize) {
     gauge!(
         description: "Given-up-on cross-zone deliveries currently retained for inspection",

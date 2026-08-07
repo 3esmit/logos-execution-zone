@@ -297,9 +297,8 @@ pub struct PendingCrossZoneDispatchRecord {
     /// validated by nobody in between, so one can fail for good. A failure can
     /// equally be a property of the moment, so a single one is not enough to
     /// give up on a delivery. Once too many accumulate the record leaves this
-    /// list, which the drain re-feeds every turn, and a
-    /// [`DeadLetterDispatchRecord`] is kept in its place so the delivery this
-    /// node stopped attempting is still identifiable.
+    /// list (the drain re-feeds it every turn) for a
+    /// [`DeadLetterDispatchRecord`], which keeps the delivery identifiable.
     pub failed_attempts: u32,
 }
 
@@ -361,29 +360,25 @@ pub struct DispatchOrigin {
 
 /// A cross-zone delivery this node has given up on.
 ///
-/// A dispatch that fails execution is left out of the block, so unlike every
-/// other failure in the pipeline this one leaves no on-chain trace that it was
-/// ever attempted. This record is what makes it observable rather than a log
-/// line that scrolls away.
+/// A dispatch that fails execution is left out of the block, so nothing on chain
+/// records that it was attempted; this is the only durable trace.
 ///
-/// It identifies the message rather than carrying it. The peer block and
-/// transaction index are enough to read the message back off the peer channel,
-/// and the encoded transaction is chosen by the peer zone and can exceed this
-/// node's whole block size limit, so retaining it would bound the list in
-/// entries while leaving it unbounded in bytes.
+/// It identifies the message rather than carrying it: the peer block and index
+/// are enough to read it back off the channel, and the encoded transaction is
+/// peer-chosen and can exceed a whole block, which would leave the list bounded
+/// in entries but unbounded in bytes.
 ///
-/// Giving up is this node's decision, not the network's: another sequencer may
-/// carry the same delivery successfully, and a record here is dropped again if
-/// that happens.
+/// Giving up is this node's decision, not the network's, so an entry is dropped
+/// again if another sequencer carries the same delivery.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct DeadLetterDispatchRecord {
     pub message_key: [u8; 32],
     pub origin: DispatchOrigin,
-    /// Attempts made before giving up, recording the policy that was in force
-    /// rather than distinguishing one retirement from another.
+    /// Attempts made before giving up, so the record carries the policy that was
+    /// in force at the time.
     pub failed_attempts: u32,
-    /// Size of the delivery transaction that would not execute, which is the
-    /// diagnostic for the one failure mode that is about size.
+    /// Size of the delivery transaction that would not execute, the diagnostic
+    /// for size-related failures.
     pub transaction_bytes: u32,
 }
 
@@ -422,10 +417,9 @@ impl SimpleWritableCell for DeadLetterCrossZoneDispatchesCellRef<'_> {
 
 /// Deliveries given up on since this store was created.
 ///
-/// Counted separately from the retained list because that list both evicts at
-/// its cap and drops entries whose delivery later settles, so its length is not
-/// how many times this node has given up. A node that gave up hundreds of times
-/// would otherwise look like one that gave up at the cap.
+/// Separate from the retained list, which evicts at its cap and drops settled
+/// entries: a node that gave up hundreds of times would otherwise look like one
+/// that gave up at the cap.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct DeadLetterCrossZoneDispatchCountCell(pub u64);
 

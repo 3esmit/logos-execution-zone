@@ -719,10 +719,7 @@ fn a_dead_letter_is_dropped_once_its_delivery_settles_elsewhere() {
         1
     );
 
-    // Every sequencer decides to give up alone, against its own head, so a
-    // delivery this node stopped attempting can still reach a block another one
-    // produced. Reporting it as abandoned for ever afterwards is the failure
-    // this guards against.
+    // A delivery this node gave up on can still reach another sequencer's block.
     dbio.drop_settled_cross_zone_dispatches(&[key]).unwrap();
     assert!(
         dbio.get_dead_letter_cross_zone_dispatches()
@@ -775,11 +772,8 @@ fn one_delivery_that_always_fails_takes_one_dead_letter_slot() {
     let temp_dir = tempdir().unwrap();
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
 
-    // A watcher rebuilding a peer tip re-reads that channel from the peer's
-    // genesis, and a delivery that never executes never reaches the inbox
-    // seen-set to be recognised as delivered, so the same one is recorded and
-    // retired again. Without dedupe it would fill the list with copies of itself
-    // and evict every other message that was given up on.
+    // A watcher rebuilding a peer tip re-reads from genesis, so the same
+    // never-executing delivery retires repeatedly (see `record_dispatch_failure`).
     let key = key_from_index(1);
     let other = key_from_index(2);
     dbio.add_pending_cross_zone_dispatches(vec![PendingCrossZoneDispatchRecord::recorded(

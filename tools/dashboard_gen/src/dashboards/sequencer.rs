@@ -195,9 +195,8 @@ pub fn dashboard() -> Dashboard {
         .row(
             7,
             [
-                // A dispatch that fails execution is left out of the block, so
-                // nothing on chain records that a delivery was abandoned. These
-                // are the only signal that it happened.
+                // A failed dispatch is left out of the block, so nothing on chain
+                // records it. These panels are the only signal.
                 Panel::stat("Cross-zone deliveries given up on since startup")
                     .width(6)
                     .unit(Unit::Short)

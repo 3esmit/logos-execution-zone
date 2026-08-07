@@ -1082,9 +1082,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// A delivery's payload and target accounts are chosen on the peer zone and
     /// validated by nobody in between, so one can fail for good; but a failure
     /// can equally be a property of the moment, so give up only after several.
-    /// Giving up moves the record to the dead letter, which is what keeps a peer
-    /// from growing the pending list with deliveries that can never execute
-    /// while still leaving the delivery somewhere an operator can find it.
+    /// Giving up moves the record to the dead letter: a peer cannot grow the
+    /// pending list with deliveries that never execute, and it stays findable.
     fn count_dispatch_failure(&self, tx: &LeeTransaction) {
         let Some(message) = extract_cross_zone_dispatch(tx) else {
             return;
@@ -1134,12 +1133,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
     }
 
-    /// The deliveries this node has given up on, with how many times it has done
-    /// so, which is the larger number once entries evict or reconcile away.
+    /// The deliveries this node has given up on, and how many times it has.
     ///
     /// Retained is read first so the pair can only skew towards a total that
-    /// leads its list, which is an ordinary evicted or settled state. The other
-    /// order would report entries against a total of zero.
+    /// leads its list, an ordinary evicted or settled state. The other order
+    /// would report entries against a total of zero.
     pub fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>), DbError> {
         let dbio = self.store.dbio();
         let retained = dbio.get_dead_letter_cross_zone_dispatches()?;
@@ -1230,16 +1228,14 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
 ///
-/// The inbox records each peer block's delivered transaction indices in that
-/// block's seen shard and no-ops a replay, so the shard is the same kind of
-/// answer the deposit receipt gives: state, not bookkeeping. An orphan reverts
-/// the entry with the block, so the next turn re-delivers with nothing of ours
-/// to unwind.
+/// The inbox records each peer block's delivered indices in that block's seen
+/// shard and no-ops a replay, so the shard is the same kind of answer the
+/// deposit receipt gives: state, not bookkeeping. An orphan reverts the entry
+/// with the block, so the next turn re-delivers with nothing to unwind.
 ///
 /// Both halves matter. A shard bound to a different peer block is not this
-/// delivery's replay record; it is what will make this delivery abort, and
-/// calling that delivered would drop the record instead of retrying it and
-/// dead-lettering it where an operator can see it.
+/// delivery's replay record, it is what will make it abort, and calling that
+/// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
         programs::cross_zone_inbox().id(),
@@ -1251,6 +1247,22 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
             seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
         })
     })
+}
+
+/// Publishes how many given-up-on deliveries are retained.
+///
+/// Read from the store because the list falls as well as rises (eviction, and
+/// reconciliation when a delivery settles elsewhere). Costs a read and a decode,
+/// so call it only where one of those can have happened.
+fn record_dead_letter_gauge(dbio: &RocksDBIO) {
+    match dbio.get_dead_letter_cross_zone_dispatches() {
+        Ok(records) => {
+            sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
+        }
+        Err(err) => {
+            warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
+        }
+    }
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:
@@ -1265,24 +1277,6 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
 /// relies on a valid successor or a restart. `ChainState` never emits
 /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
 /// follow-up.
-/// Publishes how many given-up-on deliveries are retained.
-///
-/// Read from the store rather than tracked in memory because the list falls as
-/// well as rises: it evicts at its cap, and an entry is dropped when its
-/// delivery turns out to settle on a block another sequencer produced. Called
-/// only where one of those can have happened, since it costs a read and a
-/// decode.
-fn record_dead_letter_gauge(dbio: &RocksDBIO) {
-    match dbio.get_dead_letter_cross_zone_dispatches() {
-        Ok(records) => {
-            sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
-        }
-        Err(err) => {
-            warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
-        }
-    }
-}
-
 fn apply_follow_update(
     dbio: &RocksDBIO,
     chain: &Mutex<ChainState>,
@@ -1461,9 +1455,8 @@ fn apply_follow_update(
     };
 
     sequencer_core_metrics::record_chain_height(head_height);
-    // This is the runtime path that reconciles: a delivery this node gave up on
-    // reaches a block another sequencer produced, and finalizing that block
-    // drops its dead letter.
+    // The runtime reconcile path: finalizing another sequencer's block drops the
+    // dead letter of a delivery this node gave up on.
     record_dead_letter_gauge(dbio);
 
     if outcome.accepted_deposits > 0 {

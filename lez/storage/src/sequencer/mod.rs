@@ -83,16 +83,13 @@ pub const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 
 /// How many given-up-on cross-zone deliveries are kept for inspection.
 ///
-/// Retaining them is the point, but a peer chooses how many deliveries fail, so
-/// this list cannot be unbounded any more than the pending one can. At the cap
-/// the oldest is dropped, which keeps the entries an operator reaching for this
-/// after an alert actually wants. Nothing is concealed by that: every
-/// retirement is counted separately and that count does not evict.
+/// A peer chooses how many deliveries fail, so this cannot be unbounded. The
+/// oldest evicts at the cap, and nothing is concealed by that: retirements are
+/// counted separately and the count does not evict.
 ///
-/// A count is a real bound here only because a record identifies a delivery
-/// instead of carrying it. Each is a fixed 84 bytes, so the whole list is 21 KB
-/// at the cap, bounded in bytes as well as in entries. That matters because it
-/// is one value rewritten under the lock that block production needs.
+/// An entry count bounds bytes only because a record identifies a delivery
+/// rather than carrying it. At a fixed 84 bytes each the list is 21 KB, which
+/// matters because it is one value rewritten under the block-production lock.
 pub const MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES: usize = 256;
 
 /// Key base for storing the LEE state.
@@ -107,10 +104,8 @@ pub const CF_LEE_STATE_NAME: &str = "cf_lee_state";
 
 /// What counting a failed production attempt did to a delivery's record.
 ///
-/// Three outcomes rather than a bool because the caller reports each
-/// differently and only one of them means this node stopped trying. A delivery
-/// that has already settled has no pending record, so it is [`Self::Absent`]
-/// rather than a give-up.
+/// Three outcomes rather than a bool: only one means this node stopped trying,
+/// and a settled delivery has no record, so it is [`Self::Absent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchFailure {
     /// Counted; the delivery is still pending and will be attempted again.
@@ -783,18 +778,14 @@ impl RocksDBIO {
     /// Counts a failed production attempt against a delivery, retiring it once
     /// it reaches `retire_at`.
     ///
-    /// Retiring moves the record out of the pending list and into the dead
-    /// letter. The pending list has to lose it, or the drain would re-feed a
-    /// transaction that never executes for ever; the dead letter is what keeps
-    /// the delivery identifiable, since a dispatch that fails execution is left
-    /// out of the block and so leaves no trace anywhere else. It is bounded on
-    /// its own terms, so a peer that can make deliveries fail still cannot grow
-    /// the store without limit.
+    /// The pending list has to lose the record, or the drain re-feeds a
+    /// transaction that never executes for ever. The dead letter keeps the
+    /// delivery identifiable, since a dispatch that fails execution is left out
+    /// of the block and leaves no trace elsewhere, and it is bounded separately.
     ///
-    /// A delivery with no pending record is reported as [`DispatchFailure::Absent`]
-    /// rather than as a retirement: there is nothing to count against, and the
-    /// two are different events. It is the ordinary shape of a delivery that
-    /// settled and then failed to execute on a later attempt.
+    /// No pending record gives [`DispatchFailure::Absent`], not a retirement:
+    /// the ordinary shape of a delivery that settled and then failed a later
+    /// attempt.
     pub fn record_dispatch_failure(
         &self,
         message_key: [u8; 32],
@@ -828,12 +819,10 @@ impl RocksDBIO {
             transaction_bytes: u32::try_from(retired.transaction.len()).unwrap_or(u32::MAX),
         };
 
-        // One entry per delivery, not per retirement. The same delivery can be
-        // recorded again after its record is gone, since a watcher rebuilding a
-        // peer tip re-reads that channel from the peer's genesis and a delivery
-        // that never executes never reaches the inbox seen-set to be recognised
-        // as delivered. Without this, one message that always fails would fill
-        // the list with copies of itself and evict every other one.
+        // One entry per delivery, not per retirement. A watcher rebuilding a
+        // peer tip re-reads from the peer's genesis, and a never-executing
+        // delivery never reaches the seen-set, so the same one retires again;
+        // undeduped it would evict every other entry with copies of itself.
         let mut dead_letters = self.get_dead_letter_cross_zone_dispatches()?;
         if !dead_letters
             .iter()
@@ -844,17 +833,15 @@ impl RocksDBIO {
                 dead_letters.remove(0);
             }
         }
-        // Counted per retirement even so: it measures how often this node gave
-        // up, which the retained list cannot, since that both evicts and drops
-        // entries whose delivery later settles.
+        // Counted per retirement even so: the retained list evicts and drops
+        // settled entries, so its length is not how often this node gave up.
         let count = self
             .get_dead_letter_cross_zone_dispatch_count()?
             .saturating_add(1);
 
-        // One batch: the record leaving the pending list and arriving in the
-        // dead letter is one event, and a crash between the two halves would
-        // either lose the message silently or leave the drain retrying a
-        // delivery already recorded as given up on.
+        // One batch: a crash between the two halves either loses the message
+        // silently or leaves the drain retrying a delivery already recorded as
+        // given up on.
         let mut batch = WriteBatch::default();
         self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
         self.put_batch(
@@ -907,10 +894,8 @@ impl RocksDBIO {
         records.retain(|record| !to_remove.contains(&record.message_key));
         let removed = before.saturating_sub(records.len());
 
-        // Both lists in one batch, for the same reason the retire path batches:
-        // a crash between them leaves the pending record gone and a dead letter
-        // behind saying the delivery was abandoned, and nothing recomputes these
-        // keys on a later pass to correct it.
+        // Both lists in one batch, as in `record_dispatch_failure`: nothing
+        // recomputes these keys on a later pass to fix a torn write.
         let mut batch = WriteBatch::default();
         if removed > 0 {
             self.put_pending_cross_zone_dispatches_batch(&records, &mut batch)?;
@@ -929,14 +914,12 @@ impl RocksDBIO {
 
     /// Stages the removal of dead letters whose delivery turned out to settle.
     ///
-    /// Giving up is this node's decision and every sequencer makes it alone,
-    /// against its own head and its own mempool ordering, so a delivery this one
-    /// stopped attempting can still reach a block another one produced. Left
-    /// alone, the entry would report that delivery as abandoned for as long as
-    /// the store lives, and nothing else removes one.
+    /// Every sequencer gives up alone, against its own head, so a delivery this
+    /// one abandoned can still reach another's block. Nothing else removes an
+    /// entry, so without this it reports as abandoned for the store's lifetime.
     ///
-    /// The count is deliberately not decremented. It records how often this node
-    /// gave up, which stays true whatever happened next.
+    /// The count is deliberately not decremented: it records how often this node
+    /// gave up, which stays true.
     fn stage_reconciled_dead_letters(
         &self,
         settled: &std::collections::HashSet<&[u8; 32]>,
@@ -983,9 +966,8 @@ impl RocksDBIO {
             self.put_pending_cross_zone_dispatches_batch(&records, batch)?;
         }
 
-        // A settled delivery this node had given up on is not one it abandoned,
-        // and this is the path that catches the ordinary case: another sequencer
-        // carries it into a block that then becomes irreversible.
+        // The ordinary case: another sequencer carried a delivery this node gave
+        // up on into a block that just became irreversible.
         self.stage_reconciled_dead_letters(&to_remove, batch)?;
         Ok(removed)
     }

@@ -221,10 +221,8 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     ))
 }
 
-/// A stand-in for the peer block's recomputed hash, distinct per block id.
-///
-/// These records are seeded straight into the store rather than read off a peer
-/// channel, so no real block exists to hash. Only its consistency matters.
+/// A stand-in for the peer block's recomputed hash, distinct per block id. These
+/// records are seeded into the store, so no real block exists to hash.
 fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
     let mut hash = [0_u8; 32];
     hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
@@ -720,10 +718,8 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         "giving up on a delivery must take its record out of the pending list"
     );
 
-    // A dispatch that fails execution is left out of the block, so the dead
-    // letter is the only place recording that this happened at all. The origin
-    // is the point of the record: it is what identifies which message stopped
-    // being attempted, and this is the only place that builds one.
+    // The dead letter is the only record that this happened, and the origin is
+    // what identifies which message stopped being attempted.
     let dbio = sequencer.store.dbio();
     let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
     assert_eq!(dead_letters.len(), 1);

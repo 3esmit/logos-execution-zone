@@ -44,10 +44,9 @@ fn main() {
         mint_amount, amount,
         "locked amount must equal the wrapped mint amount"
     );
-    // Refused here rather than on the destination, where the mint would fail
-    // after this side had already escrowed the balance. Nothing releases an
-    // escrow, so an amount the destination will not mint has to fail before the
-    // debit, in the submitter's own transaction where they can see it.
+    // Before the debit, not on the destination: nothing releases an escrow, so
+    // an amount the destination will not mint has to fail in the submitter's own
+    // transaction.
     assert!(
         amount <= MAX_MINT_AMOUNT,
         "locked amount exceeds what the wrapped token will mint"

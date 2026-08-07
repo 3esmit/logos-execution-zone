@@ -1183,9 +1183,8 @@ mod tests {
             panic!("the recorded transaction is an inbox dispatch");
         };
 
-        // The block this delivery came from, which is what the indexer
-        // recomputes independently when it re-derives the same transaction.
-        // Naming a different block is what makes the two disagree.
+        // The indexer recomputes this independently when it re-derives the same
+        // transaction; a different block here is what makes the two disagree.
         assert_eq!(
             msg.src_block_hash,
             chain_block(1).recompute_hash().0,

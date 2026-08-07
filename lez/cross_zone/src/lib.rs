@@ -33,12 +33,11 @@ pub struct Emission {
 
 /// Where a delivery came from on the peer chain.
 ///
-/// One struct so the watcher and the verifier fill the same field list. They
-/// must produce byte-identical dispatch transactions for the same emission, and
-/// a field one side sets differently is exactly how that breaks.
+/// One struct so the watcher and the verifier fill the same field list: their
+/// dispatch transactions for one emission must be byte-identical.
 ///
-/// `src_block_hash` is the block's recomputed hash on both sides, never the
-/// `header.hash` it declares, which its signature does not cover.
+/// `src_block_hash` is the recomputed hash on both sides, never the declared
+/// `header.hash`, which the signature does not cover.
 pub struct EmissionSource {
     pub src_zone: ZoneId,
     pub src_block_id: u64,

@@ -27,8 +27,7 @@ use ping_core::{ReceiverInstruction, ping_record_pda};
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
-/// The source block a delivery names. These tests drive the guest directly, so
-/// there is no peer block to hash and any fixed value does.
+/// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
 
 /// State registering the cross-zone builtins these tests exercise.
@@ -540,14 +539,11 @@ fn mint_replay_rejected() {
     }
 }
 
-/// A peer that publishes two different blocks claiming one block id gets at most
-/// one of them delivered from.
+/// A peer publishing two blocks at one block id gets at most one delivered from.
 ///
-/// The shard's address covers the zone and the block id but not which block
-/// claimed them, so both resolve to the same account. The first delivery binds
-/// it to its own source block and the second cannot execute against it. Failing
-/// is the point: were the second merely no-op'd as a replay, a peer could pick
-/// which of two messages at one coordinate the target program ever sees.
+/// Both resolve to the same shard account; the first binds it. Failing rather
+/// than no-opping is the point: a replay no-op would let a peer choose which of
+/// two messages at one coordinate the target program ever sees.
 #[test]
 fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let inbox_id = programs::cross_zone_inbox().id();
@@ -561,8 +557,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
 
-    // The shard as the first delivery left it: bound to SRC_BLOCK_HASH, holding
-    // that block's transaction 0.
+    // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(SRC_BLOCK_HASH, 0);
@@ -613,9 +608,8 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         "a delivery from a block the shard is not bound to must not execute"
     );
 
-    // The control, so the refusal above is the binding and not the shape of the
-    // transaction: the same second delivery, differing only in naming the block
-    // the shard is bound to, executes and is recorded alongside the first.
+    // Control: the same delivery naming the bound block executes, so the refusal
+    // above is the binding and not the transaction's shape.
     let control_words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
         payload: b"from-the-bound-block".to_vec(),
     })

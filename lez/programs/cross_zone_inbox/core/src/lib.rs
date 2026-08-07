@@ -9,11 +9,9 @@ use serde::{Deserialize, Serialize};
 
 const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00000/";
 const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
-/// Not `/00/`, which keyed a shard by `src_block_id / 10_000`: an epoch and a
-/// block id collide under one domain, so a shard carrying the older layout would
-/// land at a new address and decode as nonsense. Belt and braces, since the
-/// image id is what actually relocates every PDA here, and it moves with any
-/// change to this crate.
+/// `/01/` because `/00/` keyed shards by epoch: an epoch and a block id are
+/// indistinguishable under one domain. Belt and braces, since the image id
+/// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
@@ -126,18 +124,13 @@ impl InboxConfig {
 
 /// What one peer block has already delivered.
 ///
-/// One shard per peer block, holding transaction indices rather than message
-/// keys. The shard's own address binds `(src_zone, src_block_id)`, so hashing
-/// those into a 32-byte key and storing it back inside that account records
-/// nothing the address does not.
+/// Indices, not message keys: the shard's address already binds
+/// `(src_zone, src_block_id)`, so a key stored inside it adds nothing.
 ///
-/// Indices rather than keys are what make a per-block shard affordable, not
-/// free. A shard costs a new account plus a 36-byte header, so at one delivery
-/// per peer block it holds more state per message than one shard shared across
-/// ten thousand blocks did, and it breaks even around five. What it buys is that
-/// a shard cannot saturate: at 32 bytes per delivery, one peer block's own
-/// messages could overflow the account, and the guest's only way to say so is a
-/// panic that costs the message.
+/// A shard costs an account plus a 36-byte header and breaks even against a
+/// shared shard at about five deliveries. What that buys is saturation
+/// resistance: at 32 bytes per delivery one peer block could overflow the
+/// account, and the guest's only answer is a panic that costs the message.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SeenShard {
     /// Recomputed hash of the peer block this shard records deliveries from.
@@ -153,11 +146,10 @@ impl SeenShard {
     /// Borsh is 32 bytes of hash, a 4-byte count, then 4 bytes per index, so
     /// this is exactly the 100 KiB an account may carry.
     ///
-    /// What keeps it out of reach is the L1 inscription limit rather than
-    /// anything a peer configures: a whole block is inscribed as one op, capped
-    /// near 1.75 MiB, and a minimal emitting transaction is about 257 bytes, so
-    /// one peer block tops out around 7,100 deliveries. Raising that L1 cap past
-    /// roughly 6.3 MiB would put this back in reach.
+    /// Out of reach only because of the L1 inscription cap: a block inscribes as
+    /// one op near 1.75 MiB and a minimal emitting transaction is about 257
+    /// bytes, capping a peer block near 7,100 deliveries. Raising that L1 cap
+    /// past roughly 6.3 MiB puts this back in reach.
     pub const MAX_DELIVERIES: usize = 25_591;
 
     /// Decodes a shard from account data; empty data is an unclaimed shard.
@@ -175,10 +167,9 @@ impl SeenShard {
 
     /// Whether a delivery from the block with this hash may be recorded here.
     ///
-    /// An unclaimed shard binds to whoever claims it first. Unclaimed is the
-    /// whole value being default rather than the hash being all zero, so a shard
-    /// that has recorded anything can never read as unclaimed even if a hash
-    /// somehow were.
+    /// An unclaimed shard binds to its first claimant. Unclaimed is the whole
+    /// value being default, not the hash being zero, so a shard holding any
+    /// delivery can never read as unclaimed.
     #[must_use]
     pub fn binds(&self, src_block_hash: &[u8; 32]) -> bool {
         *self == Self::default() || self.src_block_hash == *src_block_hash
@@ -189,13 +180,11 @@ impl SeenShard {
         self.delivered.contains(&src_tx_index)
     }
 
-    /// Binds the shard if unclaimed and records the delivery; returns true if it
-    /// was newly recorded.
+    /// Binds the shard if unclaimed and records the delivery; true if new.
     ///
-    /// A hash the shard does not bind records nothing. The guest asserts
-    /// [`Self::binds`] before reaching this, so that refusal is a backstop
-    /// against a later caller rebinding a claimed shard and quietly erasing
-    /// which peer block delivered what.
+    /// A non-binding hash records nothing. The guest already asserts
+    /// [`Self::binds`], so this is a backstop against a future caller rebinding
+    /// a claimed shard and erasing which peer block delivered what.
     pub fn insert(&mut self, src_block_hash: [u8; 32], src_tx_index: u32) -> bool {
         if !self.binds(&src_block_hash) {
             return false;
@@ -280,8 +269,8 @@ pub fn inbox_seen_shard_account_id(
 
 /// Seed of the seen-shard PDA, exposed so the guest can claim the account.
 ///
-/// One shard per peer block, so what it can hold is bounded by that block, and a
-/// peer cannot accumulate deliveries into one account across many of them.
+/// One shard per peer block, so a peer cannot accumulate deliveries from many
+/// blocks into one account.
 #[must_use]
 pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};

@@ -10,20 +10,14 @@ use serde::{Deserialize, Serialize};
 
 /// The most one mint may credit.
 ///
-/// The amount is chosen on the peer zone and the balance is a `u128`, so without
-/// a bound a single delivery can push a holding to within a hair of the maximum.
-/// Every honest mint to that recipient then overflows, and an overflow is a guest
-/// panic, so each one fails execution and is eventually given up on. The holding
-/// is unusable for inbound transfers for good, at a cost to the attacker of one
-/// message.
+/// The peer zone chooses the amount and the balance is a `u128`, so unbounded
+/// one delivery pins a holding near the maximum, every later honest mint
+/// overflows into a guest panic, and the holding is bricked for inbound
+/// transfers at a cost of one message. The cap does not remove that ceiling, it
+/// makes reaching it cost 2^64 deliveries instead of one.
 ///
-/// A cap does not put the maximum out of reach, it makes reaching it cost 2^64
-/// deliveries rather than one.
-///
-/// `u64::MAX` is a bound the bridge imposes rather than one native balances
-/// already obey: `Balance` is a `u128` and the faucet is seeded at its maximum,
-/// so a larger amount is representable. `bridge_lock` refuses one at the source
-/// so it fails in the submitter's transaction rather than after escrowing.
+/// `u64::MAX` is the bridge's bound, not one native balances obey. `bridge_lock`
+/// refuses a larger amount at the source so it fails before escrowing.
 pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";

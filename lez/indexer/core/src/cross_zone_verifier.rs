@@ -63,14 +63,9 @@ pub enum CrossZoneVerifyError {
     },
 }
 
-/// What the verifier treats as one delivery for the purpose of skipping
-/// re-derivation.
-///
-/// The replay key and the source block it came from. The inbox no-ops a replay
-/// only when the shard it lands in is bound to that same block, so skipping on
-/// the key alone would wave through a dispatch the guest will refuse, and the
-/// block would then park and hold ingestion. Both sides have to agree on what a
-/// replay is.
+/// The replay key plus the source block, which is what the inbox treats as one
+/// delivery. Skipping re-derivation on the key alone would wave through a
+/// dispatch the guest refuses, parking the block and holding ingestion.
 type SeenKey = (MessageKey, [u8; 32]);
 
 /// One peer zone's cached blocks, plus how far this reader has read them as an
@@ -462,10 +457,8 @@ impl CrossZoneVerifier {
             )));
         }
 
-        // Recomputed here rather than read from `msg`, which would make the
-        // field attest to itself. `accept_peer_block` already proved this equals
-        // the `header.hash` of every cached block, so it costs one hash and the
-        // fact stays local.
+        // Recomputed rather than read from `msg`, which would make the field
+        // attest to itself.
         Ok(build_dispatch_from_emission(
             &EmissionSource {
                 src_zone: msg.src_zone,
@@ -542,6 +535,13 @@ struct PeerPass {
     stalled_at: Option<Slot>,
 }
 
+fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
+    (
+        message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index),
+        msg.src_block_hash,
+    )
+}
+
 /// Whether a block read off a peer's channel may enter the cache. The channel
 /// authorizes who may write, not what they may claim.
 ///
@@ -550,14 +550,6 @@ struct PeerPass {
 /// without recomputing it a peer can assert links it never built. The key check
 /// applies only when one is pinned, mirroring the watcher; it subsumes the hash
 /// check, but a peer with no pinned key still gets that one.
-/// The delivery `msg` identifies, for the seen set.
-fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
-    (
-        message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index),
-        msg.src_block_hash,
-    )
-}
-
 fn accept_peer_block(
     block: &Block,
     peer_zone: ZoneId,
@@ -876,10 +868,8 @@ mod tests {
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;
 
-        // Everything else matches the peer's block, so only the claimed source
-        // hash is wrong. The verifier recomputes it from the block it resolved
-        // rather than reading the field, which is what makes this detectable at
-        // all; trusting the message would make the field attest to itself.
+        // Only the claimed source hash is wrong. Detectable because the verifier
+        // recomputes it from the resolved block instead of reading the field.
         let block =
             produce_dummy_block(9, None, vec![dispatch_naming_block_hash(b"hi", [0xab; 32])]);
         assert!(
@@ -980,11 +970,9 @@ mod tests {
         let keys = verifier.verify_block(&first).await.expect("first verifies");
         verifier.record_seen(keys).await;
 
-        // Same zone, block id and transaction index as the delivery just seen,
-        // but naming a different source block. The inbox refuses this rather
-        // than no-opping it, since the shard is bound to the other block, so
-        // skipping re-derivation here would wave through a dispatch that then
-        // parks the block and holds ingestion.
+        // Same coordinates as the delivery just seen, different source block.
+        // The inbox refuses rather than no-ops it, so skipping re-derivation
+        // would wave through a dispatch that parks the block.
         let other = produce_dummy_block(
             10,
             None,

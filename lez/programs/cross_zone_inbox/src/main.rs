@@ -97,15 +97,12 @@ fn dispatch(
     let mut shard =
         SeenShard::from_bytes(&seen.account.data.clone().into_inner()).expect("seen shard decodes");
 
-    // One block id, one delivering block. The shard's address binds the zone and
-    // the block id but not which block claimed them, so an equivocating peer's
-    // two blocks at one id resolve to this same account. The first to deliver
-    // binds it to its own hash and the second aborts here, rather than the two
-    // sharing a replay set while being different blocks.
+    // One block id, one delivering block. The address binds the zone and block
+    // id but not which block claimed them, so an equivocating peer's two blocks
+    // at one id land here; the first binds the shard and the second aborts.
     //
-    // Before the replay check, not after. A mismatched hash has to fail the
-    // transaction; reaching the replay branch first would turn a delivery from
-    // the wrong block into a silent no-op, which is what the indexer's own
+    // Before the replay check, not after: reaching the replay branch first would
+    // turn a wrong-block delivery into a silent no-op, which the indexer's
     // already-seen short circuit would then wave through.
     assert!(
         shard.binds(&msg.src_block_hash),

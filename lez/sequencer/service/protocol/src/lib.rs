@@ -11,11 +11,10 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]
 pub struct ChannelId(pub [u8; 32]);
 
-/// A cross-zone delivery a sequencer gave up on after repeated execution
-/// failures.
+/// A cross-zone delivery a sequencer gave up on after repeated failures.
 ///
-/// Identifies the message rather than carrying it: the peer zone, block id and
-/// transaction index are what locate it on the peer's channel.
+/// Identifies the message rather than carrying it: zone, block id and tx index
+/// locate it on the peer's channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrossZoneDeadLetter {
     pub message_key: HashType,
@@ -28,9 +27,8 @@ pub struct CrossZoneDeadLetter {
 
 /// What a sequencer has given up delivering.
 ///
-/// `total_retired` counts every give-up; `retained` holds the ones still kept.
-/// The two differ once entries evict at the cap, or once a delivery this node
-/// abandoned settles on a block another sequencer produced.
+/// `total_retired` counts every give-up, `retained` only the ones still kept;
+/// they diverge on eviction and on reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CrossZoneDeadLetterReport {
     pub total_retired: u64,
