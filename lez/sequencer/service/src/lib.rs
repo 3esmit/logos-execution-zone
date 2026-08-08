@@ -248,7 +248,8 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         Some(gossip_config) => {
             // The node's L1 bedrock signing key is deliberately reused as the
             // libp2p identity; `GossipNetwork::start` derives the keypair.
-            let signing_key = load_or_create_signing_key(&sequencer_home)?;
+            let signing_key =
+                load_or_create_signing_key(&sequencer_home.join("bedrock_signing_key"))?;
             let channel_id = *bedrock_config.channel_id.as_ref();
             let network = sequencer_core::gossip::GossipNetwork::start(
                 gossip_config,
