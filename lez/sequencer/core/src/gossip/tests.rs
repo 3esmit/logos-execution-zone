@@ -1,5 +1,3 @@
-//! Multi-node integration tests over real QUIC on 127.0.0.1.
-
 use std::time::{Duration, Instant};
 
 use common::transaction::LeeTransaction;

@@ -1,9 +1,3 @@
-//! The libp2p swarm and its drive task.
-//!
-//! The drive task owns the [`Swarm`]; [`Libp2pNetwork`] is the handle. A
-//! drive-task failure after startup is log-and-continue: the node keeps
-//! running L1-only (see the gossip spec).
-
 use std::{
     collections::{HashMap, HashSet},
     sync::{
@@ -25,7 +19,6 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
-use log::{debug, error, info, warn};
 use mempool::MemPoolHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -61,8 +54,7 @@ pub trait PeerNetworkTrait {
     fn connected_peers(&self) -> Vec<[u8; 32]>;
 
     /// Cancelled when the drive task terminates. Unlike the publisher's
-    /// token, observers must NOT halt the node on it — gossip is an
-    /// optimization.
+    /// token, observers must NOT halt the node on it.
     fn driver_cancellation(&self) -> CancellationToken;
 }
 
@@ -88,7 +80,7 @@ pub struct TxPublisher(mpsc::Sender<LeeTransaction>);
 impl TxPublisher {
     pub fn publish(&self, tx: LeeTransaction) {
         if let Err(err) = self.0.try_send(tx) {
-            debug!("Dropping local tx publish: outbound gossip channel full or closed: {err}");
+            log::debug!("Dropping local tx publish: outbound gossip channel full or closed: {err}");
         }
     }
 }
@@ -123,6 +115,7 @@ impl Libp2pNetwork {
             })
             .collect::<Result<_>>()?;
 
+        // TODO: use a helper for this
         let topic = gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)));
 
         let message_id_fn = |msg: &gossipsub::Message| {
@@ -151,6 +144,7 @@ impl Libp2pNetwork {
             .max_transmit_size(max_transmit_size)
             .build()
             .map_err(|err| anyhow!("Failed to build gossipsub config: {err}"))?;
+
         let gossipsub_behaviour = gossipsub::Behaviour::new(
             gossipsub::MessageAuthenticity::Signed(keypair.clone()),
             gossipsub_config,
@@ -182,6 +176,7 @@ impl Libp2pNetwork {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
+        //
         swarm
             .behaviour_mut()
             .gossipsub
@@ -194,7 +189,7 @@ impl Libp2pNetwork {
 
         // Fail fast on bind errors: wait for the first listen address.
         let listen_addrs = wait_for_listen_addr(&mut swarm).await?;
-        info!("Gossip listening on {listen_addrs:?} as {local_peer_id}");
+        log::info!("Gossip listening on {listen_addrs:?} as {local_peer_id}");
 
         // Seed Kademlia with bootstrap peers that carry an embedded peer id;
         // dial the rest directly, since Kademlia can't route to an address
@@ -212,11 +207,11 @@ impl Libp2pNetwork {
                 continue;
             }
             if let Err(err) = swarm.dial(addr.clone()) {
-                warn!("Failed to dial gossip bootstrap peer {addr}: {err}");
+                log::warn!("Failed to dial gossip bootstrap peer {addr}: {err}");
             }
         }
         if let Err(err) = swarm.behaviour_mut().kademlia.bootstrap() {
-            debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
+            log::debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
         }
 
         let (connected_tx, connected_rx) = watch::channel(Vec::new());
@@ -358,7 +353,7 @@ impl DriveTask {
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 for (peer_id, addr) in peers {
                     if let Err(err) = self.swarm.dial(addr) {
-                        debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
+                        log::debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
                     }
                 }
             }
@@ -395,7 +390,7 @@ impl DriveTask {
 
         let acceptance = match evaluate_transaction(data, self.max_block_size) {
             TxEvaluation::Reject(reason) => {
-                debug!("Rejecting gossiped tx from {source}: {reason}");
+                log::debug!("Rejecting gossiped tx from {source}: {reason}");
                 gossipsub::MessageAcceptance::Reject
             }
             TxEvaluation::Accept(tx) => {
@@ -403,22 +398,22 @@ impl DriveTask {
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
-                    // Mark seen only on a successful push. A full local mempool
-                    // still forwards to peers (who may have room) without
-                    // admitting or marking seen, so a later re-gossip can be
-                    // admitted once we drain.
                     match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
                         Ok(()) => {
+                            // mark seen only on succesful pushes, so that if mempool is full we can later
+                            // receive the same tx from gossip and try pushing it again
                             self.seen.insert(hash);
                         }
                         Err(_) => {
-                            debug!("Gossip mempool full; forwarding tx {hash:?} without admitting");
+                            log::debug!("Mempool full; forwarding tx {hash:?} without admitting");
                         }
                     }
+
                     gossipsub::MessageAcceptance::Accept
                 }
             }
         };
+
         _ = self
             .swarm
             .behaviour_mut()
@@ -437,7 +432,7 @@ impl DriveTask {
             .gossipsub
             .publish(self.topic.clone(), bytes)
         {
-            debug!("Skipping local tx publish {hash:?}: {err}");
+            log::debug!("Skipping local tx publish {hash:?}: {err}");
         }
     }
 }
@@ -457,8 +452,7 @@ fn is_unspecified(addr: &Multiaddr) -> bool {
     })
 }
 
-/// Derives the libp2p `PeerId` an Ed25519 public key produces. `None` only
-/// for byte strings that are not a valid curve point.
+/// Derives the libp2p `PeerId` an Ed25519 public key produces.
 #[cfg_attr(
     not(test),
     expect(
@@ -466,9 +460,10 @@ fn is_unspecified(addr: &Multiaddr) -> bool {
         reason = "unused by the mesh until a later gossip task; exercised by the identity test below"
     )
 )]
-pub(crate) fn peer_id_from_ed25519(pubkey: &[u8; 32]) -> Option<PeerId> {
+pub(crate) fn peer_id_from_ed25519(
+    pubkey: &[u8; 32],
+) -> Result<PeerId, libp2p::identity::DecodingError> {
     libp2p::identity::ed25519::PublicKey::try_from_bytes(pubkey)
-        .ok()
         .map(|key| libp2p::identity::PublicKey::from(key).to_peer_id())
 }
 
@@ -488,15 +483,15 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
             event = swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => return Ok(vec![address]),
                 SwarmEvent::ListenerError { error, .. } => {
-                    return Err(anyhow!("Gossip listener error during startup: {error}"));
+                    anyhow::bail!("Gossip listener error during startup: {error}");
                 }
                 SwarmEvent::ListenerClosed { reason, .. } => {
-                    return Err(anyhow!("Gossip listener closed during startup: {reason:?}"));
+                    anyhow::bail!("Gossip listener closed during startup: {reason:?}");
                 }
                 _ => {}
             },
             () = &mut deadline => {
-                return Err(anyhow!("Timed out waiting for gossip listen address"));
+                anyhow::bail!("Timed out waiting for gossip listen address");
             }
         }
     }
@@ -528,7 +523,7 @@ fn spawn_death_reminder(cancellation: CancellationToken, graceful_shutdown: Arc<
             return;
         }
         loop {
-            error!(
+            log::error!(
                 "Sequencer gossip network is down; continuing L1-only. \
                  Restart the node to restore p2p."
             );

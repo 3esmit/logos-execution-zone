@@ -1,14 +1,13 @@
-//! Bounded, FIFO-eviction membership cache over transaction hashes.
-//!
-//! The mempool is a plain channel with no dedup, so the gossip layer tracks
-//! recently seen transactions here to avoid re-admitting duplicates that
-//! arrive from multiple peers or echo back after a local publish. Counters
-//! are exposed for a future metrics surface.
-
+use common::HashType;
 use std::collections::{HashSet, VecDeque};
 
-use common::HashType;
-
+/// Bounded, FIFO-eviction membership cache over transaction hashes.
+///
+/// The mempool is a plain channel with no dedup, so the gossip layer tracks
+/// recently seen transactions here to avoid re-admitting duplicates that
+/// arrive from multiple peers or echo back after a local publish.
+///
+/// TODO: Counters are exposed for a future metrics surface.
 pub struct SeenCache {
     capacity: usize,
     order: VecDeque<HashType>,

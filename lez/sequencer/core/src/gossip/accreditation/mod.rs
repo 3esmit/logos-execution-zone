@@ -18,8 +18,9 @@ use logos_blockchain_zone_sdk::{
 use crate::config::BedrockConfig;
 
 pub trait AccreditedKeysProvider: Send + 'static {
-    /// The channel's current accredited Ed25519 keys. An empty set is valid
-    /// (channel does not exist yet); errors keep the caller's last set.
+    /// The channel's current accredited Ed25519 keys.
+    ///
+    /// An empty set is valid, meaning that the channel does not exist yet.
     fn accredited_keys(&self) -> impl Future<Output = Result<HashSet<[u8; 32]>>> + Send;
 }
 
@@ -51,6 +52,7 @@ impl AccreditedKeysProvider for NodeKeysProvider {
             .channel_state(self.channel_id)
             .await
             .context("Failed to read channel state for accredited keys")?;
+
         Ok(state
             .map(|state| {
                 state
