@@ -139,7 +139,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// initializing its state with the accounts defined in the configuration file.
     fn open_or_create_store(
         config: &SequencerConfig,
-        bootstrap_sequencer_key: sequencer_stake_core::SequencerKey,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     ) -> (SequencerStore, lee::V03State) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
         let db_path = config.db_path();
@@ -201,7 +201,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         config: &SequencerConfig,
         store: &SequencerStore,
         stored_head_state: &lee::V03State,
-        bootstrap_sequencer_key: sequencer_stake_core::SequencerKey,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     ) -> ChainState {
         let final_snapshot = store
             .dbio()
@@ -252,7 +252,21 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hex::encode(bedrock_signing_key.public_key().to_bytes())
         );
 
-        let bootstrap_sequencer_key = bedrock_signing_key.public_key().to_bytes();
+        let own_sequencer_key = bedrock_signing_key.public_key().to_bytes();
+
+        // Only seed our own key into genesis as the bootstrap sequencer if the
+        // channel doesn't exist yet. Otherwise it's someone else's channel and
+        // we join later, the normal self-join way.
+        let channel_already_exists = BP::channel_exists(&config.bedrock_config)
+            .await
+            .expect("Failed to probe Bedrock channel");
+        if channel_already_exists {
+            info!("Channel already exists; joining as a non channel creator");
+        } else {
+            info!("Channel does not exist yet; starting it as channel creator");
+        }
+        let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
+
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
 
         let chain = Arc::new(Mutex::new(Self::restore_chain_state(
@@ -370,7 +384,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             block_publisher,
             watchers,
             last_committee_submission_at: None,
-            own_sequencer_key: bootstrap_sequencer_key,
+            own_sequencer_key,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
@@ -1625,17 +1639,13 @@ fn apply_follow_update(
     }
 }
 
-/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings
-/// and the bootstrap sequencer's own stake, the only accounts seeded outside any
-/// transaction. Cross-zone config is seeded by genesis `InitConfig` transactions
-/// and reconstructed by replaying them.
-///
-/// The bootstrap sequencer must already hold stake at genesis: it's the one
-/// publishing the channel's first blocks, so it must already be an accredited
-/// key before the self-join mechanism can ever run to add anyone else.
+/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock
+/// holdings, and the bootstrap sequencer's own stake if `bootstrap_sequencer_key`
+/// is set (this node is starting a new channel). `None` means the channel
+/// already exists and this node will self-join later instead.
 fn build_initial_state(
     config: &SequencerConfig,
-    bootstrap_sequencer_key: sequencer_stake_core::SequencerKey,
+    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
@@ -1648,21 +1658,29 @@ fn build_initial_state(
     // InitConfig transactions in `build_genesis_state`, not here.
     let holdings = bridge_lock_holdings(&config.genesis)
         .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
-    let bootstrap_stake = std::iter::once((
-        config.sequencer_stake_account_id,
-        system_accounts::sequencer_stake_bootstrap_account(bootstrap_sequencer_key),
-    ));
     // Replaces the base state's (entries-empty) config account with one that
     // also carries the bootstrap sequencer's own entry — `with_public_accounts`
     // overwrites on a matching account id.
-    let bootstrap_config = std::iter::once((
-        system_accounts::sequencer_stake_config_account_id(),
-        system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::from([(
-            bootstrap_sequencer_key,
-            system_accounts::sequencer_stake_bootstrap_entry(config.sequencer_stake_account_id),
-        )])),
-    ));
-    base.with_public_accounts(holdings.chain(bootstrap_stake).chain(bootstrap_config))
+    let bootstrap_accounts = bootstrap_sequencer_key.into_iter().flat_map(|key| {
+        [
+            (
+                config.sequencer_stake_account_id,
+                system_accounts::sequencer_stake_bootstrap_account(key),
+            ),
+            (
+                system_accounts::sequencer_stake_config_account_id(),
+                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::from(
+                    [(
+                        key,
+                        system_accounts::sequencer_stake_bootstrap_entry(
+                            config.sequencer_stake_account_id,
+                        ),
+                    )],
+                )),
+            ),
+        ]
+    });
+    base.with_public_accounts(holdings.chain(bootstrap_accounts))
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1671,7 +1689,7 @@ fn build_initial_state(
 /// observers can replay them.
 fn build_genesis_state(
     config: &SequencerConfig,
-    bootstrap_sequencer_key: sequencer_stake_core::SequencerKey,
+    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config, bootstrap_sequencer_key);
 

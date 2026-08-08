@@ -52,6 +52,11 @@ impl MockBlockPublisher {
 }
 
 impl BlockPublisherTrait for MockBlockPublisher {
+    // Tests assume this node is always the one bootstrapping the channel.
+    async fn channel_exists(_config: &BedrockConfig) -> Result<bool> {
+        Ok(false)
+    }
+
     async fn new(
         config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,

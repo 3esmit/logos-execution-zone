@@ -126,6 +126,10 @@ pub trait BlockPublisherTrait: Sized + Sync {
         on_follow: OnFollowSink,
     ) -> Result<Self>;
 
+    /// Whether the channel already exists, checked before anything else is
+    /// set up (no instance, no store, no genesis yet).
+    async fn channel_exists(config: &BedrockConfig) -> Result<bool>;
+
     /// Publish a block and return what zone-sdk made of it. Zone-sdk drives the
     /// actual submission and retries internally.
     ///
@@ -198,6 +202,18 @@ pub struct ZoneSdkPublisher {
 }
 
 impl BlockPublisherTrait for ZoneSdkPublisher {
+    async fn channel_exists(config: &BedrockConfig) -> Result<bool> {
+        let node = NodeHttpClient::new(
+            CommonHttpClient::new(config.auth.clone().map(Into::into)),
+            config.node_url.clone(),
+        );
+        Ok(node
+            .channel_state(config.channel_id)
+            .await
+            .context("Failed to read channel state")?
+            .is_some())
+    }
+
     async fn new(
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,

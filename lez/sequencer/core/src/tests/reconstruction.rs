@@ -20,7 +20,7 @@ use crate::{
 /// Fresh `(store, chain)` pair for a reconstruction target, as
 /// `start_from_config` would build them before the publisher starts.
 fn fresh_store_and_chain(config: &SequencerConfig) -> (SequencerStore, Mutex<ChainState>) {
-    let bootstrap_sequencer_key = test_bootstrap_sequencer_key(config);
+    let bootstrap_sequencer_key = Some(test_bootstrap_sequencer_key(config));
     let (store, state) =
         SequencerCore::<MockBlockPublisher>::open_or_create_store(config, bootstrap_sequencer_key);
     let chain = Mutex::new(SequencerCore::<MockBlockPublisher>::restore_chain_state(

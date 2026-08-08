@@ -138,11 +138,13 @@ const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
 
-/// Extra fee added to every funded Bedrock transaction, in case gas prices go
-/// up before it gets mined. A stuck transaction keeps retrying with the same
-/// fee, so if prices rise past this, it never gets mined. 10k still covers a
-/// normal price jump on a block transaction; the sdk's default of 200 is too
-/// low for large transactions and can leave them stuck.
+/// Extra fee added to every funded Bedrock transaction.
+///
+/// Covers a possible rise in gas prices before it gets mined — a stuck
+/// transaction keeps retrying with the same fee, so if prices rise past this
+/// it never gets mined. 10k still covers a normal price jump on a block
+/// transaction; the sdk's default of 200 is too low for large transactions
+/// and can leave them stuck.
 #[must_use]
 pub const fn default_priority_fee() -> u64 {
     10_000

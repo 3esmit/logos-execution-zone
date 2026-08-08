@@ -315,7 +315,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-    let (genesis_state, genesis_txs) = build_genesis_state(&config, bootstrap_sequencer_key);
+    let (genesis_state, genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
     let genesis_hashable_data = HashableBlockData {
         block_id: 1,
         transactions: genesis_txs,
@@ -3366,7 +3366,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let state = build_initial_state(&config, bootstrap_sequencer_key);
+    let state = build_initial_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_account = state.get_account_by_id(config.sequencer_stake_account_id);
     assert_eq!(
@@ -3397,7 +3397,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let mut state = build_initial_state(&config, bootstrap_sequencer_key);
+    let mut state = build_initial_state(&config, Some(bootstrap_sequencer_key));
 
     let stake_id = config.sequencer_stake_account_id;
     let destination = AccountId::from(&PublicKey::new_from_private_key(
