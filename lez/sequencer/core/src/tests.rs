@@ -8,20 +8,21 @@ use common::{
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation},
 };
+#[cfg(not(feature = "testnet"))]
 use key_protocol::key_management::KeyChain;
 use lee::{
-    Account, AccountId, Data, PrivacyPreservingTransaction, PrivateKey, PublicKey,
-    PublicTransaction, V03State,
+    Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
+};
+#[cfg(not(feature = "testnet"))]
+use lee::{
+    PrivacyPreservingTransaction,
     error::LeeError,
     execute_and_prove,
     privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
-    program::Program,
 };
-use lee_core::{
-    Commitment, InputAccountIdentity, Nullifier,
-    account::{AccountWithMetadata, Nonce},
-    program::PdaSeed,
-};
+#[cfg(not(feature = "testnet"))]
+use lee_core::{Commitment, InputAccountIdentity, Nullifier, account::AccountWithMetadata};
+use lee_core::{account::Nonce, program::PdaSeed};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use mempool::MemPoolHandle;
 use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
@@ -120,7 +121,7 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_id != programs::bridge().id() {
+    if public_tx.message.program_id != crate::network_programs::bridge().id() {
         return false;
     }
 
@@ -679,7 +680,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::clock().id(),
+            crate::network_programs::clock().id(),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -737,7 +738,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // clock program with the clock accounts. The sequencer should detect that the resulting
     // state diff modifies clock accounts and drop the transaction.
     let clock_chain_caller_id = test_programs::clock_chain_caller().id();
-    let clock_program_id = programs::clock().id();
+    let clock_program_id = crate::network_programs::clock().id();
     let timestamp: u64 = 0;
 
     let message = lee::public_transaction::Message::try_new(
@@ -800,6 +801,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[test]
 fn private_bridge_withdraw_invocation_is_dropped() {
     let sender_keys = KeyChain::new_os_random();
@@ -892,7 +894,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
 /// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
 /// `CLOCK_01` account observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
-    let mut state = V03State::new().with_programs([programs::clock(), program]);
+    let mut state = V03State::new().with_programs([crate::network_programs::clock(), program]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
     }
@@ -935,7 +937,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: crate::network_programs::authenticated_transfer().id(),
             ..Account::default()
         },
     );
@@ -984,7 +986,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: crate::network_programs::authenticated_transfer().id(),
             ..Account::default()
         },
     );
@@ -1069,7 +1071,7 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: crate::network_programs::authenticated_transfer().id(),
             ..Account::default()
         },
     );
@@ -1116,7 +1118,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: crate::network_programs::authenticated_transfer().id(),
             ..Account::default()
         },
     );
@@ -1148,7 +1150,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
 #[test]
 fn pda_mechanism_with_pinata_token_program() {
     let pinata_token = programs::pinata_token();
-    let token = programs::token();
+    let token = crate::network_programs::token();
 
     let pinata_definition_id = AccountId::new([1; 32]);
     let pinata_token_definition_id = AccountId::new([2; 32]);

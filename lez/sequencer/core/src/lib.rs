@@ -18,6 +18,10 @@ use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
 pub use storage::error::DbError;
 use storage::sequencer::{
     RocksDBIO,
@@ -696,8 +700,8 @@ fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
     balance: u128,
 ) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
+    let faucet_program_id = network_programs::faucet().id();
+    let vault_program_id = network_programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
@@ -717,7 +721,7 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
+    let faucet_program_id = network_programs::faucet().id();
     let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
@@ -746,8 +750,8 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::decode(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = programs::bridge().id();
-    let vault_program_id = programs::vault().id();
+    let bridge_program_id = network_programs::bridge().id();
+    let vault_program_id = network_programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
 
@@ -778,7 +782,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_id != network_programs::bridge().id() {
         return None;
     }
 
@@ -801,7 +805,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_id != network_programs::bridge().id() {
         return None;
     }
 

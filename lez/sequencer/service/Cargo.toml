@@ -11,7 +11,7 @@ workspace = true
 common.workspace = true
 lee.workspace = true
 mempool.workspace = true
-sequencer_core = { workspace = true, features = ["testnet"] }
+sequencer_core.workspace = true
 sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }
 programs.workspace = true
@@ -29,6 +29,7 @@ borsh.workspace = true
 sha2.workspace = true
 
 [features]
+testnet = ["programs/testnet", "sequencer_core/testnet"]
 default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
