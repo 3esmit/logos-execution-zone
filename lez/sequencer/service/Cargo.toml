@@ -44,10 +44,10 @@ standalone = ["sequencer_core/mock"]
 mdns = ["sequencer_core/mdns"]
 # Needed only by the submit_stake bin.
 submit_stake = [
-    "dep:lee",
-    "dep:programs",
-    "dep:system_accounts",
-    "dep:wallet",
-    "dep:sequencer_stake_core",
-    "dep:authenticated_transfer_core",
+  "dep:lee",
+  "dep:programs",
+  "dep:system_accounts",
+  "dep:wallet",
+  "dep:sequencer_stake_core",
+  "dep:authenticated_transfer_core",
 ]

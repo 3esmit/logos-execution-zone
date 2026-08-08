@@ -77,6 +77,15 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 
+/// Fixed, public key behind a genesis-only funding account: the faucet can
+/// only be called top-level, not as `Stake`'s mover, so this account is a
+/// pass-through that receives faucet funds and then moves them into the real
+/// stake account. Not a secret: every node derives the same account, and it
+/// holds nothing once genesis has run.
+// TODO: replace the faucet pass-through with a real deposit from Bedrock,
+// once that path exists, instead of a fixed genesis-only key.
+const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
+
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
 pub enum TransactionOrigin {
@@ -118,7 +127,6 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     /// When the last committee-config submission went out, or `None` if none
     /// has. See [`Self::COMMITTEE_SUBMISSION_COOLDOWN`].
     last_committee_submission_at: Option<Instant>,
-    own_sequencer_key: sequencer_stake_core::SequencerKey,
 }
 
 impl<BP: BlockPublisherTrait> SequencerCore<BP> {
@@ -268,7 +276,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
 
-        let chain = Arc::new(Mutex::new(Self::restore_chain_state(&config, &store, &state)));
+        let chain = Arc::new(Mutex::new(Self::restore_chain_state(
+            &config, &store, &state,
+        )));
 
         let initial_checkpoint = store
             .get_zone_checkpoint()
@@ -378,7 +388,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             block_publisher,
             watchers,
             last_committee_submission_at: None,
-            own_sequencer_key,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
@@ -687,7 +696,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &mut self,
         committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
     ) {
-        let Some(mut new_keys) = committee_update else {
+        let Some(new_keys) = committee_update else {
             return;
         };
         if self
@@ -695,15 +704,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .is_some_and(|at| at.elapsed() < Self::COMMITTEE_SUBMISSION_COOLDOWN)
         {
             return;
-        }
-        // HOTFIX: zone-sdk signs every ChannelConfigOp with channel_key_index 0
-        // while Bedrock verifies against accredited_keys[0], so our own key has
-        // to lead or the next config op is rejected as InvalidSignature.
-        if let Some(index) = new_keys
-            .iter()
-            .position(|key| *key == self.own_sequencer_key)
-        {
-            new_keys[..=index].rotate_right(1);
         }
         let new_keys = new_keys
             .into_iter()
@@ -1724,15 +1724,6 @@ fn build_genesis_state(
 
     (state, genesis_txs)
 }
-
-/// Fixed, public key behind a genesis-only funding account: the faucet can
-/// only be called top-level, not as `Stake`'s mover, so this account is a
-/// pass-through that receives faucet funds and then moves them into the real
-/// stake account. Not a secret: every node derives the same account, and it
-/// holds nothing once genesis has run.
-// TODO: replace the faucet pass-through with a real deposit from Bedrock,
-// once that path exists, instead of a fixed genesis-only key.
-const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 
 /// The bootstrap sequencer's own `Stake`, funded via the faucet and signed
 /// with `stake_signing_key` so a later top-up/unstake use the same account.

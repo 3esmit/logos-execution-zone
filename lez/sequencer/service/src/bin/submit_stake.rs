@@ -113,10 +113,12 @@ async fn main() -> Result<()> {
             amount,
             destination,
         } => {
-            let instruction_data = Program::serialize_instruction(
-                sequencer_stake_core::Instruction::UnstakeRequest { amount, destination },
-            )
-            .context("Failed to serialize UnstakeRequest instruction")?;
+            let instruction_data =
+                Program::serialize_instruction(sequencer_stake_core::Instruction::UnstakeRequest {
+                    amount,
+                    destination,
+                })
+                .context("Failed to serialize UnstakeRequest instruction")?;
 
             wallet
                 .send_pub_tx(

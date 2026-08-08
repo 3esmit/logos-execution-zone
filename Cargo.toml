@@ -200,14 +200,14 @@ schemars = "1.2"
 async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "aa85e4bc451f984d379c4cce523caacda30c7873" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
@@ -395,4 +395,3 @@ clippy.cargo-common-metadata = "allow"
 # Reason: hard to address right now and mostly comes from dependencies
 # so the fix would be just a long list of exceptions.
 clippy.multiple-crate-versions = "allow"
-

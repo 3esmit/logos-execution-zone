@@ -2929,10 +2929,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
                     ..Account::default()
                 },
             ),
-            (
-                config_id,
-                system_accounts::sequencer_stake_config_account(),
-            ),
+            (config_id, system_accounts::sequencer_stake_config_account()),
         ]);
 
     assert_eq!(
