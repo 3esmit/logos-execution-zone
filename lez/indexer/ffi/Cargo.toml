@@ -6,7 +6,7 @@ version = "0.4.0-alpha.5"
 
 [dependencies]
 lee.workspace = true
-indexer_core = { workspace = true, features = ["testnet"] }
+indexer_core.workspace = true
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 
 env_logger.workspace = true
@@ -24,6 +24,9 @@ name = "indexer_ffi"
 
 [lints]
 workspace = true
+
+[features]
+testnet = ["indexer_core/testnet"]
 
 [package.metadata.cargo-machete]
 ignored = [
