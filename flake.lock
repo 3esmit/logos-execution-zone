@@ -952,14 +952,15 @@
       "locked": {
         "lastModified": 1781742244,
         "narHash": "sha256-Vd9UevKBn0Mie5tvexaaYOSkiqDlC4G3qTFKD28S1gk=",
-        "owner": "logos-co",
+        "owner": "3esmit",
         "repo": "logos-liblogos",
         "rev": "dbcafea05c06e91be18763bc0c4b307222d8b853",
         "type": "github"
       },
       "original": {
-        "owner": "logos-co",
+        "owner": "3esmit",
         "repo": "logos-liblogos",
+        "rev": "dbcafea05c06e91be18763bc0c4b307222d8b853",
         "type": "github"
       }
     },
