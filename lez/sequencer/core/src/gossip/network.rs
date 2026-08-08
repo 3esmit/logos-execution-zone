@@ -1,9 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
     time::Duration,
 };
 
@@ -27,8 +23,8 @@ use crate::{TransactionOrigin, config::GossipConfig, gossip::seen_cache::SeenCac
 
 /// How long to wait for the first listen address before failing startup.
 const LISTEN_TIMEOUT: Duration = Duration::from_secs(5);
-/// Cadence of the post-death reminder that the node is running L1-only.
-const DEATH_REMINDER_INTERVAL: Duration = Duration::from_secs(300);
+/// How often the watchdog warns that the driver is down and the node is L1-only.
+const DRIVER_OUTAGE_WARN_INTERVAL: Duration = Duration::from_secs(300);
 /// Recently-seen gossiped transaction hashes kept for dedup.
 const SEEN_CACHE_CAPACITY: usize = 4096;
 /// Outbound local-publish channel depth; `try_send` drops on overflow.
@@ -53,19 +49,15 @@ pub trait PeerNetworkTrait {
     /// Ed25519 public keys of currently connected peers.
     fn connected_peers(&self) -> Vec<[u8; 32]>;
 
-    /// Cancelled when the drive task terminates. Unlike the publisher's
-    /// token, observers must NOT halt the node on it.
-    fn driver_cancellation(&self) -> CancellationToken;
+    /// Cancelled when a graceful shutdown is requested (the handle is dropped).
+    /// Unlike the publisher's token, observers must NOT halt the node on it.
+    fn shutdown_token(&self) -> CancellationToken;
 }
 
-/// Handle to the running gossip network. Dropping it aborts the drive task.
+/// Handle to the running gossip network. Dropping it stops the drive task.
 pub struct Libp2pNetwork {
     connected_rx: watch::Receiver<Vec<[u8; 32]>>,
-    driver_cancellation: CancellationToken,
-    driver: tokio::task::JoinHandle<()>,
-    /// Set before `driver_cancellation.cancel()` on graceful `Drop`, so the
-    /// death reminder can tell an intentional teardown from a driver crash.
-    graceful_shutdown: Arc<AtomicBool>,
+    shutdown: CancellationToken,
     listen_addrs: Vec<Multiaddr>,
     local_peer_id: PeerId,
     tx_tx: mpsc::Sender<LeeTransaction>,
@@ -215,7 +207,7 @@ impl Libp2pNetwork {
         }
 
         let (connected_tx, connected_rx) = watch::channel(Vec::new());
-        let driver_cancellation = CancellationToken::new();
+        let shutdown = CancellationToken::new();
         let (tx_tx, tx_rx) = mpsc::channel::<LeeTransaction>(TX_PUBLISH_CHANNEL_CAPACITY);
 
         let driver = tokio::spawn(run_drive_task(DriveTask {
@@ -223,21 +215,18 @@ impl Libp2pNetwork {
             connected: HashSet::new(),
             pubkeys: HashMap::new(),
             connected_tx,
-            cancellation: driver_cancellation.clone(),
+            shutdown: shutdown.clone(),
             topic,
             mempool: mempool_handle,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             tx_rx,
         }));
-        let graceful_shutdown = Arc::new(AtomicBool::new(false));
-        spawn_death_reminder(driver_cancellation.clone(), Arc::clone(&graceful_shutdown));
+        spawn_driver_watchdog(driver, shutdown.clone());
 
         Ok(Self {
             connected_rx,
-            driver_cancellation,
-            driver,
-            graceful_shutdown,
+            shutdown,
             listen_addrs,
             local_peer_id,
             tx_tx,
@@ -266,18 +255,16 @@ impl PeerNetworkTrait for Libp2pNetwork {
         self.connected_rx.borrow().clone()
     }
 
-    fn driver_cancellation(&self) -> CancellationToken {
-        self.driver_cancellation.clone()
+    fn shutdown_token(&self) -> CancellationToken {
+        self.shutdown.clone()
     }
 }
 
 impl Drop for Libp2pNetwork {
     fn drop(&mut self) {
-        // Set before aborting/cancelling so the death reminder can distinguish this
-        // graceful teardown from the driver dying unexpectedly.
-        self.graceful_shutdown.store(true, Ordering::SeqCst);
-        self.driver.abort();
-        self.driver_cancellation.cancel();
+        // The drive task breaks its loop on this; the death reminder reads it to
+        // tell a graceful teardown from the driver dying unexpectedly.
+        self.shutdown.cancel();
     }
 }
 
@@ -288,7 +275,7 @@ struct DriveTask {
     /// Ed25519 public keys of peers seen via Identify, keyed by `PeerId`.
     pubkeys: HashMap<PeerId, [u8; 32]>,
     connected_tx: watch::Sender<Vec<[u8; 32]>>,
-    cancellation: CancellationToken,
+    shutdown: CancellationToken,
     topic: gossipsub::IdentTopic,
     mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     seen: SeenCache,
@@ -400,8 +387,9 @@ impl DriveTask {
                 } else {
                     match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
                         Ok(()) => {
-                            // mark seen only on succesful pushes, so that if mempool is full we can later
-                            // receive the same tx from gossip and try pushing it again
+                            // mark seen only on succesful pushes, so that if mempool is full we can
+                            // later receive the same tx from gossip and
+                            // try pushing it again
                             self.seen.insert(hash);
                         }
                         Err(_) => {
@@ -502,24 +490,27 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
     reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
 )]
 async fn run_drive_task(mut task: DriveTask) {
-    // Cancelled on return or panic, so observers learn the driver is gone.
-    let _guard = task.cancellation.clone().drop_guard();
-
     loop {
         tokio::select! {
+            () = task.shutdown.cancelled() => break,
             event = task.swarm.select_next_some() => task.on_swarm_event(event),
             Some(tx) = task.tx_rx.recv() => task.publish_transaction(&tx),
         }
     }
 }
 
-/// After the driver dies unexpectedly, remind operators the node is running
-/// L1-only. Silent on graceful shutdown (`Libp2pNetwork` dropped), since that
-/// cancels the same token.
-fn spawn_death_reminder(cancellation: CancellationToken, graceful_shutdown: Arc<AtomicBool>) {
+/// Owns the driver handle so it can detect the task ending. A graceful shutdown
+/// cancels `shutdown` first, so that path stays silent; a crash leaves it
+/// uncancelled, and operators are warned the node is running L1-only until the
+/// handle is dropped.
+#[expect(
+    clippy::integer_division_remainder_used,
+    reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+)]
+fn spawn_driver_watchdog(driver: tokio::task::JoinHandle<()>, shutdown: CancellationToken) {
     tokio::spawn(async move {
-        cancellation.cancelled().await;
-        if graceful_shutdown.load(Ordering::SeqCst) {
+        _ = driver.await;
+        if shutdown.is_cancelled() {
             return;
         }
         loop {
@@ -527,7 +518,10 @@ fn spawn_death_reminder(cancellation: CancellationToken, graceful_shutdown: Arc<
                 "Sequencer gossip network is down; continuing L1-only. \
                  Restart the node to restore p2p."
             );
-            tokio::time::sleep(DEATH_REMINDER_INTERVAL).await;
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                () = tokio::time::sleep(DRIVER_OUTAGE_WARN_INTERVAL) => {}
+            }
         }
     });
 }
@@ -633,7 +627,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let token = network.driver_cancellation();
+        let token = network.shutdown_token();
         drop(network);
         tokio::time::timeout(std::time::Duration::from_secs(5), token.cancelled())
             .await

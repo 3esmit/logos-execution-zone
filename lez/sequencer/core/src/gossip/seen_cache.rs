@@ -1,5 +1,6 @@
-use common::HashType;
 use std::collections::{HashSet, VecDeque};
+
+use common::HashType;
 
 /// Bounded, FIFO-eviction membership cache over transaction hashes.
 ///
