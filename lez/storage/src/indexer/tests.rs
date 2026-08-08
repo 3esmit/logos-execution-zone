@@ -1,13 +1,12 @@
 use common::test_utils::produce_dummy_block;
 use lee::{Account, AccountId, PublicKey};
-use tempfile::tempdir;
-
-use super::*;
-
 #[cfg(not(feature = "testnet"))]
 use programs as network_programs;
 #[cfg(feature = "testnet")]
 use programs::testnet as network_programs;
+use tempfile::tempdir;
+
+use super::*;
 
 fn genesis_block() -> Block {
     produce_dummy_block(1, None, vec![])

@@ -1,15 +1,14 @@
 use lee::AccountId;
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
 
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
     transaction::{LeeTransaction, clock_invocation},
 };
-
-#[cfg(not(feature = "testnet"))]
-use programs as network_programs;
-#[cfg(feature = "testnet")]
-use programs::testnet as network_programs;
 
 // Helpers
 
