@@ -44,17 +44,6 @@ struct GossipBehaviour {
     mdns: mdns::tokio::Behaviour,
 }
 
-/// The seam `SequencerCore` and tests see. Later phases extend it with
-/// publish operations and inbound sinks.
-pub trait PeerNetworkTrait {
-    /// Ed25519 public keys of currently connected peers.
-    fn connected_peers(&self) -> Vec<[u8; 32]>;
-
-    /// Cancelled when a graceful shutdown is requested (the handle is dropped).
-    /// Unlike the publisher's token, observers must NOT halt the node on it.
-    fn shutdown_token(&self) -> CancellationToken;
-}
-
 /// Handle to the running gossip network. Dropping it stops the drive task.
 pub struct GossipNetwork {
     connected_rx: watch::Receiver<Vec<[u8; 32]>>,
@@ -68,9 +57,9 @@ pub struct GossipNetwork {
 /// `publish` is non-blocking: a full channel drops the transaction rather
 /// than back-pressuring the caller.
 #[derive(Clone)]
-pub struct TxPublisher(mpsc::Sender<LeeTransaction>);
+pub struct GossipTxPublisher(mpsc::Sender<LeeTransaction>);
 
-impl TxPublisher {
+impl GossipTxPublisher {
     pub fn publish(&self, tx: LeeTransaction) {
         if let Err(err) = self.0.try_send(tx) {
             log::debug!("Dropping local tx publish: outbound gossip channel full or closed: {err}");
@@ -110,9 +99,6 @@ impl GossipNetwork {
                     .with_context(|| format!("Invalid gossip bootstrap peer `{addr}`"))
             })
             .collect::<Result<_>>()?;
-
-        // TODO: use a helper for this
-        let topic = gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)));
 
         let message_id_fn = |msg: &gossipsub::Message| {
             // Undecodable messages still need a message-id, but it must be a
@@ -172,6 +158,8 @@ impl GossipNetwork {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
+        // subscribe to topic for the selected channel
+        let topic = Self::get_topic_for_channel(channel_id);
         swarm
             .behaviour_mut()
             .gossipsub
@@ -237,6 +225,11 @@ impl GossipNetwork {
     }
 
     #[must_use]
+    pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+    }
+
+    #[must_use]
     pub fn listen_addrs(&self) -> Vec<Multiaddr> {
         self.listen_addrs.clone()
     }
@@ -248,17 +241,20 @@ impl GossipNetwork {
 
     /// Handle for publishing locally-submitted transactions to the mesh.
     #[must_use]
-    pub fn tx_publisher(&self) -> TxPublisher {
-        TxPublisher(self.tx_tx.clone())
+    pub fn tx_publisher(&self) -> GossipTxPublisher {
+        GossipTxPublisher(self.tx_tx.clone())
     }
-}
 
-impl PeerNetworkTrait for GossipNetwork {
-    fn connected_peers(&self) -> Vec<[u8; 32]> {
+    /// Ed25519 public keys of currently connected peers.
+    #[must_use]
+    pub fn connected_peers(&self) -> Vec<[u8; 32]> {
         self.connected_rx.borrow().clone()
     }
 
-    fn shutdown_token(&self) -> CancellationToken {
+    /// Cancelled when a graceful shutdown is requested (the handle is dropped).
+    /// Observers must NOT halt the node on it.
+    #[must_use]
+    pub fn shutdown_token(&self) -> CancellationToken {
         self.shutdown.clone()
     }
 }

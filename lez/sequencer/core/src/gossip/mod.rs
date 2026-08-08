@@ -5,7 +5,7 @@
 //! down degrades to L1-only behavior, and a gossip failure after startup
 //! never halts the node.
 
-pub use network::{GossipNetwork, PeerNetworkTrait, TxPublisher};
+pub use network::{GossipNetwork, GossipTxPublisher};
 
 pub mod accreditation;
 pub mod network;

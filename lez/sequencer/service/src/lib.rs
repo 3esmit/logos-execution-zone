@@ -15,6 +15,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::{
     TransactionOrigin,
     block_publisher::BlockPublisherTrait as _,
+    gossip::network::GossipTxPublisher,
     load_or_create_signing_key,
     task_group::{StoreRelease, TaskGroup},
 };
@@ -306,7 +307,7 @@ async fn run_server(
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     listen_addr: SocketAddr,
     max_block_size: u64,
-    tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
+    tx_publisher: Option<GossipTxPublisher>,
 ) -> Result<(ServerHandle, SocketAddr)> {
     let server = jsonrpsee::server::ServerBuilder::with_config(
         jsonrpsee::server::ServerConfigBuilder::new()

@@ -10,6 +10,7 @@ use log::{error, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
+    gossip::network::GossipTxPublisher,
 };
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
@@ -23,7 +24,7 @@ pub struct SequencerService<BC: BlockPublisherTrait> {
     sequencer: Arc<Mutex<SequencerCore<BC>>>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     max_block_size: u64,
-    gossip_tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
+    gossip_tx_publisher: Option<GossipTxPublisher>,
 }
 
 impl<BC: BlockPublisherTrait> SequencerService<BC> {
@@ -31,7 +32,7 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
         sequencer: Arc<Mutex<SequencerCore<BC>>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
-        gossip_tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
+        gossip_tx_publisher: Option<GossipTxPublisher>,
     ) -> Self {
         Self {
             sequencer,

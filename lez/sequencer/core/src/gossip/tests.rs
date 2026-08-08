@@ -5,11 +5,7 @@ use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use mempool::MemPool;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
-use crate::{
-    TransactionOrigin,
-    config::GossipConfig,
-    gossip::{GossipNetwork, PeerNetworkTrait as _},
-};
+use crate::{TransactionOrigin, config::GossipConfig, gossip::GossipNetwork};
 
 const CHANNEL: [u8; 32] = [1; 32];
 const TEST_MAX_BLOCK_SIZE: u64 = 1 << 20;
