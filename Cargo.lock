@@ -9636,19 +9636,25 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "clap",
  "env_logger",
  "futures",
  "hex",
  "kameo",
  "kameo_actors",
+ "lee",
  "log",
  "metrics-exporter-prometheus",
+ "programs",
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_rpc_server_actor",
+ "sequencer_stake_core",
+ "system_accounts",
  "tokio",
  "tokio-util",
+ "wallet",
 ]
 
 [[package]]

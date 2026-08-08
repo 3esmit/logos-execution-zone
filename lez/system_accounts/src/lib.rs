@@ -6,7 +6,7 @@ use clock_core::ClockAccountData;
 use lee_core::account::{Account, AccountId, Nonce};
 
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
-pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 1_000_000;
+pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 
 /// Channel administration defaults.
 ///
