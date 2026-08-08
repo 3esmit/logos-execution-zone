@@ -8,7 +8,7 @@ use common::HashType;
 /// recently seen transactions here to avoid re-admitting duplicates that
 /// arrive from multiple peers or echo back after a local publish.
 ///
-/// TODO: Counters are exposed for a future metrics surface.
+/// TODO: expose counters to `metrics` later.
 pub struct SeenCache {
     capacity: usize,
     order: VecDeque<HashType>,

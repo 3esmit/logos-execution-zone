@@ -168,7 +168,6 @@ impl Libp2pNetwork {
             .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
-        //
         swarm
             .behaviour_mut()
             .gossipsub
@@ -262,8 +261,6 @@ impl PeerNetworkTrait for Libp2pNetwork {
 
 impl Drop for Libp2pNetwork {
     fn drop(&mut self) {
-        // The drive task breaks its loop on this; the death reminder reads it to
-        // tell a graceful teardown from the driver dying unexpectedly.
         self.shutdown.cancel();
     }
 }
@@ -387,9 +384,8 @@ impl DriveTask {
                 } else {
                     match self.mempool.try_push((TransactionOrigin::Gossip, tx)) {
                         Ok(()) => {
-                            // mark seen only on succesful pushes, so that if mempool is full we can
-                            // later receive the same tx from gossip and
-                            // try pushing it again
+                            // mark seen only on successful pushes, so that if mempool is full we
+                            // can later receive the same tx from gossip and try pushing it again
                             self.seen.insert(hash);
                         }
                         Err(_) => {
