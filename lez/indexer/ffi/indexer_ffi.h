@@ -276,6 +276,34 @@ typedef struct FfiVec_FfiNullifierCommitmentSet {
 
 typedef struct FfiVec_FfiNullifierCommitmentSet FfiNullifierCommitmentSetList;
 
+typedef struct FfiPublicAction {
+  FfiAccountId account_id;
+  struct FfiAccount post_state;
+} FfiPublicAction;
+
+typedef struct FfiVec_FfiPublicAction {
+  struct FfiPublicAction *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPublicAction;
+
+typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
+
+typedef struct FfiPrivateAction {
+  struct FfiBytes32 nullifier;
+  struct FfiBytes32 root;
+  struct FfiBytes32 commitment;
+  struct FfiEncryptedAccountData encrypted_post_state;
+} FfiPrivateAction;
+
+typedef struct FfiVec_FfiPrivateAction {
+  struct FfiPrivateAction *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiPrivateAction;
+
+typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
+
 typedef struct FfiPrivacyPreservingMessage {
   FfiAccountIdList public_account_ids;
   FfiNonceList nonces;
@@ -285,6 +313,12 @@ typedef struct FfiPrivacyPreservingMessage {
   FfiNullifierCommitmentSetList new_nullifiers;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
+  /**
+   * Action-shaped view retained for consumers that use the current FFI.
+   * The legacy fields above remain populated for older consumers.
+   */
+  FfiPublicActionList public_actions;
+  FfiPrivateActionList private_actions;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

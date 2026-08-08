@@ -8,10 +8,12 @@ use indexer_service_protocol::{
 
 use crate::api::types::{
     FfiBytes32, FfiHashType, FfiOption, FfiProgramId, FfiPublicKey, FfiSignature, FfiVec,
+    account::FfiAccount,
     vectors::{
         FfiAccountIdList, FfiAccountList, FfiEncryptedAccountDataList, FfiInstructionDataList,
-        FfiNonceList, FfiNullifierCommitmentSetList, FfiProgramDeploymentMessage, FfiProof,
-        FfiSignaturePubKeyList, FfiVecBytes32, FfiVecU8,
+        FfiNonceList, FfiNullifierCommitmentSetList, FfiPrivateActionList,
+        FfiProgramDeploymentMessage, FfiProof, FfiPublicActionList, FfiSignaturePubKeyList,
+        FfiVecBytes32, FfiVecU8,
     },
 };
 
@@ -239,6 +241,24 @@ pub struct FfiPrivacyPreservingMessage {
     pub new_nullifiers: FfiNullifierCommitmentSetList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    /// Action-shaped view retained for consumers that use the current FFI.
+    /// The legacy fields above remain populated for older consumers.
+    pub public_actions: FfiPublicActionList,
+    pub private_actions: FfiPrivateActionList,
+}
+
+#[repr(C)]
+pub struct FfiPublicAction {
+    pub account_id: crate::api::types::FfiAccountId,
+    pub post_state: FfiAccount,
+}
+
+#[repr(C)]
+pub struct FfiPrivateAction {
+    pub nullifier: FfiBytes32,
+    pub root: FfiBytes32,
+    pub commitment: FfiBytes32,
+    pub encrypted_post_state: FfiEncryptedAccountData,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -253,6 +273,36 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             block_validity_window,
             timestamp_validity_window,
         } = value;
+
+        let public_actions = public_account_ids
+            .iter()
+            .zip(public_post_states.iter())
+            .map(|(account_id, post_state)| {
+                let post_state: lee::Account = post_state
+                    .clone()
+                    .try_into()
+                    .expect("Source is in blocks, must fit");
+                FfiPublicAction {
+                    account_id: (*account_id).into(),
+                    post_state: post_state.into(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let private_actions = new_nullifiers
+            .iter()
+            .zip(new_commitments.iter())
+            .zip(encrypted_private_post_states.iter())
+            .map(
+                |(((nullifier, root), commitment), encrypted_post_state)| FfiPrivateAction {
+                    nullifier: FfiBytes32 { data: nullifier.0 },
+                    root: FfiBytes32 { data: root.0 },
+                    commitment: FfiBytes32 { data: commitment.0 },
+                    encrypted_post_state: encrypted_post_state.clone().into(),
+                },
+            )
+            .collect::<Vec<_>>()
+            .into();
 
         Self {
             public_account_ids: public_account_ids
@@ -290,6 +340,8 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            public_actions,
+            private_actions,
         }
     }
 }

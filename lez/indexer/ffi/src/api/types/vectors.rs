@@ -2,7 +2,8 @@ use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiNonce, FfiVec,
     account::FfiAccount,
     transaction::{
-        FfiEncryptedAccountData, FfiNullifierCommitmentSet, FfiSignaturePubKeyEntry, FfiTransaction,
+        FfiEncryptedAccountData, FfiNullifierCommitmentSet, FfiPrivateAction, FfiPublicAction,
+        FfiSignaturePubKeyEntry, FfiTransaction,
     },
 };
 
@@ -29,3 +30,7 @@ pub type FfiProgramDeploymentMessage = FfiVecU8;
 pub type FfiEncryptedAccountDataList = FfiVec<FfiEncryptedAccountData>;
 
 pub type FfiNullifierCommitmentSetList = FfiVec<FfiNullifierCommitmentSet>;
+
+pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
+
+pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
