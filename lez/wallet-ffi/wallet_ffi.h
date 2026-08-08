@@ -320,6 +320,16 @@ typedef struct LabelList {
   enum WalletFfiError error;
 } LabelList;
 
+/**
+ * A local sequencer block header used to pin a public-history snapshot.
+ */
+typedef struct FfiLocalBlockHeaderReceiptV1 {
+  uint64_t block_id;
+  struct FfiBytes32 block_hash;
+  struct FfiBytes32 previous_block_hash;
+  uint64_t timestamp;
+} FfiLocalBlockHeaderReceiptV1;
+
 typedef struct FfiBytes32 FfiPdaSeed;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
@@ -919,6 +929,36 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
 enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
 
 /**
+ * Read one bounded, snapshot-pinned page from the wallet's configured leader.
+ *
+ * This always calls the local public-history RPC method at the configured leader. It accepts no
+ * URL, HTTP path, or RPC-method input. The returned JSON is a trusted local sequencer response,
+ * not public-network finality.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle.
+ * - `start_block_id`: Cursor for the page; zero asks the sequencer to use its stored genesis.
+ * - `expected_tip`: Null for the first page, otherwise the prior page's `snapshot_tip`.
+ * - `out_history_json`: Receives an allocated, null-terminated JSON result.
+ *
+ * # Returns
+ * - `Success` with `out_history_json` allocated; free it with `wallet_ffi_free_string()`.
+ * - `NetworkError` if the configured leader cannot serve the request.
+ * - `SerializationError` if the bounded response cannot be encoded as JSON.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ * - If non-null, `expected_tip` must point to a valid `FfiLocalBlockHeaderReceiptV1` for this
+ *   call.
+ * - `out_history_json` must point to writable storage for one `char*` and remains owned by the
+ *   caller; the returned string must be freed with `wallet_ffi_free_string()`.
+ */
+enum WalletFfiError wallet_ffi_get_local_public_block_history(struct WalletHandle *handle,
+                                                              uint64_t start_block_id,
+                                                              const struct FfiLocalBlockHeaderReceiptV1 *expected_tip,
+                                                              char **out_history_json);
+
+/**
  * Produce account id for public PDA.
  *
  * # Parameters
@@ -1280,6 +1320,23 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
                                                struct FfiTransferResult *out_result);
 
 /**
+ * Send a public token transfer through the authenticated-transfer program compiled into this
+ * FFI artifact.
+ *
+ * This is the matching transfer operation for `wallet_ffi_register_public_account_local`.
+ * Use it for standalone local sequencers; `wallet_ffi_transfer_public` remains pinned to the
+ * selected network profile used by released Testnet artifacts.
+ *
+ * # Safety
+ * The pointer requirements are identical to `wallet_ffi_transfer_public`.
+ */
+enum WalletFfiError wallet_ffi_transfer_public_local(struct WalletHandle *handle,
+                                                     const struct FfiBytes32 *from,
+                                                     const struct FfiBytes32 *to,
+                                                     const uint8_t (*amount)[16],
+                                                     struct FfiTransferResult *out_result);
+
+/**
  * Send a shielded token transfer.
  *
  * Transfers tokens from a public account to a private account.
@@ -1487,6 +1544,35 @@ enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handl
 enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *handle,
                                                        const struct FfiBytes32 *account_id,
                                                        struct FfiTransferResult *out_result);
+
+/**
+ * Register a public account on a standalone local network.
+ *
+ * This initializes a public account using the authenticated-transfer program
+ * compiled into this FFI artifact. Use this path for local-development
+ * sequencers whose builtin program identity comes from the local artifact
+ * instead of the immutable Testnet profile.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `account_id`: Account ID to register
+ * - `out_result`: Output pointer for registration result
+ *
+ * # Returns
+ * - `Success` if the registration was submitted successfully
+ * - Error code on failure
+ *
+ * # Memory
+ * The result must be freed with `wallet_ffi_free_transfer_result()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `account_id` must be a valid pointer to a `FfiBytes32` struct
+ * - `out_result` must be a valid pointer to a `FfiTransferResult` struct
+ */
+enum WalletFfiError wallet_ffi_register_public_account_local(struct WalletHandle *handle,
+                                                             const struct FfiBytes32 *account_id,
+                                                             struct FfiTransferResult *out_result);
 
 /**
  * Register a private account on the network.

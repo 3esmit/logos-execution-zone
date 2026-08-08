@@ -4,7 +4,10 @@ use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
-pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
+pub use jsonrpsee::{
+    core::{ClientError, http_helpers::HttpError},
+    http_client::HttpClientBuilder as SequencerClientBuilder,
+};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
     LeeTransaction, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
@@ -209,7 +212,10 @@ mod tests {
                 },
                 public_transactions: vec![LocalPublicTransactionV1 {
                     transaction_hash: HashType([1_u8; 32]),
-                    transaction,
+                    transaction: Some(transaction),
+                    program_id: None,
+                    account_ids: None,
+                    instruction_data: None,
                 }],
             }],
             next_block_id: Some(8),
@@ -223,6 +229,37 @@ mod tests {
 
         let decoded = serde_json::from_value::<LocalPublicBlockHistoryPageV1>(wire)?;
         assert_eq!(decoded, page);
+
+        let legacy_wire = serde_json::json!({
+            "snapshot_tip": {
+                "block_id": 8,
+                "block_hash": "08".repeat(32),
+                "previous_block_hash": "07".repeat(32)
+            },
+            "blocks": [{
+                "header": {
+                    "block_id": 7,
+                    "block_hash": "07".repeat(32),
+                    "previous_block_hash": "06".repeat(32)
+                },
+                "public_transactions": [{
+                    "transaction_hash": "01".repeat(32),
+                    "program_id": [2, 2, 2, 2, 2, 2, 2, 2],
+                    "account_ids": [AccountId::new([3_u8; 32]).to_string()],
+                    "instruction_data": [1, 2, 3]
+                }]
+            }],
+            "next_block_id": 8
+        });
+        let legacy = serde_json::from_value::<LocalPublicBlockHistoryPageV1>(legacy_wire)?;
+        let legacy_transaction = &legacy.blocks[0].public_transactions[0];
+        assert!(legacy_transaction.transaction.is_none());
+        assert_eq!(legacy_transaction.program_id, Some([2_u32; 8]));
+        assert_eq!(
+            legacy_transaction.account_ids.as_ref().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(legacy_transaction.instruction_data, Some(vec![1, 2, 3]));
 
         let request = LocalPublicBlockHistoryRequestV1 {
             start_block_id: 7,

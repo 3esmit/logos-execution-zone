@@ -9,6 +9,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    error::Error as StdError,
     path::PathBuf,
 };
 
@@ -30,7 +31,12 @@ use lee_core::{
     program::InstructionData,
 };
 use log::info;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_service_protocol::{
+    LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, LocalBlockHeaderReceiptV1,
+    LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
+    MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
+};
+use sequencer_service_rpc::{ClientError, HttpError, RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
@@ -556,6 +562,26 @@ impl WalletCore {
         Ok(self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| client.get_last_block_id().await)
+            .await?)
+    }
+
+    /// Read one bounded page of trusted local public history from the configured leader.
+    ///
+    /// The request starts at the protocol's maximum bounded page size and retries a configured
+    /// response-limit error with progressively smaller pages. `expected_tip` pins continuation
+    /// pages to the first response's snapshot; callers must not treat this local sequencer
+    /// response as public-network finality.
+    pub async fn get_local_public_block_history(
+        &self,
+        start_block_id: u64,
+        expected_tip: Option<LocalBlockHeaderReceiptV1>,
+    ) -> Result<LocalPublicBlockHistoryPageV1> {
+        Ok(self
+            .multi_sequencer_client
+            .metered_call(async |client: &SequencerClient| {
+                get_local_public_block_history_page(client, start_block_id, expected_tip.clone())
+                    .await
+            })
             .await?)
     }
 
@@ -1126,6 +1152,77 @@ impl WalletCore {
     }
 }
 
+async fn get_local_public_block_history_page(
+    client: &SequencerClient,
+    start_block_id: u64,
+    expected_tip: Option<LocalBlockHeaderReceiptV1>,
+) -> Result<LocalPublicBlockHistoryPageV1, ClientError> {
+    let mut max_blocks = MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS;
+    loop {
+        let request = bounded_local_public_block_history_request(
+            start_block_id,
+            expected_tip.clone(),
+            max_blocks,
+        );
+        match client.get_local_public_block_history(request).await {
+            Ok(page) => return Ok(page),
+            Err(error) if is_local_public_block_history_response_limit_error(&error) => {
+                let Some(smaller_page) = smaller_local_public_block_history_page(max_blocks) else {
+                    return Err(error);
+                };
+                max_blocks = smaller_page;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn is_local_public_block_history_response_limit_error(error: &ClientError) -> bool {
+    if matches!(error, ClientError::Call(error)
+        if error.message() == LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE)
+    {
+        return true;
+    }
+
+    let ClientError::Transport(error) = error else {
+        return false;
+    };
+
+    let mut source: &(dyn StdError + 'static) = error.as_ref();
+    loop {
+        if matches!(
+            source.downcast_ref::<HttpError>(),
+            Some(HttpError::TooLarge)
+        ) {
+            return true;
+        }
+        let Some(next) = source.source() else {
+            return false;
+        };
+        source = next;
+    }
+}
+
+const fn smaller_local_public_block_history_page(max_blocks: u8) -> Option<u8> {
+    if max_blocks > 1 {
+        Some(max_blocks >> 1)
+    } else {
+        None
+    }
+}
+
+const fn bounded_local_public_block_history_request(
+    start_block_id: u64,
+    expected_tip: Option<LocalBlockHeaderReceiptV1>,
+    max_blocks: u8,
+) -> LocalPublicBlockHistoryRequestV1 {
+    LocalPublicBlockHistoryRequestV1 {
+        start_block_id,
+        max_blocks,
+        expected_tip,
+    }
+}
+
 fn verify_deployment_readback(
     expected_hash: HashType,
     expected_bytecode: &[u8],
@@ -1166,9 +1263,11 @@ mod tests {
     use lee::privacy_preserving_transaction::{circuit::Proof, witness_set::WitnessSet};
 
     use super::{
-        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, LeeTransaction, Message,
+        Account, AccountId, AccountIdWithPrivacy, ClientError, Commitment, HttpError,
+        LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, Label, LeeTransaction, Message,
         PrivacyPreservingTransaction, ProgramDeploymentTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS,
         Storage, SyncPersistenceCheckpoint, WalletCore,
+        is_local_public_block_history_response_limit_error,
     };
 
     fn privacy_transaction(message: Message) -> LeeTransaction {
@@ -1336,6 +1435,32 @@ mod tests {
         assert!(!checkpoint.has_unpersisted_blocks());
         let recovered = Storage::from_path(&storage_path).unwrap();
         assert_eq!(recovered.last_synced_block(), partial_progress);
+    }
+
+    #[test]
+    fn local_history_retries_json_rpc_response_limit_errors() {
+        let call_error = ClientError::Call(jsonrpsee::types::ErrorObjectOwned::owned(
+            -32000,
+            LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE,
+            None::<()>,
+        ));
+        assert!(is_local_public_block_history_response_limit_error(
+            &call_error
+        ));
+
+        let transport_error = ClientError::Transport(Box::new(HttpError::TooLarge));
+        assert!(is_local_public_block_history_response_limit_error(
+            &transport_error
+        ));
+    }
+
+    #[test]
+    fn local_history_does_not_retry_unrelated_transport_errors() {
+        let transport_error =
+            ClientError::Transport(Box::new(std::io::Error::other("connection reset")));
+        assert!(!is_local_public_block_history_response_limit_error(
+            &transport_error
+        ));
     }
 
     #[test]
