@@ -2,7 +2,7 @@
   description = "Logos Execution Zone";
 
   inputs = {
-    logos-liblogos.url = "github:logos-co/logos-liblogos";
+    logos-liblogos.url = "github:3esmit/logos-liblogos?rev=dbcafea05c06e91be18763bc0c4b307222d8b853";
 
     nixpkgs.follows = "logos-liblogos/nixpkgs";
 
