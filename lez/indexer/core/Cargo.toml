@@ -9,7 +9,7 @@ workspace = true
 
 [features]
 default = []
-testnet = []
+testnet = ["common/testnet", "storage/testnet", "testnet_initial_state/testnet"]
 
 [dependencies]
 common.workspace = true

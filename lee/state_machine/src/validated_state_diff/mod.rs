@@ -308,6 +308,26 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, LeeError> {
+        Self::from_privacy_preserving_transaction_with_circuit_id(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            crate::PRIVACY_PRESERVING_CIRCUIT_ID,
+        )
+    }
+
+    /// Validates a privacy-preserving transaction against a specified circuit image ID.
+    ///
+    /// Callers replaying an immutable historical network may need to verify receipts
+    /// produced by that network's attested circuit, rather than the current prover.
+    pub fn from_privacy_preserving_transaction_with_circuit_id(
+        tx: &PrivacyPreservingTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        circuit_id: ProgramId,
+    ) -> Result<Self, LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
 
@@ -393,6 +413,7 @@ impl ValidatedStateDiff {
             &witness_set.proof,
             &public_pre_states,
             message,
+            circuit_id,
         )?;
 
         // 5. Commitment freshness
@@ -496,6 +517,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
     public_pre_states: &[AccountWithMetadata],
     message: &Message,
+    circuit_id: ProgramId,
 ) -> Result<(), LeeError> {
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
@@ -506,8 +528,13 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
     };
-    proof
-        .is_valid_for(&output)
+    let is_valid = if circuit_id == crate::PRIVACY_PRESERVING_CIRCUIT_ID {
+        proof.is_valid_for(&output)
+    } else {
+        proof.is_valid_for_circuit(&output, circuit_id)
+    };
+
+    is_valid
         .then_some(())
         .ok_or(LeeError::InvalidPrivacyPreservingProof)
 }

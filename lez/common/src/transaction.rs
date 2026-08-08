@@ -104,9 +104,24 @@ impl LeeTransaction {
             Self::Public(tx) => {
                 ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
             }
-            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
-                tx, state, block_id, timestamp,
-            ),
+            Self::PrivacyPreserving(tx) => {
+                #[cfg(feature = "testnet")]
+                {
+                    ValidatedStateDiff::from_privacy_preserving_transaction_with_circuit_id(
+                        tx,
+                        state,
+                        block_id,
+                        timestamp,
+                        programs::testnet::PRIVACY_PRESERVING_CIRCUIT_ID,
+                    )
+                }
+                #[cfg(not(feature = "testnet"))]
+                {
+                    ValidatedStateDiff::from_privacy_preserving_transaction(
+                        tx, state, block_id, timestamp,
+                    )
+                }
+            }
             Self::ProgramDeployment(tx) => {
                 ValidatedStateDiff::from_program_deployment_transaction(tx, state)
             }
@@ -222,8 +237,13 @@ pub enum TransactionMalformationError {
 /// Every valid block must end with exactly one occurrence of this transaction.
 #[must_use]
 pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransaction {
+    #[cfg(feature = "testnet")]
+    let clock_program_id = programs::testnet::clock().id();
+    #[cfg(not(feature = "testnet"))]
+    let clock_program_id = programs::clock().id();
+
     let message = lee::public_transaction::Message::try_new(
-        programs::clock().id(),
+        clock_program_id,
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,

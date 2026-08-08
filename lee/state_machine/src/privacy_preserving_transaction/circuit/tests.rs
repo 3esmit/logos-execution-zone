@@ -102,6 +102,8 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
+    assert!(proof.is_valid_for_circuit(&output, crate::PRIVACY_PRESERVING_CIRCUIT_ID));
+    assert!(!proof.is_valid_for_circuit(&output, [0; 8]));
 
     let [sender_pre] = output.public_pre_states.try_into().unwrap();
     let [sender_post] = output.public_post_states.try_into().unwrap();

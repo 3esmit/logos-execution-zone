@@ -14,8 +14,12 @@ on:
       - "lez/sequencer/service/Cargo.toml"
       - "lez/wallet-ffi/Cargo.toml"
       - "lez/wallet/Cargo.toml"
+      - "lez/programs/src/testnet.rs"
+      - "lez/testnet_initial_state/testnet-v0.2/**"
       - "scripts/build-native-release.sh"
       - "scripts/check_release_workflows.py"
+      - "scripts/check_testnet_program_profile.py"
+      - "scripts/test_testnet_program_profile.py"
       - "scripts/explorer-service-launcher"
       - "scripts/native_release.py"
       - "scripts/test_native_release.py"
@@ -99,6 +103,8 @@ jobs:
           set -euo pipefail
           python3 scripts/test_native_release.py
           python3 scripts/check_release_workflows.py
+          python3 scripts/check_testnet_program_profile.py
+          python3 scripts/test_testnet_program_profile.py
 
   ci-image:
     permissions:

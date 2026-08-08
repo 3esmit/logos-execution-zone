@@ -8,6 +8,10 @@ use jsonrpsee::{
 use lee;
 use log::warn;
 use mempool::MemPoolHandle;
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
 use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
@@ -20,6 +24,12 @@ use sequencer_service_protocol::{
 };
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
+
+#[cfg(not(feature = "testnet"))]
+const NETWORK_PRIVACY_PRESERVING_CIRCUIT_ID: [u32; 8] = lee::PRIVACY_PRESERVING_CIRCUIT_ID;
+#[cfg(feature = "testnet")]
+const NETWORK_PRIVACY_PRESERVING_CIRCUIT_ID: [u32; 8] =
+    programs::testnet::PRIVACY_PRESERVING_CIRCUIT_ID;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
@@ -344,14 +354,14 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         let mut program_ids = BTreeMap::new();
         program_ids.insert(
             "authenticated_transfer".to_owned(),
-            programs::authenticated_transfer().id(),
+            network_programs::authenticated_transfer().id(),
         );
-        program_ids.insert("token".to_owned(), programs::token().id());
-        program_ids.insert("pinata".to_owned(), programs::pinata().id());
-        program_ids.insert("amm".to_owned(), programs::amm().id());
+        program_ids.insert("token".to_owned(), network_programs::token().id());
+        program_ids.insert("pinata".to_owned(), network_programs::pinata().id());
+        program_ids.insert("amm".to_owned(), network_programs::amm().id());
         program_ids.insert(
             "privacy_preserving_circuit".to_owned(),
-            lee::PRIVACY_PRESERVING_CIRCUIT_ID,
+            NETWORK_PRIVACY_PRESERVING_CIRCUIT_ID,
         );
         Ok(program_ids)
     }

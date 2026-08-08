@@ -31,11 +31,19 @@ impl Proof {
     }
 
     pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
+        self.is_valid_for_circuit(circuit_output, PRIVACY_PRESERVING_CIRCUIT_ID)
+    }
+
+    pub(crate) fn is_valid_for_circuit(
+        &self,
+        circuit_output: &PrivacyPreservingCircuitOutput,
+        circuit_id: ProgramId,
+    ) -> bool {
         let Ok(inner) = borsh::from_slice::<InnerReceipt>(&self.0) else {
             return false;
         };
         let receipt = Receipt::new(inner, circuit_output.to_bytes());
-        receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
+        receipt.verify(circuit_id).is_ok()
     }
 }
 

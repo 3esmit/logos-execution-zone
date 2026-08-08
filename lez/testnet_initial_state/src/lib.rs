@@ -9,6 +9,9 @@ use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Pr
 use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "testnet")]
+mod testnet_v0_2;
+
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
     16, 162, 106, 154, 236, 125, 52, 184, 35, 100, 238, 174, 69, 197, 41, 77, 187, 10, 118, 75, 0,
     11, 148, 238, 185, 181, 133, 17, 220, 72, 124, 77,
@@ -309,21 +312,18 @@ pub fn initial_state() -> V03State {
         .with_programs(initial_programs())
 }
 
+/// Builds the state required to replay the deployed Testnet protocol.
+#[cfg(feature = "testnet")]
 #[must_use]
 pub fn initial_state_testnet() -> V03State {
-    let mut initial_public_accounts = initial_public_accounts();
-    initial_public_accounts.insert(
-        system_accounts::pinata_account_id(),
-        system_accounts::pinata_account(),
-    );
+    testnet_v0_2::initial_state()
+}
 
-    let mut programs = initial_programs();
-    programs.push(programs::pinata());
-
-    V03State::new()
-        .with_public_accounts(initial_public_accounts)
-        .with_private_accounts(initial_private_accounts())
-        .with_programs(programs)
+/// Compatibility fallback for consumers that do not enable the Testnet protocol feature.
+#[cfg(not(feature = "testnet"))]
+#[must_use]
+pub fn initial_state_testnet() -> V03State {
+    initial_state()
 }
 
 #[cfg(test)]

@@ -1,0 +1,57 @@
+{
+  "network": "testnet",
+  "version": "v0.2",
+  "source_revision": "1a94c8612fa7fcc4acecde44b973d942eab19f11",
+  "artifacts": [
+    {
+      "name": "authenticated_transfer",
+      "image_id": "dcbbfebcd59399961ed9973b8307dc475fd4c5ca5779aacfe7588f7dbc3f4a71",
+      "sha256": "a54b6e7d08f664253d8df784c5d2559f79e19d67fd1719ecbd1c141dbd6ddbcf"
+    },
+    {
+      "name": "token",
+      "image_id": "c5d50f88bfe7cb14b421673e9441aade7571e522eef035cc24d80b2e53c69a7c",
+      "sha256": "0f3671d6d0f77fb5d25d3d3dc5015b748b8a6e0687ac8b457f096f87408ef6fd"
+    },
+    {
+      "name": "amm",
+      "image_id": "d0c4c0ea9384928a97b65a63fcf9641639bb802e4e91819743360708ff12101e",
+      "sha256": "2d275366687baf11eea27942879242ff8889d14b2246dac000a1f0b6a4e5f610"
+    },
+    {
+      "name": "clock",
+      "image_id": "884e693a302d57de1ac4c405ca5bea1df707d1de11d9f87de51b78845aa98e63",
+      "sha256": "0447f839e46f584e7125dbd3f67b7d1a0cba17d520247867fc5ef0f5a9eb7a5b"
+    },
+    {
+      "name": "associated_token_account",
+      "image_id": "95841cc8bd2c87d7111bc5c7f3aa2a85d35e90f7217e82a397aa05acd51500f8",
+      "sha256": "8ca29768706ae0450b06cd1423eb1f2d87c05cbfb4a5a968d07824da4bcdd2fc"
+    },
+    {
+      "name": "vault",
+      "image_id": "40acaa4547c36a0e243d1bcb3e880b7fa3fd2175002a3977fa5b7299c5e5754f",
+      "sha256": "7ff0b662649ac47cd3135294e13afd0cf0b5f97dc923bfe78b5d92ff13e7f5a4"
+    },
+    {
+      "name": "faucet",
+      "image_id": "c316e2bed1d90687b35b80d460d35e7fe40130bbd2563cf19ee12e0e06c74508",
+      "sha256": "452b3bd60bc399d63a2abc2fc2ce3cb33cb2c723be23588ca9d50f8ce6920f15"
+    },
+    {
+      "name": "bridge",
+      "image_id": "892ac0f15087e8d0b1cffcb231233a0a792a4f516e4c5aaac2e3fcab181752ea",
+      "sha256": "c28f556d1220a32ba02f9d6b6d7ede5b0101a55f6d0e9fb7917dacf067311dec"
+    },
+    {
+      "name": "pinata",
+      "image_id": "66f6a58d92c159c3c13ea54d1e37a68a814f0fd3b8fd44b7d35c0617ac4456f8",
+      "sha256": "59807047471e26af11847dcbfd9d87b4ca60cd56149b1cae31f9050944ed3a98"
+    },
+    {
+      "name": "privacy_preserving_circuit",
+      "image_id": "ab86d257c5e0b8a8f6390b35500c37ca24fa57aa7a06bda330753cf36ad6a249",
+      "sha256": "4c3665913d08a0ec043ee2d476750c59792df8d7c4feacedbd36cac58ffae9c3"
+    }
+  ]
+}

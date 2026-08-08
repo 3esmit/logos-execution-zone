@@ -118,11 +118,19 @@ def check_native_build_profile() -> None:
     )
 
 
+def check_testnet_profile_gate() -> None:
+    for source in (ROOT / ".github/workflows/ci.yml", ROOT / ".github/workflows/publish_native.yml"):
+        text = source.read_text(encoding="utf-8")
+        require(text, "python3 scripts/check_testnet_program_profile.py", source)
+        require(text, "python3 scripts/test_testnet_program_profile.py", source)
+
+
 def main() -> int:
     try:
         check_images()
         check_native()
         check_native_build_profile()
+        check_testnet_profile_gate()
     except (OSError, ValueError) as error:
         print(f"release workflow validation failed: {error}", file=sys.stderr)
         return 1
