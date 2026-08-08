@@ -29,6 +29,8 @@ jobs:
         run: |
           python3 scripts/test_native_release.py
           python3 scripts/check_release_workflows.py
+          python3 scripts/check_testnet_program_profile.py
+          python3 scripts/test_testnet_program_profile.py
 
   ci-image:
     permissions:
