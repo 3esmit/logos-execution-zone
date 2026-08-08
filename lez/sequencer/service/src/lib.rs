@@ -15,7 +15,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::{
     TransactionOrigin,
     block_publisher::BlockPublisherTrait as _,
-    gossip::network::GossipTxPublisher,
+    gossip::GossipTxPublisher,
     load_or_create_signing_key,
     task_group::{StoreRelease, TaskGroup},
 };
