@@ -569,7 +569,10 @@ fn build_local_public_block_history_page(
             };
             public_transactions.push(LocalPublicTransactionV1 {
                 transaction_hash: HashType(public_transaction.hash()),
-                transaction: LeeTransaction::Public(public_transaction.clone()),
+                transaction: Some(LeeTransaction::Public(public_transaction.clone())),
+                program_id: None,
+                account_ids: None,
+                instruction_data: None,
             });
         }
 
@@ -947,9 +950,9 @@ mod tests {
         assert_eq!(replay_transaction.transaction_hash, transaction_hash);
         assert_eq!(
             replay_transaction.transaction,
-            LeeTransaction::Public(transaction.clone())
+            Some(LeeTransaction::Public(transaction.clone()))
         );
-        let LeeTransaction::Public(replayed) = &replay_transaction.transaction else {
+        let Some(LeeTransaction::Public(replayed)) = &replay_transaction.transaction else {
             panic!("local public history must only return public transactions");
         };
         assert_eq!(replayed.message().nonces, vec![Nonce(9)]);
@@ -1022,7 +1025,7 @@ mod tests {
 
         assert_eq!(
             page.blocks[0].public_transactions[0].transaction,
-            LeeTransaction::Public(transaction)
+            Some(LeeTransaction::Public(transaction))
         );
     }
 
@@ -1046,7 +1049,7 @@ mod tests {
 
         assert_eq!(
             page.blocks[0].public_transactions[0].transaction,
-            LeeTransaction::Public(transaction)
+            Some(LeeTransaction::Public(transaction))
         );
     }
 

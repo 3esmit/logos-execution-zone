@@ -15,15 +15,41 @@ impl NativeTokenTransfer<'_> {
         to: AccountIdentity,
         balance_to_move: u128,
     ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_public_transfer_with_program_id(
+            from,
+            to,
+            balance_to_move,
+            crate::network_profile::authenticated_transfer_id(),
+        )
+        .await
+    }
+
+    pub async fn send_public_transfer_local(
+        &self,
+        from: AccountIdentity,
+        to: AccountIdentity,
+        balance_to_move: u128,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_public_transfer_with_program_id(
+            from,
+            to,
+            balance_to_move,
+            local_registration_program_id(),
+        )
+        .await
+    }
+
+    async fn send_public_transfer_with_program_id(
+        &self,
+        from: AccountIdentity,
+        to: AccountIdentity,
+        balance_to_move: u128,
+        program_id: ProgramId,
+    ) -> Result<HashType, ExecutionFailureKind> {
         let (instruction_data, _program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         self.0
-            .send_pub_tx_with_pre_check(
-                vec![from, to],
-                instruction_data,
-                crate::network_profile::authenticated_transfer_id(),
-                tx_pre_check,
-            )
+            .send_pub_tx_with_pre_check(vec![from, to], instruction_data, program_id, tx_pre_check)
             .await
     }
 

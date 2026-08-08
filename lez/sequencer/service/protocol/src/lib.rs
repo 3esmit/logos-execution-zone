@@ -31,6 +31,8 @@ pub struct LocalBlockHeaderReceiptV1 {
     pub block_id: BlockId,
     pub block_hash: HashType,
     pub previous_block_hash: HashType,
+    /// Legacy history servers omitted this field; `0` then means timestamp unknown.
+    #[serde(default)]
     pub timestamp: Timestamp,
 }
 
@@ -68,14 +70,22 @@ pub struct LocalPublicBlockHistoryRequestV1 {
     pub expected_tip: Option<LocalBlockHeaderReceiptV1>,
 }
 
-/// One complete public transaction for trusted local replay.
+/// One public transaction for trusted local replay.
 ///
-/// `transaction` is always [`LeeTransaction::Public`]. It preserves the message nonces and
-/// witness data required to reconstruct the exact transaction that the sequencer accepted.
+/// Current servers populate `transaction`. Legacy servers populated the optional structural
+/// fields instead and did not include signatures or nonces, so those fields are preserved as
+/// metadata rather than being converted into a fabricated replay transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalPublicTransactionV1 {
     pub transaction_hash: HashType,
-    pub transaction: LeeTransaction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transaction: Option<LeeTransaction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_id: Option<ProgramId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ids: Option<Vec<AccountId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instruction_data: Option<Vec<u32>>,
 }
 
 /// A local block header and the public transactions selected from its body.

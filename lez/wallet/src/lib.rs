@@ -9,6 +9,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
+    error::Error as StdError,
     path::PathBuf,
 };
 
@@ -35,7 +36,7 @@ use sequencer_service_protocol::{
     LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
     MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS,
 };
-use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient};
+use sequencer_service_rpc::{ClientError, HttpError, RpcClient as _, SequencerClient};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 use url::Url;
@@ -1177,8 +1178,29 @@ async fn get_local_public_block_history_page(
 }
 
 fn is_local_public_block_history_response_limit_error(error: &ClientError) -> bool {
-    matches!(error, ClientError::Call(error)
+    if matches!(error, ClientError::Call(error)
         if error.message() == LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE)
+    {
+        return true;
+    }
+
+    let ClientError::Transport(error) = error else {
+        return false;
+    };
+
+    let mut source: &(dyn StdError + 'static) = error.as_ref();
+    loop {
+        if matches!(
+            source.downcast_ref::<HttpError>(),
+            Some(HttpError::TooLarge)
+        ) {
+            return true;
+        }
+        let Some(next) = source.source() else {
+            return false;
+        };
+        source = next;
+    }
 }
 
 const fn smaller_local_public_block_history_page(max_blocks: u8) -> Option<u8> {
@@ -1241,9 +1263,11 @@ mod tests {
     use lee::privacy_preserving_transaction::{circuit::Proof, witness_set::WitnessSet};
 
     use super::{
-        Account, AccountId, AccountIdWithPrivacy, Commitment, Label, LeeTransaction, Message,
+        Account, AccountId, AccountIdWithPrivacy, ClientError, Commitment, HttpError,
+        LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, Label, LeeTransaction, Message,
         PrivacyPreservingTransaction, ProgramDeploymentTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS,
         Storage, SyncPersistenceCheckpoint, WalletCore,
+        is_local_public_block_history_response_limit_error,
     };
 
     fn privacy_transaction(message: Message) -> LeeTransaction {
@@ -1411,6 +1435,32 @@ mod tests {
         assert!(!checkpoint.has_unpersisted_blocks());
         let recovered = Storage::from_path(&storage_path).unwrap();
         assert_eq!(recovered.last_synced_block(), partial_progress);
+    }
+
+    #[test]
+    fn local_history_retries_json_rpc_response_limit_errors() {
+        let call_error = ClientError::Call(jsonrpsee::types::ErrorObjectOwned::owned(
+            -32000,
+            LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE,
+            None::<()>,
+        ));
+        assert!(is_local_public_block_history_response_limit_error(
+            &call_error
+        ));
+
+        let transport_error = ClientError::Transport(Box::new(HttpError::TooLarge));
+        assert!(is_local_public_block_history_response_limit_error(
+            &transport_error
+        ));
+    }
+
+    #[test]
+    fn local_history_does_not_retry_unrelated_transport_errors() {
+        let transport_error =
+            ClientError::Transport(Box::new(std::io::Error::other("connection reset")));
+        assert!(!is_local_public_block_history_response_limit_error(
+            &transport_error
+        ));
     }
 
     #[test]

@@ -234,7 +234,7 @@ install -m 0755 "$target_dir/release/sequencer_service" \
   "$temporary/sequencer_service"
 cargo build --locked --release --package indexer_service --bin indexer_service
 build_wallet_ffi
-cargo build --locked --release --package indexer_ffi
+cargo build --locked --release --package indexer_ffi --features testnet
 
 cargo build \
   --locked \

@@ -1320,6 +1320,23 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
                                                struct FfiTransferResult *out_result);
 
 /**
+ * Send a public token transfer through the authenticated-transfer program compiled into this
+ * FFI artifact.
+ *
+ * This is the matching transfer operation for `wallet_ffi_register_public_account_local`.
+ * Use it for standalone local sequencers; `wallet_ffi_transfer_public` remains pinned to the
+ * selected network profile used by released Testnet artifacts.
+ *
+ * # Safety
+ * The pointer requirements are identical to `wallet_ffi_transfer_public`.
+ */
+enum WalletFfiError wallet_ffi_transfer_public_local(struct WalletHandle *handle,
+                                                     const struct FfiBytes32 *from,
+                                                     const struct FfiBytes32 *to,
+                                                     const uint8_t (*amount)[16],
+                                                     struct FfiTransferResult *out_result);
+
+/**
  * Send a shielded token transfer.
  *
  * Transfers tokens from a public account to a private account.

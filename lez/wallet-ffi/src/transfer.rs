@@ -62,6 +62,37 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     amount: *const [u8; 16],
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
+    unsafe { transfer_public_impl(handle, from, to, amount, out_result, false) }
+}
+
+/// Send a public token transfer through the authenticated-transfer program compiled into this
+/// FFI artifact.
+///
+/// This is the matching transfer operation for `wallet_ffi_register_public_account_local`.
+/// Use it for standalone local sequencers; `wallet_ffi_transfer_public` remains pinned to the
+/// selected network profile used by released Testnet artifacts.
+///
+/// # Safety
+/// The pointer requirements are identical to `wallet_ffi_transfer_public`.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_transfer_public_local(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+) -> WalletFfiError {
+    unsafe { transfer_public_impl(handle, from, to, amount, out_result, true) }
+}
+
+unsafe fn transfer_public_impl(
+    handle: *mut WalletHandle,
+    from: *const FfiBytes32,
+    to: *const FfiBytes32,
+    amount: *const [u8; 16],
+    out_result: *mut FfiTransferResult,
+    use_local_program: bool,
+) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
@@ -86,11 +117,21 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_public_transfer(
-        AccountIdentity::Public(from_id),
-        AccountIdentity::Public(to_id),
-        amount,
-    )) {
+    let transfer_result = if use_local_program {
+        block_on(transfer.send_public_transfer_local(
+            AccountIdentity::Public(from_id),
+            AccountIdentity::Public(to_id),
+            amount,
+        ))
+    } else {
+        block_on(transfer.send_public_transfer(
+            AccountIdentity::Public(from_id),
+            AccountIdentity::Public(to_id),
+            amount,
+        ))
+    };
+
+    match transfer_result {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
