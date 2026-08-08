@@ -41,10 +41,10 @@ fn invalidly_signed_transaction() -> LeeTransaction {
 
 async fn start_node(
     secret: [u8; 32],
-    bootstrap: Vec<String>,
+    bootstrap: Vec<libp2p::Multiaddr>,
 ) -> (GossipNetwork, MemPool<(TransactionOrigin, LeeTransaction)>) {
     let config = GossipConfig {
-        listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".to_owned(),
+        listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
     let (mempool, mempool_handle) = MemPool::new(1000);
@@ -77,7 +77,7 @@ async fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) -> boo
 async fn nodes_discover_each_other_via_bootstrap() {
     let secrets = [[10; 32], [11; 32], [12; 32]];
     let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
-    let a_addr = node_a.listen_addrs()[0].to_string();
+    let a_addr = node_a.listen_addrs()[0].clone();
     let (node_b, _mempool_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
     let (node_c, _mempool_c) = start_node(secrets[2], vec![a_addr]).await;
 
@@ -97,7 +97,7 @@ async fn nodes_discover_each_other_via_bootstrap() {
 async fn transaction_submitted_to_one_node_reaches_others() {
     let secrets = [[20; 32], [21; 32], [22; 32]];
     let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
-    let a_addr = node_a.listen_addrs()[0].to_string();
+    let a_addr = node_a.listen_addrs()[0].clone();
     let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
     let (node_c, mut mempool_c) = start_node(secrets[2], vec![a_addr]).await;
 
@@ -145,7 +145,7 @@ async fn invalid_transaction_is_not_propagated() {
     // `MessageAcceptance::Reject`) end-to-end.
     let secrets = [[30; 32], [31; 32]];
     let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
-    let a_addr = node_a.listen_addrs()[0].to_string();
+    let a_addr = node_a.listen_addrs()[0].clone();
     let (node_b, mut mempool_b) = start_node(secrets[1], vec![a_addr]).await;
 
     assert!(

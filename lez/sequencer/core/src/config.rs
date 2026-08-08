@@ -41,10 +41,10 @@ pub enum GenesisAction {
 pub struct GossipConfig {
     /// Multiaddr to listen on.
     #[serde(default = "default_gossip_listen_addr")]
-    pub listen_addr: String,
+    pub listen_addr: libp2p::Multiaddr,
     /// Peer multiaddrs to dial at startup, optionally with `/p2p/<peer_id>`.
     #[serde(default)]
-    pub bootstrap_peers: Vec<String>,
+    pub bootstrap_peers: Vec<libp2p::Multiaddr>,
 }
 
 // TODO: Provide default values
@@ -114,8 +114,10 @@ const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }
 
-fn default_gossip_listen_addr() -> String {
-    "/ip4/0.0.0.0/udp/0/quic-v1".to_owned()
+fn default_gossip_listen_addr() -> libp2p::Multiaddr {
+    "/ip4/0.0.0.0/udp/0/quic-v1"
+        .parse()
+        .expect("hardcoded default gossip listen addr is a valid multiaddr")
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

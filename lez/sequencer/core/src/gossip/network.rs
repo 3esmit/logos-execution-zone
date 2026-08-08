@@ -69,9 +69,7 @@ impl GossipTxPublisher {
 
 impl GossipNetwork {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
-    /// bootstrap peers, and spawns the drive task. Fails fast on a bad
-    /// listen/bootstrap multiaddr or bind failure; after that, gossip errors
-    /// never halt the node.
+    /// bootstrap peers, and spawns the drive task.
     pub async fn start(
         config: GossipConfig,
         channel_id: [u8; 32],
@@ -87,18 +85,8 @@ impl GossipNetwork {
             .map_err(|err| anyhow!("Invalid bedrock signing key for libp2p identity: {err}"))?;
         let local_peer_id = keypair.public().to_peer_id();
 
-        let listen_addr: Multiaddr = config
-            .listen_addr
-            .parse()
-            .with_context(|| format!("Invalid gossip listen_addr `{}`", config.listen_addr))?;
-        let bootstrap: Vec<Multiaddr> = config
-            .bootstrap_peers
-            .iter()
-            .map(|addr| {
-                addr.parse()
-                    .with_context(|| format!("Invalid gossip bootstrap peer `{addr}`"))
-            })
-            .collect::<Result<_>>()?;
+        let listen_addr = config.listen_addr;
+        let bootstrap = config.bootstrap_peers;
 
         let message_id_fn = |msg: &gossipsub::Message| {
             // Undecodable messages still need a message-id, but it must be a
@@ -533,7 +521,7 @@ mod tests {
 
     fn test_config() -> GossipConfig {
         GossipConfig {
-            listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".to_owned(),
+            listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
             bootstrap_peers: vec![],
         }
     }
@@ -572,44 +560,6 @@ mod tests {
         assert!(!addrs.is_empty());
         assert!(addrs[0].to_string().contains("/udp/"));
         assert!(network.connected_peers().is_empty());
-    }
-
-    #[tokio::test]
-    async fn start_fails_fast_on_bad_listen_addr() {
-        let config = GossipConfig {
-            listen_addr: "not a multiaddr".to_owned(),
-            ..test_config()
-        };
-        assert!(
-            GossipNetwork::start(
-                config,
-                [1; 32],
-                Ed25519Key::from_bytes(&[9; 32]),
-                test_mempool_handle(),
-                TEST_MAX_BLOCK_SIZE
-            )
-            .await
-            .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn start_fails_fast_on_bad_bootstrap_addr() {
-        let config = GossipConfig {
-            bootstrap_peers: vec!["nonsense".to_owned()],
-            ..test_config()
-        };
-        assert!(
-            GossipNetwork::start(
-                config,
-                [1; 32],
-                Ed25519Key::from_bytes(&[9; 32]),
-                test_mempool_handle(),
-                TEST_MAX_BLOCK_SIZE
-            )
-            .await
-            .is_err()
-        );
     }
 
     #[tokio::test]
