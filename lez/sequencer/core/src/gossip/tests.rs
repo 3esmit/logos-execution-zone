@@ -8,7 +8,7 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use crate::{
     TransactionOrigin,
     config::GossipConfig,
-    gossip::{Libp2pNetwork, PeerNetworkTrait as _},
+    gossip::{GossipNetwork, PeerNetworkTrait as _},
 };
 
 const CHANNEL: [u8; 32] = [1; 32];
@@ -46,16 +46,21 @@ fn invalidly_signed_transaction() -> LeeTransaction {
 async fn start_node(
     secret: [u8; 32],
     bootstrap: Vec<String>,
-) -> (Libp2pNetwork, MemPool<(TransactionOrigin, LeeTransaction)>) {
+) -> (GossipNetwork, MemPool<(TransactionOrigin, LeeTransaction)>) {
     let config = GossipConfig {
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".to_owned(),
         bootstrap_peers: bootstrap,
     };
     let (mempool, mempool_handle) = MemPool::new(1000);
-    let network =
-        Libp2pNetwork::start(config, CHANNEL, secret, mempool_handle, TEST_MAX_BLOCK_SIZE)
-            .await
-            .expect("node should start");
+    let network = GossipNetwork::start(
+        config,
+        CHANNEL,
+        Ed25519Key::from_bytes(&secret),
+        mempool_handle,
+        TEST_MAX_BLOCK_SIZE,
+    )
+    .await
+    .expect("node should start");
     (network, mempool)
 }
 

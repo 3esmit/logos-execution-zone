@@ -15,6 +15,7 @@ use libp2p::{
     multiaddr::Protocol,
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
+use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use mempool::MemPoolHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
@@ -55,7 +56,7 @@ pub trait PeerNetworkTrait {
 }
 
 /// Handle to the running gossip network. Dropping it stops the drive task.
-pub struct Libp2pNetwork {
+pub struct GossipNetwork {
     connected_rx: watch::Receiver<Vec<[u8; 32]>>,
     shutdown: CancellationToken,
     listen_addrs: Vec<Multiaddr>,
@@ -77,7 +78,7 @@ impl TxPublisher {
     }
 }
 
-impl Libp2pNetwork {
+impl GossipNetwork {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
     /// bootstrap peers, and spawns the drive task. Fails fast on a bad
     /// listen/bootstrap multiaddr or bind failure; after that, gossip errors
@@ -85,12 +86,15 @@ impl Libp2pNetwork {
     pub async fn start(
         config: GossipConfig,
         channel_id: [u8; 32],
-        secret_key: [u8; 32],
+        signing_key: Ed25519Key,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
     ) -> Result<Self> {
-        let mut secret_for_libp2p = secret_key;
-        let keypair = Keypair::ed25519_from_bytes(&mut secret_for_libp2p)
+        // Reuse the node's L1 bedrock signing key as the libp2p identity. The
+        // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
+        // and drop wipe.
+        let mut secret = signing_key.into_unsecured().to_bytes();
+        let keypair = Keypair::ed25519_from_bytes(&mut *secret)
             .map_err(|err| anyhow!("Invalid bedrock signing key for libp2p identity: {err}"))?;
         let local_peer_id = keypair.public().to_peer_id();
 
@@ -249,7 +253,7 @@ impl Libp2pNetwork {
     }
 }
 
-impl PeerNetworkTrait for Libp2pNetwork {
+impl PeerNetworkTrait for GossipNetwork {
     fn connected_peers(&self) -> Vec<[u8; 32]> {
         self.connected_rx.borrow().clone()
     }
@@ -259,7 +263,7 @@ impl PeerNetworkTrait for Libp2pNetwork {
     }
 }
 
-impl Drop for Libp2pNetwork {
+impl Drop for GossipNetwork {
     fn drop(&mut self) {
         self.shutdown.cancel();
     }
@@ -559,10 +563,10 @@ mod tests {
 
     #[tokio::test]
     async fn start_binds_and_reports_listen_addr() {
-        let network = Libp2pNetwork::start(
+        let network = GossipNetwork::start(
             test_config(),
             [1; 32],
-            [9; 32],
+            Ed25519Key::from_bytes(&[9; 32]),
             test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
         )
@@ -581,10 +585,10 @@ mod tests {
             ..test_config()
         };
         assert!(
-            Libp2pNetwork::start(
+            GossipNetwork::start(
                 config,
                 [1; 32],
-                [9; 32],
+                Ed25519Key::from_bytes(&[9; 32]),
                 test_mempool_handle(),
                 TEST_MAX_BLOCK_SIZE
             )
@@ -600,10 +604,10 @@ mod tests {
             ..test_config()
         };
         assert!(
-            Libp2pNetwork::start(
+            GossipNetwork::start(
                 config,
                 [1; 32],
-                [9; 32],
+                Ed25519Key::from_bytes(&[9; 32]),
                 test_mempool_handle(),
                 TEST_MAX_BLOCK_SIZE
             )
@@ -614,10 +618,10 @@ mod tests {
 
     #[tokio::test]
     async fn drop_cancels_driver() {
-        let network = Libp2pNetwork::start(
+        let network = GossipNetwork::start(
             test_config(),
             [1; 32],
-            [9; 32],
+            Ed25519Key::from_bytes(&[9; 32]),
             test_mempool_handle(),
             TEST_MAX_BLOCK_SIZE,
         )

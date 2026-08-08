@@ -23,7 +23,7 @@ pub struct SequencerService<BC: BlockPublisherTrait> {
     sequencer: Arc<Mutex<SequencerCore<BC>>>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     max_block_size: u64,
-    tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
+    gossip_tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
 }
 
 impl<BC: BlockPublisherTrait> SequencerService<BC> {
@@ -31,13 +31,13 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
         sequencer: Arc<Mutex<SequencerCore<BC>>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
         max_block_size: u64,
-        tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
+        gossip_tx_publisher: Option<sequencer_core::gossip::network::TxPublisher>,
     ) -> Self {
         Self {
             sequencer,
             mempool_handle,
             max_block_size,
-            tx_publisher,
+            gossip_tx_publisher,
         }
     }
 }
@@ -105,11 +105,13 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         })?;
 
         // Publish to the gossip mesh before the (blocking) local mempool push so
-        // a full mempool doesn't delay propagation. Fire-and-forget; the clone
-        // only happens when gossip is enabled.
-        if let Some(publisher) = &self.tx_publisher {
+        // a full mempool doesn't delay propagation.
+        //
+        // TODO: may change with actor-based mempool
+        if let Some(publisher) = &self.gossip_tx_publisher {
             publisher.publish(authenticated_tx.clone());
         }
+
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
             .await

@@ -15,6 +15,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::{
     TransactionOrigin,
     block_publisher::BlockPublisherTrait as _,
+    load_or_create_signing_key,
     task_group::{StoreRelease, TaskGroup},
 };
 use sequencer_service_rpc::RpcServer as _;
@@ -43,9 +44,13 @@ pub struct SequencerHandle {
     /// handle stops, so watching the count go to zero is how shutdown knows the
     /// database file is actually closed rather than assuming it from drop order.
     store: StoreRelease,
-    /// Held for its lifetime: dropping it aborts the gossip drive task. `None`
-    /// when gossip is unconfigured.
-    _gossip_network: Option<sequencer_core::gossip::Libp2pNetwork>,
+    /// Held for its lifetime: dropping it stops the gossip drive task.
+    /// `None` when gossip is unconfigured.
+    #[expect(
+        dead_code,
+        reason = "never read; kept alive so drop stops the gossip driver"
+    )]
+    gossip: Option<sequencer_core::gossip::GossipNetwork>,
 }
 
 impl SequencerHandle {
@@ -56,7 +61,7 @@ impl SequencerHandle {
         driver_cancellation: CancellationToken,
         background_tasks: Vec<TaskGroup>,
         store: StoreRelease,
-        gossip_network: Option<sequencer_core::gossip::Libp2pNetwork>,
+        gossip: Option<sequencer_core::gossip::GossipNetwork>,
     ) -> Self {
         Self {
             addr,
@@ -65,7 +70,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks,
             store,
-            _gossip_network: gossip_network,
+            gossip,
         }
     }
 
@@ -118,7 +123,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks: _,
             store: _,
-            _gossip_network: _,
+            gossip: _,
         } = self;
 
         // Cloned rather than taken: `stopped()` consumes a handle, and taking
@@ -152,7 +157,7 @@ impl SequencerHandle {
             driver_cancellation,
             background_tasks,
             store: _,
-            _gossip_network: _,
+            gossip: _,
         } = self;
 
         let stopped = server_handle.is_stopped()
@@ -179,7 +184,7 @@ impl Drop for SequencerHandle {
             driver_cancellation: _,
             background_tasks: _,
             store: _,
-            _gossip_network: _,
+            gossip: _,
         } = self;
 
         main_loop_handle.abort();
@@ -240,27 +245,14 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let gossip_network = match gossip_config {
         None => None,
         Some(gossip_config) => {
-            // On-disk format matches `sequencer_core::load_or_create_signing_key`
-            // (raw 32-byte secret). `Ed25519Key` has no accessor for the raw
-            // secret outside the `unsafe` feature, and `Libp2pNetwork::start`
-            // needs it directly, so this reads the file itself rather than
-            // going through the KMS type. The node's L1 bedrock signing key is
-            // deliberately reused as the libp2p identity.
-            let key_path = sequencer_home.join("bedrock_signing_key");
-            let secret: [u8; 32] = std::fs::read(&key_path)
-                .with_context(|| format!("Failed to read {}", key_path.display()))?
-                .try_into()
-                .map_err(|bytes: Vec<u8>| {
-                    anyhow!(
-                        "Bedrock signing key has incorrect length: expected 32 bytes, got {}",
-                        bytes.len()
-                    )
-                })?;
+            // The node's L1 bedrock signing key is deliberately reused as the
+            // libp2p identity; `GossipNetwork::start` derives the keypair.
+            let signing_key = load_or_create_signing_key(&sequencer_home)?;
             let channel_id = *bedrock_config.channel_id.as_ref();
-            let network = sequencer_core::gossip::Libp2pNetwork::start(
+            let network = sequencer_core::gossip::GossipNetwork::start(
                 gossip_config,
                 channel_id,
-                secret,
+                signing_key,
                 mempool_handle.clone(),
                 max_block_size.as_u64(),
             )
@@ -272,7 +264,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     };
     let tx_publisher = gossip_network
         .as_ref()
-        .map(sequencer_core::gossip::Libp2pNetwork::tx_publisher);
+        .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
 
     let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
     // Taken while the core is still owned here: once it is behind the `Arc`
