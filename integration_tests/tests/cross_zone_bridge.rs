@@ -163,7 +163,12 @@ fn build_lock_tx(
     let accounts = vec![
         holder_id,
         bridge_lock_core::escrow_account_id(bridge_lock_id),
-        outbox_pda(outbox_id, &target_zone, ordinal),
+        outbox_pda(
+            outbox_id,
+            programs::bridge_lock().id(),
+            &target_zone,
+            ordinal,
+        ),
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0.
     let message = Message::try_new(bridge_lock_id, accounts, vec![0_u128.into()], lock)

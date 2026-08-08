@@ -495,7 +495,12 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         ordinal,
     };
 
-    let outbox_account = outbox_pda(outbox_id, &other_zone, ordinal);
+    let outbox_account = outbox_pda(
+        outbox_id,
+        programs::ping_sender().id(),
+        &other_zone,
+        ordinal,
+    );
     let message = Message::try_new(
         programs::ping_sender().id(),
         vec![outbox_account],

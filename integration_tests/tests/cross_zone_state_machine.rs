@@ -35,6 +35,7 @@ fn base_state() -> V03State {
     V03State::new().with_programs([
         programs::cross_zone_inbox(),
         programs::cross_zone_outbox(),
+        programs::ping_sender(),
         programs::ping_receiver(),
         programs::bridge_lock(),
         programs::wrapped_token(),
@@ -276,7 +277,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     };
 
     let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
-    let outbox_record_id = outbox_pda(outbox_id, &zone_b, ordinal);
+    let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
     let message = Message::try_new(
         bridge_lock_id,
         vec![holder_id, escrow_id, outbox_record_id],
@@ -304,12 +305,171 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     let record =
         OutboxRecord::from_bytes(&public_diff[&outbox_record_id].data.clone().into_inner())
             .expect("outbox PDA holds an OutboxRecord");
+    assert_eq!(
+        record.emitter, bridge_lock_id,
+        "the record names the program that emitted it"
+    );
     assert_eq!(record.target_zone, zone_b);
+    assert_eq!(record.ordinal, ordinal);
     assert_eq!(record.target_program_id, wrapped_token_id);
     assert_eq!(
         record.payload, payload,
         "emitted payload is the wrapped mint"
     );
+}
+
+/// A `bridge_lock::Lock` emitting to `(zone_b, ordinal)`, ready to run twice.
+fn lock_tx(
+    holder_key: &PrivateKey,
+    holder_id: AccountId,
+    zone_b: [u8; 32],
+    ordinal: u32,
+    nonce: u128,
+) -> PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let outbox_id = programs::cross_zone_outbox().id();
+
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: vec![
+            wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+        ],
+        payload: mint_payload(),
+        outbox_program_id: outbox_id,
+        ordinal,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            holder_id,
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+        ],
+        vec![nonce.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let witness = WitnessSet::for_message(&message, &[holder_key]);
+    PublicTransaction::new(message, witness)
+}
+
+/// A slot holds one message for ever, so a second emission into it fails rather
+/// than replacing the record. Without this a later emitter silently destroys an
+/// earlier one, and for a bridge that means an escrow with no record of what it
+/// was for.
+#[test]
+fn a_second_emit_at_the_same_slot_is_rejected() {
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            program_owner: programs::bridge_lock().id(),
+            balance: INITIAL_BALANCE,
+            ..Default::default()
+        },
+    )]);
+
+    let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
+        .expect("the first lock executes");
+    state.apply_state_diff(diff);
+
+    // Same slot, fresh nonce, so the only thing that can reject it is the slot
+    // already holding a record. Matched on the guest's own message rather than
+    // any error, or a future change that rejected it earlier for an unrelated
+    // reason would keep this passing.
+    let second = lock_tx(&holder_key, holder_id, zone_b, ordinal, 1);
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&second, &state, 2, 0) else {
+        panic!("a second emission into a written slot must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("Outbox slot already written"),
+        "rejected for the wrong reason: {err:?}"
+    );
+
+    // Control: the same second lock into a fresh ordinal executes, so the
+    // refusal above is the slot and not the transaction's shape.
+    let elsewhere = lock_tx(&holder_key, holder_id, zone_b, ordinal + 1, 1);
+    ValidatedStateDiff::from_public_transaction(&elsewhere, &state, 2, 0)
+        .expect("a lock into an unwritten slot executes");
+}
+
+/// Two programs emitting to one zone and ordinal address two different slots,
+/// so neither can overwrite or block the other.
+#[test]
+fn two_emitters_share_an_ordinal_without_colliding() {
+    let outbox_id = programs::cross_zone_outbox().id();
+    let sender_id = programs::ping_sender().id();
+    let bridge_lock_id = programs::bridge_lock().id();
+    let receiver_id = programs::ping_receiver().id();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            program_owner: bridge_lock_id,
+            balance: INITIAL_BALANCE,
+            ..Default::default()
+        },
+    )]);
+
+    let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
+    let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    assert_ne!(
+        lock_slot, send_slot,
+        "the same zone and ordinal under two emitters are two slots"
+    );
+
+    let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
+        .expect("the lock executes");
+    state.apply_state_diff(diff);
+
+    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let send = ping_core::SenderInstruction::Send {
+        outbox_program_id: outbox_id,
+        target_zone: zone_b,
+        target_program_id: receiver_id,
+        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        ordinal,
+    };
+    let message = Message::try_new(sender_id, vec![send_slot], vec![], send)
+        .expect("build ping_sender message");
+    let send_tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let send_diff = ValidatedStateDiff::from_public_transaction(&send_tx, &state, 2, 0)
+        .expect("the send executes into its own slot, not the lock's");
+
+    let record = OutboxRecord::from_bytes(
+        &send_diff.public_diff()[&send_slot]
+            .data
+            .clone()
+            .into_inner(),
+    )
+    .expect("outbox PDA holds an OutboxRecord");
+    assert_eq!(record.emitter, sender_id);
+    assert_eq!(record.target_program_id, receiver_id);
+
+    // And the lock's own slot is untouched by it.
+    let lock_record =
+        OutboxRecord::from_bytes(&state.get_account_by_id(lock_slot).data.into_inner())
+            .expect("the lock's record survives");
+    assert_eq!(lock_record.emitter, bridge_lock_id);
 }
 
 /// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)

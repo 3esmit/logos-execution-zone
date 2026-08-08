@@ -198,7 +198,12 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         ordinal,
     };
 
-    let outbox_account = outbox_pda(outbox_id, &target_zone, ordinal);
+    let outbox_account = outbox_pda(
+        outbox_id,
+        programs::ping_sender().id(),
+        &target_zone,
+        ordinal,
+    );
     let message = Message::try_new(
         programs::ping_sender().id(),
         vec![outbox_account],
