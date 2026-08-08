@@ -68,9 +68,11 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Sequencer own signing key.
     pub signing_key: [u8; 32],
-    /// LEZ account holding this sequencer's genesis stake. The operator must
-    /// hold its key to top up or unstake.
-    pub sequencer_stake_account_id: AccountId,
+    /// Signing key of the LEZ account backing this sequencer's genesis stake.
+    /// Needed to sign the genesis `Stake` transaction, so top-up/unstake later
+    /// use the same account.
+    // TODO: move out of the config file and into its own file, like `signing_key`.
+    pub sequencer_stake_signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
     /// Genesis configuration.

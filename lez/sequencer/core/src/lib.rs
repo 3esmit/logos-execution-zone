@@ -201,7 +201,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         config: &SequencerConfig,
         store: &SequencerStore,
         stored_head_state: &lee::V03State,
-        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
     ) -> ChainState {
         let final_snapshot = store
             .dbio()
@@ -210,7 +209,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (build_initial_state(config, bootstrap_sequencer_key), None),
+            None => (build_initial_state(config), None),
         };
         let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);
 
@@ -269,12 +268,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
 
-        let chain = Arc::new(Mutex::new(Self::restore_chain_state(
-            &config,
-            &store,
-            &state,
-            bootstrap_sequencer_key,
-        )));
+        let chain = Arc::new(Mutex::new(Self::restore_chain_state(&config, &store, &state)));
 
         let initial_checkpoint = store
             .get_zone_checkpoint()
@@ -1639,14 +1633,11 @@ fn apply_follow_update(
     }
 }
 
-/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock
-/// holdings, and the bootstrap sequencer's own stake if `bootstrap_sequencer_key`
-/// is set (this node is starting a new channel). `None` means the channel
-/// already exists and this node will self-join later instead.
-fn build_initial_state(
-    config: &SequencerConfig,
-    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
-) -> lee::V03State {
+/// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
+/// the only accounts seeded outside any transaction. Everything else, including
+/// the bootstrap sequencer's own stake, is applied as a genesis transaction in
+/// [`build_genesis_state`] so followers replay it instead of guessing it.
+fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
 
@@ -1658,29 +1649,7 @@ fn build_initial_state(
     // InitConfig transactions in `build_genesis_state`, not here.
     let holdings = bridge_lock_holdings(&config.genesis)
         .map(|(holder, amount)| cross_zone::build_holding_account(holder, amount));
-    // Replaces the base state's (entries-empty) config account with one that
-    // also carries the bootstrap sequencer's own entry — `with_public_accounts`
-    // overwrites on a matching account id.
-    let bootstrap_accounts = bootstrap_sequencer_key.into_iter().flat_map(|key| {
-        [
-            (
-                config.sequencer_stake_account_id,
-                system_accounts::sequencer_stake_bootstrap_account(key),
-            ),
-            (
-                system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::from(
-                    [(
-                        key,
-                        system_accounts::sequencer_stake_bootstrap_entry(
-                            config.sequencer_stake_account_id,
-                        ),
-                    )],
-                )),
-            ),
-        ]
-    });
-    base.with_public_accounts(holdings.chain(bootstrap_accounts))
+    base.with_public_accounts(holdings)
 }
 
 /// Builds the initial genesis state from [`build_initial_state`] plus configured
@@ -1691,7 +1660,7 @@ fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
-    let mut state = build_initial_state(config, bootstrap_sequencer_key);
+    let mut state = build_initial_state(config);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
     log::info!(
@@ -1733,6 +1702,9 @@ fn build_genesis_state(
         // genesis tx.
         GenesisAction::SupplyBridgeLockHolding { .. } => None,
     });
+    let bootstrap_stake_txs = bootstrap_sequencer_key.into_iter().flat_map(|key| {
+        build_bootstrap_stake_genesis_transactions(key, config.sequencer_stake_signing_key)
+    });
 
     let genesis_txs = wrapped_token_config_tx
         .chain(ping_sender_config_tx)
@@ -1740,6 +1712,7 @@ fn build_genesis_state(
         .chain(bridge_lock_config_tx)
         .chain(inbox_config_tx)
         .chain(supply_txs)
+        .chain(bootstrap_stake_txs)
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -1750,6 +1723,71 @@ fn build_genesis_state(
         .collect();
 
     (state, genesis_txs)
+}
+
+/// Fixed, public key behind a genesis-only funding account: the faucet can
+/// only be called top-level, not as `Stake`'s mover, so this account is a
+/// pass-through that receives faucet funds and then moves them into the real
+/// stake account. Not a secret: every node derives the same account, and it
+/// holds nothing once genesis has run.
+// TODO: replace the faucet pass-through with a real deposit from Bedrock,
+// once that path exists, instead of a fixed genesis-only key.
+const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
+
+/// The bootstrap sequencer's own `Stake`, funded via the faucet and signed
+/// with `stake_signing_key` so a later top-up/unstake use the same account.
+/// Real transactions, not raw state, so followers replay them instead of
+/// missing them.
+fn build_bootstrap_stake_genesis_transactions(
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    stake_signing_key: [u8; 32],
+) -> [PublicTransaction; 2] {
+    let stake_key = lee::PrivateKey::try_new(stake_signing_key).unwrap();
+    let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(&stake_key));
+    let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
+    let funding_id = AccountId::from(&lee::PublicKey::new_from_private_key(&funding_key));
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+
+    let fund_message = Message::try_new(
+        programs::faucet().id(),
+        vec![system_accounts::faucet_account_id(), funding_id],
+        vec![lee_core::account::Nonce(0)],
+        faucet_core::Instruction::GenesisTransferDirect { amount },
+    )
+    .expect("Failed to build genesis funding message");
+    let fund_witness_set =
+        lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
+    let fund_tx = PublicTransaction::new(fund_message, fund_witness_set);
+
+    let mover_instruction_data = lee::program::Program::serialize_instruction(
+        authenticated_transfer_core::Instruction::Transfer { amount },
+    )
+    .expect("Failed to serialize genesis mover instruction");
+    let stake_message = Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            funding_id,
+            ownership_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        // funding_key already signed fund_tx above, so it's at nonce 1; stake_key
+        // signs for the first time here, still at nonce 0.
+        vec![lee_core::account::Nonce(1), lee_core::account::Nonce(0)],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key,
+            amount,
+            mover_program_id: programs::authenticated_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .expect("Failed to build genesis Stake message");
+    let stake_witness_set = lee::public_transaction::WitnessSet::for_message(
+        &stake_message,
+        &[&funding_key, &stake_key],
+    );
+    let stake_tx = PublicTransaction::new(stake_message, stake_witness_set);
+
+    [fund_tx, stake_tx]
 }
 
 /// Bridge-lock holder balances configured for this zone's genesis.

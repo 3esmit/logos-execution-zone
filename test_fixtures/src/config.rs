@@ -99,13 +99,6 @@ impl Default for MultiNodeTestContextConfig {
     }
 }
 
-#[must_use]
-pub fn sequencer_stake_account_id() -> AccountId {
-    let private_key =
-        PrivateKey::try_new(SEQUENCER_STAKE_KEY).expect("Fixed sequencer stake key must be valid");
-    AccountId::from(&PublicKey::new_from_private_key(&private_key))
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "All fields are necessary and better to keep separate"
@@ -137,7 +130,7 @@ pub fn sequencer_config(
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
         signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
-        sequencer_stake_account_id: sequencer_stake_account_id(),
+        sequencer_stake_signing_key: SEQUENCER_STAKE_KEY,
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)

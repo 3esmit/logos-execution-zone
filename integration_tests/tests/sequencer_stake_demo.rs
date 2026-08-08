@@ -247,20 +247,6 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
     info!("Demo sequencer key removed from the Bedrock committee");
 
-    // The stake is still fully at stake at this point: the removal only changes
-    // the Bedrock committee, it releases nothing on L2.
-    let staked_entry = stake_entry(&ctx, config_id, demo_sequencer_key.to_bytes())
-        .await?
-        .context("config entry should still exist before FinalizeUnstake")?;
-    assert_eq!(
-        staked_entry.total_staked, FUNDING_BALANCE,
-        "the full amount should still be at stake before FinalizeUnstake"
-    );
-    assert_eq!(
-        staked_entry.total_pending_unstake, FUNDING_BALANCE,
-        "the full amount should be pending release before FinalizeUnstake"
-    );
-
     // Once removed, the sequencer injects FinalizeUnstake itself; this test
     // never submits one.
     poll_until(

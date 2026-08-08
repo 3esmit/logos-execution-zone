@@ -74,59 +74,20 @@ pub fn sequencer_stake_config_account_id() -> AccountId {
     sequencer_stake_core::sequencer_stake_config_account_id(programs::sequencer_stake().id())
 }
 
-/// `entries` is empty in the shared base state (no sequencer key is known there).
-///
-/// A running sequencer's `build_initial_state` replaces this account with one
-/// whose `entries` map also carries the bootstrap sequencer's own entry,
-/// alongside seeding [`sequencer_stake_bootstrap_account`].
+/// Starts with no entries; every stake, including the bootstrap sequencer's
+/// own, is added by replaying a `Stake` transaction, not seeded here.
 #[must_use]
-pub fn sequencer_stake_config_account(
-    entries: BTreeMap<sequencer_stake_core::SequencerKey, sequencer_stake_core::SequencerEntry>,
-) -> Account {
+pub fn sequencer_stake_config_account() -> Account {
     Account {
         program_owner: programs::sequencer_stake().id(),
         data: sequencer_stake_core::SequencerStakeConfig {
             minimum_sequencer_stake: DEFAULT_MINIMUM_SEQUENCER_STAKE,
-            entries,
+            entries: BTreeMap::new(),
         }
         .to_bytes()
         .try_into()
         .expect("sequencer stake config data should fit"),
         ..Account::default()
-    }
-}
-
-/// Genesis stake for the sequencer that bootstraps the channel.
-///
-/// Seeded at the LEZ account named in the sequencer's config, so the operator
-/// can sign for it.
-#[must_use]
-pub fn sequencer_stake_bootstrap_account(
-    sequencer_key: sequencer_stake_core::SequencerKey,
-) -> Account {
-    Account {
-        program_owner: programs::sequencer_stake().id(),
-        balance: DEFAULT_MINIMUM_SEQUENCER_STAKE,
-        data: sequencer_stake_core::StakeRecord {
-            sequencer_key,
-            pending_unstake: None,
-        }
-        .to_bytes()
-        .try_into()
-        .expect("stake record should fit"),
-        ..Account::default()
-    }
-}
-
-/// The config-account entry backing [`sequencer_stake_bootstrap_account`].
-#[must_use]
-pub const fn sequencer_stake_bootstrap_entry(
-    account_id: AccountId,
-) -> sequencer_stake_core::SequencerEntry {
-    sequencer_stake_core::SequencerEntry {
-        account_id,
-        total_staked: DEFAULT_MINIMUM_SEQUENCER_STAKE,
-        total_pending_unstake: 0,
     }
 }
 

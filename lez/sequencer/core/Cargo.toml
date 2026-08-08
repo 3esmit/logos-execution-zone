@@ -18,6 +18,7 @@ mempool.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
 faucet_core.workspace = true
+authenticated_transfer_core.workspace = true
 bridge_core.workspace = true
 vault_core.workspace = true
 programs.workspace = true
@@ -64,4 +65,3 @@ lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
 token_core.workspace = true
 ping_core.workspace = true
-authenticated_transfer_core.workspace = true

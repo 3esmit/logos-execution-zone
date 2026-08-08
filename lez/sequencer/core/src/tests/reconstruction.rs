@@ -24,10 +24,7 @@ fn fresh_store_and_chain(config: &SequencerConfig) -> (SequencerStore, Mutex<Cha
     let (store, state) =
         SequencerCore::<MockBlockPublisher>::open_or_create_store(config, bootstrap_sequencer_key);
     let chain = Mutex::new(SequencerCore::<MockBlockPublisher>::restore_chain_state(
-        config,
-        &store,
-        &state,
-        bootstrap_sequencer_key,
+        config, &store, &state,
     ));
     (store, chain)
 }

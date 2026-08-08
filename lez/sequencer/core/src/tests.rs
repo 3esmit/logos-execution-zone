@@ -36,7 +36,7 @@ use crate::{
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
-    build_initial_state, classify_settled_deliveries,
+    classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
         SequencerConfig,
@@ -104,7 +104,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
         signing_key: *sequencer_sign_key_for_testing().value(),
-        sequencer_stake_account_id: bootstrap_stake_account_id(),
+        sequencer_stake_signing_key: *bootstrap_stake_key().value(),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -2931,7 +2931,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
             ),
             (
                 config_id,
-                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+                system_accounts::sequencer_stake_config_account(),
             ),
         ]);
 
@@ -3052,7 +3052,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
             ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+                system_accounts::sequencer_stake_config_account(),
             ),
         ])
 }
@@ -3281,7 +3281,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
             ),
             (
                 system_accounts::sequencer_stake_config_account_id(),
-                system_accounts::sequencer_stake_config_account(std::collections::BTreeMap::new()),
+                system_accounts::sequencer_stake_config_account(),
             ),
         ]);
 
@@ -3366,9 +3366,9 @@ fn a_fully_exited_ownership_account_can_stake_again() {
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let state = build_initial_state(&config, Some(bootstrap_sequencer_key));
+    let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
-    let stake_account = state.get_account_by_id(config.sequencer_stake_account_id);
+    let stake_account = state.get_account_by_id(bootstrap_stake_account_id());
     assert_eq!(
         stake_account.program_owner,
         programs::sequencer_stake().id()
@@ -3387,7 +3387,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     .expect("genesis config account should decode");
     assert_eq!(
         stake_config.entries[&bootstrap_sequencer_key].account_id,
-        config.sequencer_stake_account_id
+        bootstrap_stake_account_id()
     );
 }
 
@@ -3397,9 +3397,9 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
-    let mut state = build_initial_state(&config, Some(bootstrap_sequencer_key));
+    let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
-    let stake_id = config.sequencer_stake_account_id;
+    let stake_id = bootstrap_stake_account_id();
     let destination = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([56; 32]).unwrap(),
     ));
@@ -3410,7 +3410,8 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
             stake_id,
             system_accounts::sequencer_stake_config_account_id(),
         ],
-        vec![Nonce(0)],
+        // The genesis Stake transaction already signed once with this account.
+        vec![Nonce(1)],
         sequencer_stake_core::Instruction::UnstakeRequest {
             amount: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
             destination,
