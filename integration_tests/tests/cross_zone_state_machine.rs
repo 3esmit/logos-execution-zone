@@ -113,6 +113,26 @@ fn seed_ping_sender_config(state: &mut V03State) {
     )]);
 }
 
+/// Seeds the bridge-lock config account pinning the real outbox and the wrapped
+/// token, matching what genesis seeds for a real zone.
+fn seed_bridge_lock_config(state: &mut V03State) {
+    let bridge_lock_id = programs::bridge_lock().id();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        bridge_lock_core::config_account_id(bridge_lock_id),
+        Account {
+            program_owner: bridge_lock_id,
+            data: bridge_lock_core::config_bytes(
+                programs::cross_zone_outbox().id(),
+                programs::wrapped_token().id(),
+            )
+            .to_vec()
+            .try_into()
+            .expect("pinned ids fit in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
@@ -299,33 +319,12 @@ fn lock_escrows_balance_and_emits_to_outbox() {
             ..Default::default()
         },
     )]);
+    seed_bridge_lock_config(&mut state);
 
     let payload = mint_payload();
-    let target_accounts = vec![
-        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
-    ];
-    let lock = bridge_lock_core::Instruction::Lock {
-        amount: LOCK_AMOUNT,
-        target_zone: zone_b,
-        target_program_id: wrapped_token_id,
-        target_accounts,
-        payload: payload.clone(),
-        outbox_program_id: outbox_id,
-        ordinal,
-    };
-
     let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
     let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
-    let message = Message::try_new(
-        bridge_lock_id,
-        vec![holder_id, escrow_id, outbox_record_id],
-        vec![0_u128.into()],
-        lock,
-    )
-    .expect("build lock message");
-    let witness = WitnessSet::for_message(&message, &[&holder_key]);
-    let tx = PublicTransaction::new(message, witness);
+    let tx = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("lock must validate and execute");
@@ -365,25 +364,53 @@ fn lock_tx(
     ordinal: u32,
     nonce: u128,
 ) -> PublicTransaction {
-    let bridge_lock_id = programs::bridge_lock().id();
     let wrapped_token_id = programs::wrapped_token().id();
+    lock_tx_to(
+        holder_key,
+        holder_id,
+        zone_b,
+        ordinal,
+        nonce,
+        wrapped_token_id,
+        mint_target_accounts(wrapped_token_id),
+    )
+}
+
+/// The mint's own account list: the wrapped-token config, then the recipient's
+/// holding. What `wrapped_token::Mint` requires on the destination zone.
+fn mint_target_accounts(wrapped_token_id: lee_core::program::ProgramId) -> Vec<[u8; 32]> {
+    vec![
+        wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+        wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
+    ]
+}
+
+/// The same lock aimed at `target_program_id` over `target_accounts`, so a test
+/// can vary what the destination would be asked to do.
+fn lock_tx_to(
+    holder_key: &PrivateKey,
+    holder_id: AccountId,
+    zone_b: [u8; 32],
+    ordinal: u32,
+    nonce: u128,
+    target_program_id: lee_core::program::ProgramId,
+    target_accounts: Vec<[u8; 32]>,
+) -> PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
     let outbox_id = programs::cross_zone_outbox().id();
 
     let lock = bridge_lock_core::Instruction::Lock {
         amount: LOCK_AMOUNT,
         target_zone: zone_b,
-        target_program_id: wrapped_token_id,
-        target_accounts: vec![
-            wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
-            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT).into_value(),
-        ],
+        target_program_id,
+        target_accounts,
         payload: mint_payload(),
-        outbox_program_id: outbox_id,
         ordinal,
     };
     let message = Message::try_new(
         bridge_lock_id,
         vec![
+            bridge_lock_core::config_account_id(bridge_lock_id),
             holder_id,
             bridge_lock_core::escrow_account_id(bridge_lock_id),
             outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
@@ -415,6 +442,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
             ..Default::default()
         },
     )]);
+    seed_bridge_lock_config(&mut state);
 
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
@@ -463,6 +491,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
         },
     )]);
     seed_ping_sender_config(&mut state);
+    seed_bridge_lock_config(&mut state);
 
     let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
     let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
@@ -531,6 +560,265 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
         format!("{err:?}").contains("Account must be the outbox PDA"),
         "rejected for the wrong reason: {err:?}"
     );
+}
+
+/// Nothing releases an escrow, so a message the destination will refuse is a
+/// burn: debited here, never minted there. The refusal has to come before the
+/// debit.
+#[test]
+fn a_lock_naming_another_target_program_is_rejected() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            program_owner: bridge_lock_id,
+            balance: INITIAL_BALANCE,
+            ..Default::default()
+        },
+    )]);
+    seed_bridge_lock_config(&mut state);
+
+    let elsewhere = programs::ping_receiver().id();
+    let lock = lock_tx_to(
+        &holder_key,
+        holder_id,
+        zone_b,
+        0,
+        0,
+        elsewhere,
+        mint_target_accounts(elsewhere),
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock aimed at another program must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("only mints through the wrapped token it is pinned to"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        state.get_account_by_id(holder_id).balance,
+        INITIAL_BALANCE,
+        "a refused lock leaves the holder's balance alone"
+    );
+}
+
+/// The same burn by a different route: the right target program, the wrong
+/// accounts for it. `wrapped_token::Mint` fails its own address asserts on the
+/// destination, so the escrow has to be refused here instead.
+#[test]
+fn a_lock_naming_other_mint_accounts_is_rejected() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let mut state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            program_owner: bridge_lock_id,
+            balance: INITIAL_BALANCE,
+            ..Default::default()
+        },
+    )]);
+    seed_bridge_lock_config(&mut state);
+
+    // A holding under someone other than the payload's recipient: a mint the
+    // destination would credit to the wrong account if it credited it at all.
+    let other_holding =
+        wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]).into_value();
+    let lock = lock_tx_to(
+        &holder_key,
+        holder_id,
+        zone_b,
+        0,
+        0,
+        wrapped_token_id,
+        vec![
+            wrapped_token_core::config_account_id(wrapped_token_id).into_value(),
+            other_holding,
+        ],
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock over the wrong mint accounts must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("target accounts must be the mint's config"),
+        "rejected for the wrong reason: {err:?}"
+    );
+    assert_eq!(
+        state.get_account_by_id(holder_id).balance,
+        INITIAL_BALANCE,
+        "a refused lock leaves the holder's balance alone"
+    );
+}
+
+/// The config is read by address, so substituting another account for it fails
+/// rather than reading the pins out of whatever that account holds. Without the
+/// address check, 64 bytes a caller controls would re-pin both for one lock.
+#[test]
+fn a_lock_with_a_substituted_config_account_is_rejected() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let outbox_id = programs::cross_zone_outbox().id();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    // A bridge-lock-owned account holding pins of the caller's choosing, so only
+    // the address check stands between it and being read as the config.
+    let decoy_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let decoy_id = AccountId::from(&PublicKey::new_from_private_key(&decoy_key));
+    let mut state = base_state().with_public_accounts([
+        (
+            holder_id,
+            Account {
+                program_owner: bridge_lock_id,
+                balance: INITIAL_BALANCE,
+                ..Default::default()
+            },
+        ),
+        (
+            decoy_id,
+            Account {
+                program_owner: bridge_lock_id,
+                data: bridge_lock_core::config_bytes([3; 8], [4; 8])
+                    .to_vec()
+                    .try_into()
+                    .expect("pinned ids fit in account data"),
+                ..Default::default()
+            },
+        ),
+    ]);
+    seed_bridge_lock_config(&mut state);
+
+    let lock = bridge_lock_core::Instruction::Lock {
+        amount: LOCK_AMOUNT,
+        target_zone: zone_b,
+        target_program_id: wrapped_token_id,
+        target_accounts: mint_target_accounts(wrapped_token_id),
+        payload: mint_payload(),
+        ordinal,
+    };
+    let message = Message::try_new(
+        bridge_lock_id,
+        vec![
+            decoy_id,
+            holder_id,
+            bridge_lock_core::escrow_account_id(bridge_lock_id),
+            outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal),
+        ],
+        vec![0_u128.into()],
+        lock,
+    )
+    .expect("build lock message");
+    let tx = PublicTransaction::new(
+        message.clone(),
+        WitnessSet::for_message(&message, &[&holder_key]),
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a lock over a substituted config account must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the bridge-lock config PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// A bridge with no pin cannot fall back to caller-named programs: it stops
+/// locking. The state a zone reaches by skipping the genesis init.
+#[test]
+fn a_lock_before_the_pins_are_set_is_rejected() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let zone_b = [2_u8; 32];
+
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let state = base_state().with_public_accounts([(
+        holder_id,
+        Account {
+            program_owner: bridge_lock_id,
+            balance: INITIAL_BALANCE,
+            ..Default::default()
+        },
+    )]);
+
+    let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
+        panic!("a lock with nothing pinned must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("config account holds an outbox and a mint target"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Written once, on the same terms as the sender's: an identical re-init is the
+/// genesis replay, a different one would redirect every lock on the zone.
+#[test]
+fn the_bridge_pins_are_written_once_and_replayable() {
+    let bridge_lock_id = programs::bridge_lock().id();
+    let config_id = bridge_lock_core::config_account_id(bridge_lock_id);
+    let outbox_id = programs::cross_zone_outbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+
+    let init = |outbox: lee_core::program::ProgramId, target: lee_core::program::ProgramId| {
+        let message = Message::try_new(
+            bridge_lock_id,
+            vec![config_id],
+            vec![],
+            bridge_lock_core::Instruction::InitConfig {
+                outbox_program_id: outbox,
+                target_program_id: target,
+            },
+        )
+        .expect("build InitConfig message");
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    };
+
+    let mut state = base_state();
+
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &init(outbox_id, wrapped_token_id),
+        &state,
+        1,
+        0,
+    )
+    .expect("the first init claims the config PDA");
+    state.apply_state_diff(diff);
+    assert_eq!(
+        bridge_lock_core::read_config(&state.get_account_by_id(config_id).data.into_inner()),
+        Some((outbox_id, wrapped_token_id)),
+        "the config pins both programs after genesis"
+    );
+
+    ValidatedStateDiff::from_public_transaction(&init(outbox_id, wrapped_token_id), &state, 2, 0)
+        .expect("replaying the identical init is a no-op, not a failure");
+
+    // Either half moving is a redirect: the outbox decides whether the emission is
+    // recorded, the target where the value lands.
+    for (outbox, target, what) in [
+        ([3; 8], wrapped_token_id, "outbox"),
+        (outbox_id, [3; 8], "mint target"),
+    ] {
+        let Err(err) =
+            ValidatedStateDiff::from_public_transaction(&init(outbox, target), &state, 3, 0)
+        else {
+            panic!("a re-init naming a different {what} must not execute");
+        };
+        assert!(
+            format!("{err:?}").contains("already pins a different outbox or mint target"),
+            "rejected for the wrong reason: {err:?}"
+        );
+    }
 }
 
 /// An emitter with no pin cannot fall back to a caller-named outbox: it stops

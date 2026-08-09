@@ -83,13 +83,16 @@ pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Opti
             payload,
         })
     } else if program_id == programs::bridge_lock().id() {
-        let bridge_lock_core::Instruction::Lock {
+        let Ok(bridge_lock_core::Instruction::Lock {
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ..
-        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        else {
+            return None;
+        };
         Some(Emission {
             target_zone,
             target_program_id,
@@ -230,6 +233,21 @@ pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
         vec![ping_core::sender_config_account_id(ping_sender_id)],
         ping_core::SenderInstruction::InitConfig {
             outbox_program_id: programs::cross_zone_outbox().id(),
+        },
+    )
+}
+
+/// The genesis transaction that pins the outbox `bridge_lock` chains into and the
+/// wrapped token it mints, without importing either id into the guest.
+#[must_use]
+pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
+    genesis_public_tx(
+        bridge_lock_id,
+        vec![bridge_lock_core::config_account_id(bridge_lock_id)],
+        bridge_lock_core::Instruction::InitConfig {
+            outbox_program_id: programs::cross_zone_outbox().id(),
+            target_program_id: programs::wrapped_token().id(),
         },
     )
 }
