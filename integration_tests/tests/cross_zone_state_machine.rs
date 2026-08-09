@@ -22,7 +22,9 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::Account;
-use ping_core::{ReceiverInstruction, ping_record_pda};
+use ping_core::{
+    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, sender_config_account_id,
+};
 
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
@@ -92,6 +94,43 @@ fn seed_wrapped_config(state: &mut V03State) {
             ..Default::default()
         },
     )]);
+}
+
+/// Seeds the ping-sender config account pinning the real outbox, matching what
+/// genesis seeds for a real zone.
+fn seed_ping_sender_config(state: &mut V03State) {
+    let sender_id = programs::ping_sender().id();
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        sender_config_account_id(sender_id),
+        Account {
+            program_owner: sender_id,
+            data: outbox_bytes(programs::cross_zone_outbox().id())
+                .to_vec()
+                .try_into()
+                .expect("outbox id fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
+/// given rather than the correct ones, so tests can vary them.
+fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
+    let receiver_id = programs::ping_receiver().id();
+    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
+        payload: b"ping".to_vec(),
+    })
+    .expect("serialize ping instruction");
+    let send = ping_core::SenderInstruction::Send {
+        target_zone,
+        target_program_id: receiver_id,
+        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        ordinal,
+    };
+    let message = Message::try_new(programs::ping_sender().id(), accounts, vec![], send)
+        .expect("build ping_sender message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
 /// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
@@ -423,6 +462,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
             ..Default::default()
         },
     )]);
+    seed_ping_sender_config(&mut state);
 
     let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
     let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
@@ -436,23 +476,12 @@ fn two_emitters_share_an_ordinal_without_colliding() {
         .expect("the lock executes");
     state.apply_state_diff(diff);
 
-    let words = risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
-        payload: b"ping".to_vec(),
-    })
-    .expect("serialize ping instruction");
-    let send = ping_core::SenderInstruction::Send {
-        outbox_program_id: outbox_id,
-        target_zone: zone_b,
-        target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
-        payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), send_slot],
+        zone_b,
         ordinal,
-    };
-    let message = Message::try_new(sender_id, vec![send_slot], vec![], send)
-        .expect("build ping_sender message");
-    let send_tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
-
-    let send_diff = ValidatedStateDiff::from_public_transaction(&send_tx, &state, 2, 0)
+    );
+    let send_diff = ValidatedStateDiff::from_public_transaction(&send, &state, 2, 0)
         .expect("the send executes into its own slot, not the lock's");
 
     let record = OutboxRecord::from_bytes(
@@ -470,6 +499,135 @@ fn two_emitters_share_an_ordinal_without_colliding() {
         OutboxRecord::from_bytes(&state.get_account_by_id(lock_slot).data.into_inner())
             .expect("the lock's record survives");
     assert_eq!(lock_record.emitter, bridge_lock_id);
+}
+
+/// A caller can no longer aim an emission at a program of their own and still
+/// succeed, leaving no record of it. With the program no longer an instruction
+/// field, the account is the only way left to try.
+#[test]
+fn a_send_into_a_foreign_outbox_slot_is_rejected() {
+    let sender_id = programs::ping_sender().id();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let mut state = base_state();
+    seed_ping_sender_config(&mut state);
+
+    // A slot under some other program, which is what the caller would have to
+    // pass to reach it.
+    let foreign_slot = outbox_pda([3; 8], sender_id, &zone_b, ordinal);
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), foreign_slot],
+        zone_b,
+        ordinal,
+    );
+
+    // Refused inside the pinned outbox, not by the sender: the chained call goes
+    // there whatever account the caller passes, which is the point.
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send into a slot outside the pinned outbox must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("Account must be the outbox PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// An emitter with no pin cannot fall back to a caller-named outbox: it stops
+/// emitting. The state a zone reaches by skipping the genesis init.
+#[test]
+fn a_send_before_the_pin_is_set_is_rejected() {
+    let sender_id = programs::ping_sender().id();
+    let outbox_id = programs::cross_zone_outbox().id();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let state = base_state();
+    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let send = send_tx(
+        vec![sender_config_account_id(sender_id), slot],
+        zone_b,
+        ordinal,
+    );
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send with no outbox pinned must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("config account holds an outbox program id"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The config is read by address, so substituting another account for it fails
+/// rather than pinning the outbox to whatever that account happens to hold.
+#[test]
+fn a_send_with_a_substituted_config_account_is_rejected() {
+    let sender_id = programs::ping_sender().id();
+    let outbox_id = programs::cross_zone_outbox().id();
+    let zone_b = [2_u8; 32];
+    let ordinal = 0;
+
+    let mut state = base_state();
+    seed_ping_sender_config(&mut state);
+
+    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
+    let send = send_tx(vec![ping_record_pda(sender_id), slot], zone_b, ordinal);
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
+        panic!("a send over a substituted config account must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("must be the ping-sender config PDA"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// Written once: an identical re-init has to succeed, since genesis is replayed
+/// during multi-sequencer reconstruction, while one naming a different outbox has
+/// to fail, or anyone could redirect every emission on the zone after genesis.
+#[test]
+fn the_outbox_pin_is_written_once_and_replayable() {
+    let sender_id = programs::ping_sender().id();
+    let config_id = sender_config_account_id(sender_id);
+
+    // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
+    let init = |outbox: lee_core::program::ProgramId| {
+        let message = Message::try_new(
+            sender_id,
+            vec![config_id],
+            vec![],
+            ping_core::SenderInstruction::InitConfig {
+                outbox_program_id: outbox,
+            },
+        )
+        .expect("build InitConfig message");
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+    };
+
+    let mut state = base_state();
+    let outbox_id = programs::cross_zone_outbox().id();
+
+    let first = init(outbox_id);
+    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
+        .expect("the first init claims the config PDA");
+    state.apply_state_diff(diff);
+    assert_eq!(
+        read_outbox(&state.get_account_by_id(config_id).data.into_inner()),
+        Some(outbox_id),
+        "the config pins the outbox after genesis"
+    );
+
+    ValidatedStateDiff::from_public_transaction(&init(outbox_id), &state, 2, 0)
+        .expect("replaying the identical init is a no-op, not a failure");
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&init([3; 8]), &state, 3, 0) else {
+        panic!("a re-init naming a different outbox must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("already pins a different outbox"),
+        "rejected for the wrong reason: {err:?}"
+    );
 }
 
 /// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)

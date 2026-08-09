@@ -7704,6 +7704,7 @@ name = "ping_core"
 version = "0.1.0"
 dependencies = [
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 

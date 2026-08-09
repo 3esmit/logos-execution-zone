@@ -746,7 +746,6 @@ mod tests {
     fn emission(payload: &[u8]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
-            outbox_program_id: programs::cross_zone_outbox().id(),
             target_zone: SELF_ZONE,
             target_program_id: receiver_id,
             target_accounts: vec![ping_record_pda(receiver_id).into_value()],

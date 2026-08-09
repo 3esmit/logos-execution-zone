@@ -64,13 +64,18 @@ pub fn is_sequencer_only_program(program_id: ProgramId) -> bool {
 #[must_use]
 pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Option<Emission> {
     if program_id == programs::ping_sender().id() {
-        let ping_core::SenderInstruction::Send {
+        // Not every transaction to an emitter emits: `InitConfig` is one of its
+        // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
+        let Ok(ping_core::SenderInstruction::Send {
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ..
-        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        else {
+            return None;
+        };
         Some(Emission {
             target_zone,
             target_program_id,
@@ -211,6 +216,20 @@ pub fn build_wrapped_token_init_config_tx() -> lee::PublicTransaction {
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
         wrapped_token_core::Instruction::InitConfig {
             minter: programs::cross_zone_inbox().id(),
+        },
+    )
+}
+
+/// The genesis transaction that pins the outbox `ping_sender` chains into,
+/// without importing the outbox id into the guest.
+#[must_use]
+pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
+    let ping_sender_id = programs::ping_sender().id();
+    genesis_public_tx(
+        ping_sender_id,
+        vec![ping_core::sender_config_account_id(ping_sender_id)],
+        ping_core::SenderInstruction::InitConfig {
+            outbox_program_id: programs::cross_zone_outbox().id(),
         },
     )
 }

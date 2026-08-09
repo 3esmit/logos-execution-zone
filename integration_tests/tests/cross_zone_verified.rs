@@ -21,7 +21,9 @@ use integration_tests::{
 };
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
-use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
+use ping_core::{
+    ReceiverInstruction, SenderInstruction, ping_record_pda, sender_config_account_id,
+};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -109,7 +111,6 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
-        outbox_program_id: outbox_id,
         target_zone,
         target_program_id: receiver_id,
         target_accounts: vec![ping_record_pda(receiver_id).into_value()],
@@ -117,15 +118,11 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         ordinal,
     };
 
-    let outbox_account = outbox_pda(
-        outbox_id,
-        programs::ping_sender().id(),
-        &target_zone,
-        ordinal,
-    );
+    let sender_id = programs::ping_sender().id();
+    let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
-        programs::ping_sender().id(),
-        vec![outbox_account],
+        sender_id,
+        vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,
     )
