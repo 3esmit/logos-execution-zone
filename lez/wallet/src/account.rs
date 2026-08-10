@@ -10,6 +10,8 @@ use thiserror::Error;
 #[display("{_0}")]
 pub struct Label(String);
 
+//
+
 impl Label {
     #[expect(
         clippy::needless_pass_by_value,
