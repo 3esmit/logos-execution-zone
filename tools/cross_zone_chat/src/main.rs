@@ -62,7 +62,8 @@ use lee::{
 };
 use log::{info, warn};
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, sender_config_account_id,
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
@@ -541,7 +542,9 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
         .collect();
     let instruction: ReceiverInstruction =
         risc0_zkvm::serde::from_slice::<ReceiverInstruction, u32>(&words).ok()?;
-    let ReceiverInstruction::Record { payload: bytes } = instruction;
+    let ReceiverInstruction::Record { payload: bytes } = instruction else {
+        return None;
+    };
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -560,7 +563,10 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let send = SenderInstruction::Send {
         target_zone: other_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
         ordinal,
     };

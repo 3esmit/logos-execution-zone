@@ -23,7 +23,8 @@ use lee::{
 };
 use lee_core::account::Account;
 use ping_core::{
-    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, sender_config_account_id,
+    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
+    sender_config_account_id,
 };
 
 const INITIAL_BALANCE: u128 = 100;
@@ -103,6 +104,30 @@ fn seed_wrapped_config(
     )]);
 }
 
+/// Seeds the ping-receiver config pinning the inbox as deliverer and `sources` as
+/// the peer pairs it accepts a delivery from.
+fn seed_receiver_config(
+    state: &mut V03State,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
+    let receiver_id = programs::ping_receiver().id();
+    let config = ping_core::ReceiverConfig {
+        deliverer: programs::cross_zone_inbox().id(),
+        sources,
+    };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        receiver_config_account_id(receiver_id),
+        Account {
+            program_owner: receiver_id,
+            data: config
+                .to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
 /// Seeds the ping-sender config account pinning the real outbox, matching what
 /// genesis seeds for a real zone.
 fn seed_ping_sender_config(state: &mut V03State) {
@@ -167,7 +192,10 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
     let send = ping_core::SenderInstruction::Send {
         target_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
         ordinal,
     };
@@ -275,6 +303,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
+    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // The payload is the ping_receiver instruction, serialized as risc0 words in
     // little-endian bytes (the contract the inbox reverses when forwarding).
@@ -1169,6 +1198,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
+    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);

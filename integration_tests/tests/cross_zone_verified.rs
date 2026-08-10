@@ -22,7 +22,8 @@ use integration_tests::{
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{
-    ReceiverInstruction, SenderInstruction, ping_record_pda, sender_config_account_id,
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
@@ -113,7 +114,10 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let send = SenderInstruction::Send {
         target_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
         ordinal,
     };

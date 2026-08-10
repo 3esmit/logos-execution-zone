@@ -9,9 +9,6 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Raw 32-byte zone (channel) id, matching the inbox's.
-pub type ZoneId = [u8; 32];
-
 /// The most one mint may credit.
 ///
 /// The peer zone chooses the amount and the balance is a `u128`, so unbounded
@@ -26,6 +23,8 @@ pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
+/// Raw 32-byte zone (channel) id, matching the inbox's.
+pub type ZoneId = [u8; 32];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {

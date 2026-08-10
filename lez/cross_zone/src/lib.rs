@@ -284,6 +284,38 @@ pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
     )
 }
 
+/// The genesis transaction naming the peer sources `ping_receiver` accepts a
+/// delivery from, fanned out of the operator's routes exactly as the wrapped
+/// token's is.
+#[must_use]
+pub fn build_ping_receiver_init_config_tx(
+    cross_zone: Option<&CrossZoneConfig>,
+) -> lee::PublicTransaction {
+    let receiver_id = programs::ping_receiver().id();
+    let sources = cross_zone
+        .map(|cross_zone| {
+            cross_zone
+                .peers
+                .iter()
+                .flat_map(|peer| {
+                    peer.allowed_routes
+                        .iter()
+                        .filter(|route| route.target_program_id == receiver_id)
+                        .map(|route| (peer.channel_id, route.src_program_id))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    genesis_public_tx(
+        receiver_id,
+        vec![ping_core::receiver_config_account_id(receiver_id)],
+        ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
+            deliverer: programs::cross_zone_inbox().id(),
+            sources,
+        }),
+    )
+}
+
 /// Builds an unsigned, sequencer-origin genesis transaction invoking `instruction`
 /// on `program_id` over `account_ids`.
 fn genesis_public_tx<I: Serialize>(
