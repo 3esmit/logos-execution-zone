@@ -636,7 +636,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn produce_new_block(&mut self) -> Result<u64> {
         let live_accredited_keys = self.live_accredited_sequencer_keys().await;
 
-        let (BlockWithMeta { block, withdrawals }, committee_update) = self
+        let BlockWithMeta {
+            block,
+            withdrawals,
+            committee_update,
+        } = self
             .build_block_from_mempool(live_accredited_keys.as_deref())
             .context("Failed to build block from mempool transactions")?;
 
@@ -848,10 +852,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     fn build_block_from_mempool(
         &mut self,
         live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
-    ) -> Result<(
-        BlockWithMeta,
-        Option<Vec<sequencer_stake_core::SequencerKey>>,
-    )> {
+    ) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
         // Decoded outside the chain lock, and read before it is taken: the usual
@@ -1138,7 +1139,11 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let committee_update = live_accredited_keys
             .and_then(|keys| committee_discovery::committee_update(&working_state, keys));
 
-        Ok((BlockWithMeta { block, withdrawals }, committee_update))
+        Ok(BlockWithMeta {
+            block,
+            withdrawals,
+            committee_update,
+        })
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -1357,6 +1362,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 struct BlockWithMeta {
     block: Block,
     withdrawals: Vec<WithdrawArg>,
+    committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt

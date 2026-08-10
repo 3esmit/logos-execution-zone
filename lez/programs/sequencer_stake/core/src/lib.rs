@@ -14,6 +14,11 @@ const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerSt
 /// The Bedrock sequencer identity a stake backs.
 pub type SequencerKey = [u8; 32];
 
+#[must_use]
+pub fn is_valid_sequencer_key(key: &SequencerKey) -> bool {
+    ed25519_dalek::VerifyingKey::from_bytes(key).is_ok()
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
     /// Locks `amount` into the ownership account for `sequencer_key`. First

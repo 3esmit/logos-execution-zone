@@ -11,3 +11,4 @@ workspace = true
 lee_core.workspace = true
 serde = { workspace = true, default-features = false }
 borsh.workspace = true
+ed25519-dalek.workspace = true

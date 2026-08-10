@@ -20,7 +20,7 @@ use logos_blockchain_core::{
         ops::channel::{ChannelId, MsgId, deposit::Metadata},
     },
 };
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
@@ -69,6 +69,10 @@ fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_cor
         .expect("Failed to load or create bedrock signing key")
         .public_key()
         .to_bytes()
+}
+
+fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
+    Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes()
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
@@ -2912,7 +2916,7 @@ fn diag_sequencer_stake_claims_ownership_account() {
     let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
 
     let amount: u128 = 5_000_000;
-    let sequencer_key = [0x42; 32];
+    let sequencer_key = test_sequencer_key(0x42);
 
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let mut state = V03State::new()
@@ -3089,7 +3093,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let donation = 1;
-    let sequencer_key = [0x43; 32];
+    let sequencer_key = test_sequencer_key(0x43);
 
     let mut state = stake_test_state(funding_id, amount + donation);
     let stake = stake_transaction(
@@ -3156,7 +3160,7 @@ fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
     let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
 
     let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let sequencer_key = [0x44; 32];
+    let sequencer_key = test_sequencer_key(0x44);
 
     let mut state = stake_test_state(funding_id, 3 * minimum);
     let stake = stake_transaction(
@@ -3210,8 +3214,8 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
     let mut state = stake_test_state(funding_id, 2 * amount);
 
     for (index, (id, key, sequencer_key)) in [
-        (ownership_id, &ownership_key, [0x45; 32]),
-        (other_ownership_id, &other_ownership_key, [0x46; 32]),
+        (ownership_id, &ownership_key, test_sequencer_key(0x45)),
+        (other_ownership_id, &other_ownership_key, test_sequencer_key(0x46)),
     ]
     .into_iter()
     .enumerate()
@@ -3260,7 +3264,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    let sequencer_key = [0x42; 32];
+    let sequencer_key = test_sequencer_key(0x42);
 
     let mut state = V03State::new()
         .with_programs([
