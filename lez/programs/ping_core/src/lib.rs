@@ -36,9 +36,7 @@ pub enum ReceiverInstruction {
 /// about the record meaning something: without it any program on any configured
 /// peer can overwrite the record, and a delivery proves only that some peer sent
 /// it.
-#[derive(
-    Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct ReceiverConfig {
     /// The program allowed to call `Record`: the cross-zone inbox.
     pub deliverer: ProgramId,
@@ -159,6 +157,29 @@ mod tests {
         };
         let words = risc0_zkvm::serde::to_vec(&send).expect("Send serializes");
         assert_eq!(words[0], 0);
+    }
+
+    /// `Record` is serialized by the source zone into the emission payload and
+    /// decoded by the destination, so its tag word is wire format.
+    #[test]
+    fn record_is_the_first_variant() {
+        let record = ReceiverInstruction::Record { payload: vec![] };
+        let words = risc0_zkvm::serde::to_vec(&record).expect("Record serializes");
+        assert_eq!(words[0], 0);
+    }
+
+    #[test]
+    fn an_empty_receiver_config_does_not_decode() {
+        assert_eq!(ReceiverConfig::from_bytes(&[]), None);
+    }
+
+    #[test]
+    fn receiver_config_round_trips() {
+        let config = ReceiverConfig {
+            deliverer: [1; 8],
+            sources: vec![([7; 32], [9; 8])],
+        };
+        assert_eq!(ReceiverConfig::from_bytes(&config.to_bytes()), Some(config));
     }
 
     #[test]

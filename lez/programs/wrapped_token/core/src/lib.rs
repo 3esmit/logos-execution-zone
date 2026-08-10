@@ -47,9 +47,7 @@ pub enum Instruction {
 /// The source list is what makes this token authorize its own inbound value
 /// rather than trusting a central route table to have done it. Borsh because the
 /// list is variable length.
-#[derive(
-    Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Serialize, Deserialize)]
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
     pub minter: ProgramId,
@@ -137,6 +135,18 @@ mod tests {
     #[test]
     fn an_empty_config_does_not_decode() {
         assert_eq!(WrappedTokenConfig::from_bytes(&[]), None);
+    }
+
+    /// The peer's `bridge_lock` serializes `Mint` into the emission payload, so
+    /// its tag word is wire format.
+    #[test]
+    fn mint_is_the_first_variant() {
+        let mint = Instruction::Mint {
+            recipient: [3; 32],
+            amount: 1,
+        };
+        let words = risc0_zkvm::serde::to_vec(&mint).expect("Mint serializes");
+        assert_eq!(words[0], 0);
     }
 
     #[test]

@@ -304,7 +304,11 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![record_id]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -946,6 +950,94 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     );
 }
 
+/// A token that authorizes nothing mints for nobody. The state a zone reaches with
+/// no peers configured, where the config is still seeded so its PDA cannot be
+/// claimed by a first initializer.
+#[test]
+fn a_mint_is_refused_when_the_token_authorizes_no_source() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![]);
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: programs::bridge_lock().id(),
+        target_program_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a token authorizing nothing must not mint");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The marker only means something because the caller is pinned to the inbox.
+/// Invoked directly, with the caller handing in the marker themselves, the mint
+/// must refuse before it ever looks at it.
+#[test]
+fn a_top_level_mint_is_refused() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let src_zone = [2_u8; 32];
+    let src_program_id = programs::bridge_lock().id();
+
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, vec![(src_zone, src_program_id)]);
+
+    let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
+    let message = Message::try_new(
+        wrapped_token_id,
+        vec![
+            marker_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+        ],
+        vec![],
+        wrapped_token_core::Instruction::Mint {
+            recipient: RECIPIENT,
+            amount: LOCK_AMOUNT,
+        },
+    )
+    .expect("build mint message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a directly invoked mint must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("only callable by the authorized minter"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
 /// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)
 /// and asserts it chains into `wrapped_token::Mint`, crediting the recipient.
 #[test]
@@ -1005,9 +1097,12 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a delivery from a source the token did not authorize must not mint");
+    };
     assert!(
-        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_err(),
-        "a delivery from an emitter with no route to wrapped_token must not mint"
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
     );
 }
 
@@ -1195,7 +1290,11 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let record_id = ping_record_pda(receiver_id);
     let message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &msg, vec![record_id]),
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1228,7 +1327,11 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     };
     let control_message = Message::try_new(
         inbox_id,
-        dispatch_accounts(inbox_id, &control_msg, vec![record_id]),
+        dispatch_accounts(
+            inbox_id,
+            &control_msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(control_msg),
     )

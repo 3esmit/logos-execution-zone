@@ -260,10 +260,13 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
 /// The account naming who sent a delivery, which the inbox passes at position 0
 /// of the chained call so the target can authenticate its own sources.
 ///
-/// It is never written and never claimed, so it stays `Account::default()` for
-/// ever and the state machine's uninitialized-account rule skips it. The address
-/// is the whole message: only the inbox can derive it, and it commits to the pair
-/// the target cares about.
+/// Nothing writes or claims it, so the state machine's uninitialized-account rule
+/// skips it for being unchanged rather than for being default: anyone may send it
+/// balance, and the inbox and the targets all round-trip it untouched.
+///
+/// The address is derivable by anyone, so it is not a secret and not a
+/// capability. What makes it mean something is that a target checks it only after
+/// pinning its caller to the inbox, and only the inbox can be that caller.
 #[must_use]
 pub fn inbox_source_marker_account_id(
     inbox_id: ProgramId,
