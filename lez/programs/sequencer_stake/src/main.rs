@@ -154,37 +154,34 @@ fn stake(
         );
     }
 
-    match config.entries.get_mut(&sequencer_key) {
+    if let Some(entry) = config.entries.get_mut(&sequencer_key) {
         // top up: same already-claimed account only
-        Some(entry) => {
-            assert!(
-                is_claimed,
-                "this sequencer key already has an ownership account"
-            );
-            assert_eq!(
-                entry.account_id, ownership_account.account_id,
-                "config entry points at a different ownership account"
-            );
-            entry.total_staked = entry
-                .total_staked
-                .checked_add(amount)
-                .expect("total staked overflow");
-        }
+        assert!(
+            is_claimed,
+            "this sequencer key already has an ownership account"
+        );
+        assert_eq!(
+            entry.account_id, ownership_account.account_id,
+            "config entry points at a different ownership account"
+        );
+        entry.total_staked = entry
+            .total_staked
+            .checked_add(amount)
+            .expect("total staked overflow");
+    } else {
         // first stake for this key, or a new one after a full exit
-        None => {
-            assert!(
-                amount >= minimum_sequencer_stake,
-                "an initial stake must already meet the minimum"
-            );
-            config.entries.insert(
-                sequencer_key,
-                SequencerEntry {
-                    account_id: ownership_account.account_id,
-                    total_staked: amount,
-                    total_pending_unstake: 0,
-                },
-            );
-        }
+        assert!(
+            amount >= minimum_sequencer_stake,
+            "an initial stake must already meet the minimum"
+        );
+        config.entries.insert(
+            sequencer_key,
+            SequencerEntry {
+                account_id: ownership_account.account_id,
+                total_staked: amount,
+                total_pending_unstake: 0,
+            },
+        );
     }
 
     // pass-through: propagates authorization into the nested mover call
@@ -202,7 +199,7 @@ fn stake(
     let ownership_account_post =
         AccountPostState::new_claimed_if_default(ownership_account_data.clone(), Claim::Authorized);
 
-    let mut config_account_new = config_account.account.clone();
+    let mut config_account_new = config_account.account;
     config_account_new.data = config
         .to_bytes()
         .try_into()
@@ -210,13 +207,13 @@ fn stake(
     let config_account_post = AccountPostState::new(config_account_new);
 
     // chained-call pre-states reflect state as of when each call runs
-    let mut ownership_account_claimed = ownership_account.clone();
+    let mut ownership_account_claimed = ownership_account;
     ownership_account_claimed.account = ownership_account_data;
     ownership_account_claimed.account.program_owner = self_program_id;
 
     let mover_call = ChainedCall {
         program_id: mover_program_id,
-        pre_states: vec![funding_account.clone(), ownership_account_claimed.clone()],
+        pre_states: vec![funding_account, ownership_account_claimed.clone()],
         instruction_data: mover_instruction_data,
         pda_seeds: Vec::new(),
     };
@@ -255,7 +252,7 @@ fn confirm_stake(
         "mover call did not deposit the expected amount into the ownership account"
     );
 
-    vec![AccountPostState::new(ownership_account.account.clone())]
+    vec![AccountPostState::new(ownership_account.account)]
 }
 
 fn unstake_request(
@@ -312,13 +309,13 @@ fn unstake_request(
         .expect("total pending unstake overflow");
 
     // only data changes here; transfer happens in FinalizeUnstake
-    let mut ownership_account_new = ownership_account.account.clone();
+    let mut ownership_account_new = ownership_account.account;
     ownership_account_new.data = record
         .to_bytes()
         .try_into()
         .expect("StakeRecord should fit in account data");
 
-    let mut config_account_new = config_account.account.clone();
+    let mut config_account_new = config_account.account;
     config_account_new.data = config
         .to_bytes()
         .try_into()
@@ -366,7 +363,7 @@ fn finalize_unstake(
         .try_into()
         .expect("StakeRecord should fit in account data");
 
-    let mut destination_new = destination_account.account.clone();
+    let mut destination_new = destination_account.account;
     destination_new.balance = destination_new
         .balance
         .checked_add(pending.amount)
@@ -394,7 +391,7 @@ fn finalize_unstake(
         config.entries.remove(&record.sequencer_key);
     }
 
-    let mut config_account_new = config_account.account.clone();
+    let mut config_account_new = config_account.account;
     config_account_new.data = config
         .to_bytes()
         .try_into()
