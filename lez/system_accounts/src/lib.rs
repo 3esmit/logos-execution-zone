@@ -9,8 +9,6 @@ use lee_core::account::{Account, AccountId, Nonce};
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
 pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 
-pub type Slots = u32;
-
 /// Channel administration defaults.
 ///
 /// Slots, not seconds (1 slot = 1s on the current devnet): 20-slot turns,
@@ -21,6 +19,8 @@ pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 20;
 pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 10;
 pub const DEFAULT_SEQUENCER_CONFIGURATION_THRESHOLD: u16 = 1;
 pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
+
+pub type Slots = u32;
 
 #[must_use]
 pub fn pinata_account_id() -> AccountId {

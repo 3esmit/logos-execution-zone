@@ -43,6 +43,7 @@ use storage::sequencer::{
         WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
+use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
@@ -139,6 +140,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// (`DEFAULT_SEQUENCER_POSTING_TIMEFRAME` +
     /// `DEFAULT_SEQUENCER_POSTING_TIMEOUT` slots) plus normal confirmation lag.
     const COMMITTEE_SUBMISSION_COOLDOWN: Duration = Duration::from_secs(20);
+
+    const CHANNEL_PROBE_RETRIES: usize = 29;
+    const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
 
     /// Starts the sequencer using the provided configuration.
     /// If an existing database is found, the sequencer state is loaded from it and
@@ -264,9 +268,15 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
         // we join later, the normal self-join way.
-        let channel_already_exists = BP::channel_exists(&config.bedrock_config)
-            .await
-            .expect("Failed to probe Bedrock channel");
+        let channel_probe_retry_strategy =
+            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
+        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
+            BP::channel_exists(&config.bedrock_config)
+                .await
+                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
+        })
+        .await
+        .expect("Failed to probe Bedrock channel");
         if channel_already_exists {
             info!("Channel already exists; joining as a non channel creator");
         } else {
