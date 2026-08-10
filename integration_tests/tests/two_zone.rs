@@ -15,7 +15,9 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(360);
@@ -29,24 +31,27 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
     let channel_b = config::bedrock_channel_id_b();
     let partial = SequencerPartialConfig::default();
 
-    let ctx = TestContext::builder(vec![
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_a,
-        },
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_b,
-        },
-    ])
-    .disable_wallet(channel_a)
-    .disable_wallet(channel_b)
-    .with_sequencer_partial_config(channel_a, partial)
-    .with_sequencer_partial_config(channel_b, partial)
-    .with_genesis(channel_a, vec![])
-    .with_genesis(channel_b, vec![])
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
 
     let ind_client_a = ctx.indexer_client_getter(channel_a).unwrap();
     let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();

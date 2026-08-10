@@ -111,33 +111,14 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// Create new test context.
-    pub async fn new_custom(configs: Vec<MultiNodeTestContextConfig>) -> Result<Self> {
-        Self::builder(configs).build().await
-    }
-
-    /// Create new test context with default config(1 zone).
+    /// Create new test context with singulat config(1 zone, 1 sequencer).
     pub async fn new() -> Result<Self> {
-        Self::builder(vec![MultiNodeTestContextConfig::default()])
+        MultiZoneTestContextBuilder::default()
+            .with_zone(ZoneTestContextBuilder::new(
+                MultiNodeTestContextConfig::default(),
+            ))
             .build()
             .await
-    }
-
-    /// Get a builder for the test context to customize its configuration.
-    #[must_use]
-    pub fn builder(
-        configs: impl IntoIterator<Item = MultiNodeTestContextConfig>,
-    ) -> MultiZoneTestContextBuilder {
-        MultiZoneTestContextBuilder {
-            zone_builders: configs
-                .into_iter()
-                .map(|mn_config| {
-                    let z_ctx_b = ZoneTestContextBuilder::new(mn_config);
-
-                    (z_ctx_b.mn_config.bedrock_channel, z_ctx_b)
-                })
-                .collect(),
-        }
     }
 
     /// Reference for the default zone(in case if only one present).
@@ -495,7 +476,8 @@ pub struct ZoneTestContextBuilder {
 }
 
 impl ZoneTestContextBuilder {
-    fn new(mn_config: MultiNodeTestContextConfig) -> Self {
+    #[must_use]
+    pub fn new(mn_config: MultiNodeTestContextConfig) -> Self {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
@@ -508,6 +490,11 @@ impl ZoneTestContextBuilder {
             // builder pattern.
             cross_zone_config: None,
         }
+    }
+
+    #[must_use]
+    pub const fn bedrock_channel(&self) -> ChannelId {
+        self.mn_config.bedrock_channel
     }
 
     /// Override wallet config fields (e.g. polling timeouts) for the wallet built by this context.
@@ -528,7 +515,7 @@ impl ZoneTestContextBuilder {
         self
     }
 
-    /// Set the sequecner partial config to apply when initializing the sequencer.
+    /// Set the sequencer partial config to apply when initializing the sequencer.
     /// If not set, the sequencer will be initialized with default one.
     #[must_use]
     pub const fn with_sequencer_partial_config(
@@ -555,6 +542,25 @@ impl ZoneTestContextBuilder {
     #[must_use]
     pub const fn disable_indexer(mut self) -> Self {
         self.enable_indexer = false;
+        self
+    }
+
+    /// Exclude wallet from test context.
+    /// Wallet is enabled by default.
+    ///
+    /// Methods like [`TestContext::wallet()`] will panic if
+    /// called when wallet is disabled.
+    #[must_use]
+    pub const fn disable_wallet(mut self) -> Self {
+        self.enable_wallet = false;
+        self
+    }
+
+    /// Set the cross zone config to apply when initializing the zone.
+    /// If not set, the zone will be initialized with default one.
+    #[must_use]
+    pub fn with_cross_zone(mut self, cross_zone_config: Option<CrossZoneConfig>) -> Self {
+        self.cross_zone_config = cross_zone_config;
         self
     }
 
@@ -719,6 +725,7 @@ impl ZoneTestContextBuilder {
     }
 }
 
+#[derive(Default)]
 pub struct MultiZoneTestContextBuilder {
     zone_builders: HashMap<ChannelId, ZoneTestContextBuilder>,
 }
@@ -754,97 +761,20 @@ impl MultiZoneTestContextBuilder {
     }
 
     #[must_use]
+    pub fn with_zone(mut self, zone_builder: ZoneTestContextBuilder) -> Self {
+        self.zone_builders
+            .insert(zone_builder.bedrock_channel(), zone_builder);
+
+        self
+    }
+
+    #[must_use]
     pub fn default_channel_id(&self) -> ChannelId {
         *self
             .zone_builders
             .keys()
             .next()
             .expect("Must be at least one channel")
-    }
-
-    /// Override wallet config fields (e.g. polling timeouts) for the wallet built by this context.
-    #[must_use]
-    pub fn with_wallet_config_overrides(
-        mut self,
-        channel_id: ChannelId,
-        wallet_config_overrides: WalletConfigOverrides,
-    ) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.wallet_config_overrides = wallet_config_overrides);
-        self
-    }
-
-    #[must_use]
-    pub fn with_genesis(
-        mut self,
-        channel_id: ChannelId,
-        genesis_transactions: Vec<GenesisAction>,
-    ) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.genesis_transactions = Some(genesis_transactions));
-        self
-    }
-
-    #[must_use]
-    pub fn with_cross_zone(
-        mut self,
-        channel_id: ChannelId,
-        cross_zone: sequencer_core::config::CrossZoneConfig,
-    ) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.cross_zone_config = Some(cross_zone));
-        self
-    }
-
-    #[must_use]
-    pub fn with_sequencer_partial_config(
-        mut self,
-        channel_id: ChannelId,
-        sequencer_partial_config: config::SequencerPartialConfig,
-    ) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.sequencer_partial_config = Some(sequencer_partial_config));
-        self
-    }
-
-    /// Build from genesis live instead of loading the prebuilt fixture. Implied by
-    /// [`Self::with_genesis`].
-    #[must_use]
-    pub fn from_scratch(mut self, channel_id: ChannelId) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.from_scratch = true);
-        self
-    }
-
-    /// Exclude Indexer from test context.
-    /// Indexer is enabled by default.
-    ///
-    /// Methods like [`TestContext::indexer()`] and [`TestContext::indexer_client()`] will panic if
-    /// called when indexer is disabled.
-    #[must_use]
-    pub fn disable_indexer(mut self, channel_id: ChannelId) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.enable_indexer = false);
-        self
-    }
-
-    /// Exclude wallet from test context.
-    /// Wallet is enabled by default.
-    ///
-    /// Methods like [`TestContext::wallet_*()`] will panic if
-    /// called when wallet is disabled.
-    #[must_use]
-    pub fn disable_wallet(mut self, channel_id: ChannelId) -> Self {
-        self.zone_builders
-            .entry(channel_id)
-            .and_modify(|val| val.enable_wallet = false);
-        self
     }
 
     pub fn build_blocking(self) -> Result<BlockingTestContext> {

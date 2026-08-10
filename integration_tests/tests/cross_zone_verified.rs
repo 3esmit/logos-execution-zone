@@ -23,7 +23,9 @@ use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -49,25 +51,28 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         }],
     };
 
-    let ctx = TestContext::builder(vec![
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_a,
-        },
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_b,
-        },
-    ])
-    .disable_wallet(channel_a)
-    .disable_wallet(channel_b)
-    .with_sequencer_partial_config(channel_a, partial)
-    .with_sequencer_partial_config(channel_b, partial)
-    .with_genesis(channel_a, vec![])
-    .with_genesis(channel_b, vec![])
-    .with_cross_zone(channel_b, cross_zone)
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(cross_zone)),
+        )
+        .build()
+        .await?;
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.

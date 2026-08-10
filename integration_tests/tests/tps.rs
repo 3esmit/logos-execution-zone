@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TestContext, config::SequencerPartialConfig};
+use integration_tests::config::SequencerPartialConfig;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
@@ -29,7 +29,9 @@ use lee_core::{
 };
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::config::MultiNodeTestContextConfig;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -179,14 +181,12 @@ pub async fn tps_test() -> Result<()> {
 
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
 
-    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
-    let default_channel_id = ctx_b.default_channel_id();
-    let ctx = ctx_b
-        .with_sequencer_partial_config(
-            default_channel_id,
-            TpsTestManager::generate_sequencer_partial_config(),
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
+                .with_genesis(tps_test.generate_genesis()),
         )
-        .with_genesis(default_channel_id, tps_test.generate_genesis())
         .build()
         .await?;
 

@@ -16,7 +16,9 @@ use integration_tests::{
     indexer_client::IndexerClient,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
@@ -34,15 +36,18 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         ..SequencerPartialConfig::default()
     };
 
-    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig {
-        num_nodes: 2,
-        bedrock_channel: bedrock_channel_id,
-    }])
-    .with_sequencer_partial_config(bedrock_channel_id, partial)
-    .disable_wallet(bedrock_channel_id)
-    .with_genesis(bedrock_channel_id, vec![])
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 2,
+                bedrock_channel: bedrock_channel_id,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
 
     let mut seq_iterator = ctx.sequencer_components_iter(bedrock_channel_id).unwrap();
 

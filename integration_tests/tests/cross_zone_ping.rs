@@ -22,7 +22,9 @@ use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
@@ -50,27 +52,30 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         }],
     };
 
-    let ctx = TestContext::builder(vec![
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_a,
-        },
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_b,
-        },
-    ])
-    .disable_wallet(channel_a)
-    .disable_wallet(channel_b)
-    .disable_indexer(channel_a)
-    .disable_indexer(channel_b)
-    .with_sequencer_partial_config(channel_a, partial)
-    .with_sequencer_partial_config(channel_b, partial)
-    .with_genesis(channel_a, vec![])
-    .with_genesis(channel_b, vec![])
-    .with_cross_zone(channel_b, cross_zone)
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(cross_zone)),
+        )
+        .build()
+        .await?;
 
     // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let ping = build_ping_tx(zone_b, receiver_id);

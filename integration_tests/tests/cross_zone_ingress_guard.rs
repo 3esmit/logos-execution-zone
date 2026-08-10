@@ -20,7 +20,9 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 #[test]
@@ -28,15 +30,18 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel = config::bedrock_channel_id();
 
-    let ctx = TestContext::builder(vec![MultiNodeTestContextConfig {
-        num_nodes: 1,
-        bedrock_channel: channel,
-    }])
-    .disable_indexer(channel)
-    .with_sequencer_partial_config(channel, partial)
-    .with_genesis(channel, vec![])
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel,
+            })
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
 
     // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
     let inbox_id = programs::cross_zone_inbox().id();

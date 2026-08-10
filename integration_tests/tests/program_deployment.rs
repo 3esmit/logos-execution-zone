@@ -9,7 +9,9 @@ use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::config::MultiNodeTestContextConfig;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{cli::Command, config::WalletConfigOverrides};
 
@@ -68,17 +70,16 @@ async fn deploy_invalid_program_fails() -> Result<()> {
     // An invalid program bytecode is rejected by the sequencer during block production, so the
     // deployment transaction is never included in a block. Shrink the wallet's polling window so
     // the command gives up quickly instead of waiting for the full default timeout.
-    let ctx_b = TestContext::builder(vec![MultiNodeTestContextConfig::default()]);
-    let default_channel_id = ctx_b.default_channel_id();
-    let mut ctx = ctx_b
-        .with_wallet_config_overrides(
-            default_channel_id,
-            WalletConfigOverrides {
-                seq_poll_timeout: Some(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)),
-                seq_tx_poll_max_blocks: Some(5),
-                seq_poll_max_retries: Some(2),
-                ..WalletConfigOverrides::default()
-            },
+
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_wallet_config_overrides(WalletConfigOverrides {
+                    seq_poll_timeout: Some(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)),
+                    seq_tx_poll_max_blocks: Some(5),
+                    seq_poll_max_retries: Some(2),
+                    ..WalletConfigOverrides::default()
+                }),
         )
         .build()
         .await?;

@@ -31,7 +31,9 @@ use lee::{
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
-use test_fixtures::{TestContext, config::MultiNodeTestContextConfig};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -68,26 +70,29 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         amount: INITIAL_BALANCE,
     }];
 
-    let ctx = TestContext::builder(vec![
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_a,
-        },
-        MultiNodeTestContextConfig {
-            num_nodes: 1,
-            bedrock_channel: channel_b,
-        },
-    ])
-    .disable_wallet(channel_a)
-    .disable_wallet(channel_b)
-    .disable_indexer(channel_a)
-    .with_sequencer_partial_config(channel_a, partial)
-    .with_sequencer_partial_config(channel_b, partial)
-    .with_genesis(channel_a, genesis_a)
-    .with_genesis(channel_b, vec![])
-    .with_cross_zone(channel_b, cross_zone)
-    .build()
-    .await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .disable_indexer()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(genesis_a),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![])
+            .with_cross_zone(Some(cross_zone)),
+        )
+        .build()
+        .await?;
 
     let seq_client_a = &ctx
         .zone_default_sequencer_component(channel_a)
