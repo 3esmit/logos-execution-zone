@@ -1529,7 +1529,9 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     // inbox allowlist is initialized only on receiving zones; the inbox is
     // sequencer-only, so its default config PDA is not user-claimable, merely unused
     // until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx());
+    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
+        config.cross_zone.as_ref(),
+    ));
     let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
     let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
     let inbox_config_tx = config.cross_zone.as_ref().map(|cross_zone| {

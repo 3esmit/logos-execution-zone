@@ -79,18 +79,25 @@ fn seed_inbox_config(
     )]);
 }
 
-/// Seeds the wrapped-token config account pinning the inbox as authorized minter,
-/// matching what genesis seeds for a real zone.
-fn seed_wrapped_config(state: &mut V03State) {
+/// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
+/// peer pairs it will mint for, matching what genesis seeds for a real zone.
+fn seed_wrapped_config(
+    state: &mut V03State,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
     let wrapped_token_id = programs::wrapped_token().id();
+    let config = wrapped_token_core::WrappedTokenConfig {
+        minter: programs::cross_zone_inbox().id(),
+        sources,
+    };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
         Account {
             program_owner: wrapped_token_id,
-            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
-                .to_vec()
+            data: config
+                .to_bytes()
                 .try_into()
-                .expect("minter id fits in account data"),
+                .expect("wrapped-token config fits in account data"),
             ..Default::default()
         },
     )]);
@@ -200,7 +207,7 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
         [9_u32; 8],
         wrapped_token_id,
     );
-    seed_wrapped_config(&mut state);
+    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -975,7 +982,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         programs::bridge_lock().id(),
         wrapped_token_id,
     );
-    seed_wrapped_config(&mut state);
+    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1028,7 +1035,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         bridge_lock_id,
         wrapped_token_id,
     );
-    seed_wrapped_config(&mut state);
+    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1082,7 +1089,7 @@ fn mint_replay_rejected() {
         [9_u32; 8],
         wrapped_token_id,
     );
-    seed_wrapped_config(&mut state);
+    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior

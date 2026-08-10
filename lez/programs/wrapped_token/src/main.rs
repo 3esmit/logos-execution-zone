@@ -1,10 +1,11 @@
+use cross_zone_inbox_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
-    Instruction, MAX_MINT_AMOUNT, balance_bytes, config_account_id, config_seed,
-    holding_account_id, holding_seed, minter_bytes, read_balance, read_minter,
+    Instruction, MAX_MINT_AMOUNT, WrappedTokenConfig, balance_bytes, config_account_id,
+    config_seed, holding_account_id, holding_seed, read_balance,
 };
 
 fn main() {
@@ -27,12 +28,12 @@ fn main() {
             recipient,
             amount,
         ),
-        Instruction::InitConfig { minter } => init_config(
+        Instruction::InitConfig(config) => init_config(
             self_program_id,
             caller_program_id,
             pre_states,
             instruction_words,
-            minter,
+            &config,
         ),
     }
 }
@@ -56,12 +57,23 @@ fn mint(
         config_account_id(self_program_id),
         "second account must be the wrapped-token config PDA"
     );
-    let minter = read_minter(&config.account.data.clone().into_inner())
-        .expect("config account holds an authorized minter id");
+    let cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+        .expect("config account holds a wrapped-token config");
     assert_eq!(
         caller_program_id,
-        Some(minter),
+        Some(cfg.minter),
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
+    );
+    // The inbox vouches only that the message arrived; which peer sent it is this
+    // token's own business, and unbacked value is what gets minted if it takes
+    // anyone's word for it. The marker's address is the source, so re-deriving it
+    // from an authorized pair is the whole check.
+    assert!(
+        cfg.sources.iter().any(|(src_zone, src_program_id)| {
+            marker.account_id
+                == inbox_source_marker_account_id(cfg.minter, src_zone, *src_program_id)
+        }),
+        "Mint is only callable for a peer source this token authorizes"
     );
 
     assert_eq!(
@@ -103,13 +115,14 @@ fn mint(
     .write();
 }
 
-/// Writes the authorized minter into the config PDA exactly once at genesis.
+/// Writes the minter and the authorized peer sources into the config PDA exactly
+/// once at genesis.
 fn init_config(
     self_program_id: lee_core::program::ProgramId,
     caller_program_id: Option<lee_core::program::ProgramId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
-    minter: lee_core::program::ProgramId,
+    config_value: &WrappedTokenConfig,
 ) {
     assert!(
         caller_program_id.is_none(),
@@ -137,16 +150,16 @@ fn init_config(
         );
         assert_eq!(
             config.account.data.clone().into_inner(),
-            minter_bytes(minter).to_vec(),
-            "wrapped-token config already initialized with a different minter"
+            config_value.to_bytes(),
+            "wrapped-token config already initialized differently"
         );
     }
 
     let mut config_account = config.account.clone();
-    config_account.data = minter_bytes(minter)
-        .to_vec()
+    config_account.data = config_value
+        .to_bytes()
         .try_into()
-        .expect("minter id fits in account data");
+        .expect("wrapped-token config fits in account data");
     let config_post =
         AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
 

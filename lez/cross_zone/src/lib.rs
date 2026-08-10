@@ -218,16 +218,40 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
 }
 
 /// The genesis transaction that pins the cross-zone inbox as the wrapped-token
-/// minter, without importing the inbox id into the guest.
+/// minter and names the peer sources it may mint for, without importing either id
+/// into the guest.
+///
+/// The sources are the operator's own peer routes aimed at this token, moved from
+/// the inbox's allowlist to the token's own config: the same information, enforced
+/// by the program that owns the value. A zone with no peers gets an empty list,
+/// which authorizes nothing, and the config is still seeded so its PDA cannot be
+/// claimed by a first initializer.
 #[must_use]
-pub fn build_wrapped_token_init_config_tx() -> lee::PublicTransaction {
+pub fn build_wrapped_token_init_config_tx(
+    cross_zone: Option<&CrossZoneConfig>,
+) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
+    let sources = cross_zone
+        .map(|cross_zone| {
+            cross_zone
+                .peers
+                .iter()
+                .flat_map(|peer| {
+                    peer.allowed_routes
+                        .iter()
+                        .filter(|route| route.target_program_id == wrapped_token_id)
+                        .map(|route| (peer.channel_id, route.src_program_id))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     genesis_public_tx(
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
-        wrapped_token_core::Instruction::InitConfig {
+        wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
             minter: programs::cross_zone_inbox().id(),
-        },
+            sources,
+        }),
     )
 }
 

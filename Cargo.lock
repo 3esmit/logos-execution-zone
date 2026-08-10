@@ -12258,6 +12258,7 @@ dependencies = [
 name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -12267,6 +12268,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
+ "cross_zone_inbox_core",
  "lee_core",
  "wrapped_token_core",
 ]
