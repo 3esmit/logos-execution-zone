@@ -125,7 +125,9 @@ impl TestContext {
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder(configs: impl IntoIterator<Item = MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
+    pub fn builder(
+        configs: impl IntoIterator<Item = MultiNodeTestContextConfig>,
+    ) -> MultiZoneTestContextBuilder {
         MultiZoneTestContextBuilder {
             zone_builders: configs
                 .into_iter()
@@ -606,11 +608,11 @@ impl ZoneTestContextBuilder {
 
         sequencer_keys.push(config::SEQUENCER_SIGNING_KEY);
 
-        for i in 1..mn_config.num_nodes {
-            sequencer_keys.push(config::sequencer_signing_key_from_seed(
+        sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
+            config::sequencer_signing_key_from_seed(
                 u32::try_from(i).expect("Not being able to fit is realistically impossible"),
-            ));
-        }
+            )
+        }));
 
         // First, need to start a leader.
         let (leader_addr, leader_components) = build_sequencer_components(
