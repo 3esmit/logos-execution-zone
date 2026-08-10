@@ -3215,7 +3215,11 @@ fn an_ownership_account_cannot_stand_in_for_the_config_account() {
 
     for (index, (id, key, sequencer_key)) in [
         (ownership_id, &ownership_key, test_sequencer_key(0x45)),
-        (other_ownership_id, &other_ownership_key, test_sequencer_key(0x46)),
+        (
+            other_ownership_id,
+            &other_ownership_key,
+            test_sequencer_key(0x46),
+        ),
     ]
     .into_iter()
     .enumerate()

@@ -131,6 +131,8 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
 }
 
 impl<BP: BlockPublisherTrait> SequencerCore<BP> {
+    const CHANNEL_PROBE_RETRIES: usize = 29;
+    const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
     /// Minimum wait between committee-config submission attempts.
     /// [`committee_discovery::committee_update`] re-detects the same mismatch
     /// on every block until Bedrock's live state catches up; without a
@@ -140,9 +142,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// (`DEFAULT_SEQUENCER_POSTING_TIMEFRAME` +
     /// `DEFAULT_SEQUENCER_POSTING_TIMEOUT` slots) plus normal confirmation lag.
     const COMMITTEE_SUBMISSION_COOLDOWN: Duration = Duration::from_secs(20);
-
-    const CHANNEL_PROBE_RETRIES: usize = 29;
-    const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
 
     /// Starts the sequencer using the provided configuration.
     /// If an existing database is found, the sequencer state is loaded from it and
@@ -285,6 +284,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
 
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
+
+        assert!(
+            committee_discovery::config_is_readable(&state),
+            "sequencer_stake config account is absent or undecodable; this chain's state is not \
+             one this sequencer can operate on"
+        );
 
         let chain = Arc::new(Mutex::new(Self::restore_chain_state(
             &config, &store, &state,

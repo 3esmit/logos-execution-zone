@@ -458,6 +458,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     }
 
     async fn submit_channel_config(&self, new_keys: Vec<Ed25519PublicKey>) -> Result<()> {
+        ensure!(
+            !new_keys.is_empty(),
+            "Refusing to submit a committee update with no accredited keys"
+        );
         let new_keys =
             Keys::try_from(new_keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
 

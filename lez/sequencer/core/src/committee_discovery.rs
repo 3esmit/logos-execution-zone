@@ -1,5 +1,6 @@
 //! Discovery process for the `sequencer_stake` committee.
 
+use log::warn;
 use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
 
 /// The accredited-keys list LEZ state says the channel should have, or `None`
@@ -30,6 +31,14 @@ pub fn committee_update(
         .map(|(key, _)| *key)
         .collect();
     desired.sort_unstable();
+
+    if desired.is_empty() {
+        warn!(
+            "No staked sequencer key meets the minimum; leaving the live committee untouched \
+             since a channel cannot have zero accredited keys"
+        );
+        return None;
+    }
 
     let mut live = live_accredited_keys.to_vec();
     live.sort_unstable();
@@ -102,9 +111,17 @@ pub fn finalize_unstake_is_valid(
 /// `entries` map current as it executes. `None` only if the account is absent
 /// or undecodable, which genesis rules out.
 fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
-    let account =
-        state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())?;
-    SequencerStakeConfig::from_bytes(account.data.as_ref())
+    let Some(account) =
+        state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
+    else {
+        warn!("sequencer_stake config account is absent");
+        return None;
+    };
+    let config = SequencerStakeConfig::from_bytes(account.data.as_ref());
+    if config.is_none() {
+        warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
+    }
+    config
 }
 
 /// The `StakeRecord` an ownership account carries: which key it backs, plus
@@ -112,6 +129,11 @@ fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
 fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
     let account = state.get_account_by_id_ref(ownership_id)?;
     StakeRecord::from_bytes(account.data.as_ref())
+}
+
+#[must_use]
+pub fn config_is_readable(state: &lee::V03State) -> bool {
+    read_config(state).is_some()
 }
 
 #[cfg(test)]
@@ -240,21 +262,36 @@ mod tests {
 
     #[test]
     fn key_below_minimum_but_still_live_is_removed() {
-        let staked = Staked::new(4, MINIMUM - 1);
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
+        let staying = Staked::new(6, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([staked]), &[staked.key]),
-            Some(Vec::new())
+            committee_update(&state_with([exiting, staying]), &[exiting.key, staying.key]),
+            Some(vec![staying.key])
         );
     }
 
     #[test]
     fn a_pending_unstake_discounts_the_stake_backing_a_key() {
-        let staked = Staked::new(5, MINIMUM).pending(1);
+        let discounted = Staked::new(5, 2 * MINIMUM).pending(2 * MINIMUM);
+        let staying = Staked::new(7, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([staked]), &[staked.key]),
-            Some(Vec::new())
+            committee_update(
+                &state_with([discounted, staying]),
+                &[discounted.key, staying.key]
+            ),
+            Some(vec![staying.key])
+        );
+    }
+
+    #[test]
+    fn an_empty_committee_is_never_submitted() {
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
+
+        assert_eq!(
+            committee_update(&state_with([exiting]), &[exiting.key]),
+            None
         );
     }
 
