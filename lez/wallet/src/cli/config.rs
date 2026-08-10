@@ -1,9 +1,11 @@
 use anyhow::Result;
 use clap::Subcommand;
+use common::config::BasicAuth;
 
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
+    config::SequencerConnectionData,
 };
 
 /// Represents generic config CLI subcommand.
@@ -21,6 +23,12 @@ pub enum ConfigSubcommand {
     Set { key: String, value: String },
     /// Prints description of corresponding field.
     Description { key: String },
+    /// Adds a new sequencer to the list.
+    AddSequencer {
+        addr: String,
+        user: Option<String>,
+        password: Option<String>,
+    },
 }
 
 impl ConfigSubcommand {
@@ -148,6 +156,35 @@ impl WalletSubcommand for ConfigSubcommand {
             Self::Get { all, key } => Self::handle_get(all, key, wallet_core),
             Self::Set { key, value } => Self::handle_set(key, value, wallet_core).await,
             Self::Description { key } => Ok(Self::handle_description(&key, wallet_core)),
+            Self::AddSequencer {
+                addr,
+                user,
+                password,
+            } => {
+                let url_addr = addr.parse()?;
+
+                let basic_auth = user.map(|user| {
+                    let mut basic_auth = BasicAuth {
+                        username: user,
+                        password: None,
+                    };
+
+                    if password.is_some() {
+                        basic_auth.password = password;
+                    }
+
+                    basic_auth
+                });
+
+                let seq_connection_data = SequencerConnectionData {
+                    sequencer_addr: url_addr,
+                    basic_auth,
+                };
+
+                wallet_core.config.sequencers.push(seq_connection_data);
+
+                Ok(SubcommandReturnValue::Empty)
+            }
         }
     }
 }
