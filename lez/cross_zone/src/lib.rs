@@ -9,8 +9,6 @@
 //! own block-reading, emission-extraction, delivery-building, and trust model; a
 //! shared trait is best lifted from that first real adapter, not from this one.
 
-use std::collections::BTreeMap;
-
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
@@ -172,33 +170,18 @@ pub fn build_dispatch_from_emission(
     build_inbox_dispatch_tx(programs::cross_zone_inbox().id(), &msg, target_ids)
 }
 
-/// The inbox config a zone derives from its cross-zone config: the per-peer
-/// delivery routes plus its own zone id.
-fn inbox_config(self_zone: ZoneId, cross_zone: &CrossZoneConfig) -> InboxConfig {
-    let mut allowed_routes = BTreeMap::new();
-    for peer in &cross_zone.peers {
-        allowed_routes.insert(peer.channel_id, peer.allowed_routes.clone());
-    }
-    InboxConfig {
-        self_zone,
-        allowed_routes,
-    }
-}
-
 /// The genesis transaction that initializes this zone's inbox config PDA.
 ///
-/// Lets the inbox guest authorize inbound peer messages; replaying it seeds the
-/// same account on every node, keeping their state consistent.
+/// The operator's per-peer routes no longer live here. They are fanned out into
+/// each target program's own config, so all the inbox keeps is its zone id.
+/// Replaying this seeds the same account on every node.
 #[must_use]
-pub fn build_inbox_init_config_tx(
-    self_zone: ZoneId,
-    cross_zone: &CrossZoneConfig,
-) -> lee::PublicTransaction {
+pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
     genesis_public_tx(
         inbox_id,
         vec![inbox_config_account_id(inbox_id)],
-        Instruction::InitConfig(inbox_config(self_zone, cross_zone)),
+        Instruction::InitConfig(InboxConfig { self_zone }),
     )
 }
 

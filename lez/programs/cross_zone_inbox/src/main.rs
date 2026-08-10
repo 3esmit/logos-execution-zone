@@ -95,15 +95,6 @@ fn dispatch(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    // Checked as a pair. The emitting program is as much a part of the
-    // authorization as the target: an emitter whose caller chooses the target
-    // reaches everything the peer may reach, so a target allowlist on its own
-    // lets any such emitter stand in for every other one.
-    assert!(
-        cfg.permits(&msg.src_zone, msg.src_program_id, msg.target_program_id),
-        "No route from this source program to this target program for this peer"
-    );
-
     let mut shard =
         SeenShard::from_bytes(&seen.account.data.clone().into_inner()).expect("seen shard decodes");
 
@@ -177,8 +168,7 @@ fn dispatch(
     .write();
 }
 
-/// Writes the inbox config (peer + target allowlists) into the config PDA exactly
-/// once at genesis.
+/// Writes the inbox config into the config PDA exactly once at genesis.
 fn init_config(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
@@ -195,9 +185,8 @@ fn init_config(
         "account must be the inbox config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
-    // init; an already-owned config must already hold exactly these allowlists (the
-    // genesis block is replayed onto seeded state during multi-sequencer
-    // reconstruction), otherwise reject a post-genesis attempt to change them.
+    // init; an already-owned config must already hold exactly this, since genesis
+    // is replayed onto seeded state during multi-sequencer reconstruction.
     // `new_claimed_if_default` alone would not stop the owning program from
     // rewriting its own config data on a later call.
     if config_meta.account != Account::default() {
@@ -208,7 +197,7 @@ fn init_config(
         assert_eq!(
             config_meta.account.data.clone().into_inner(),
             config.to_bytes(),
-            "inbox config already initialized with different allowlists"
+            "inbox config already initialized differently"
         );
     }
 

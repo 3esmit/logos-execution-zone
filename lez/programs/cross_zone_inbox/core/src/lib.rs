@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
@@ -85,32 +85,20 @@ pub struct CrossZoneMessage {
     pub l1_inclusion_witness: Option<Vec<u8>>,
 }
 
-/// Per-peer delivery routes, plus this inbox's own zone id.
+/// This inbox's own zone id.
+///
+/// It no longer decides who may deliver what. Each target program authorizes its
+/// own sources against the marker the inbox passes, so the only thing the inbox
+/// still needs to know is which zone it is, to refuse a message addressed to
+/// itself.
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct InboxConfig {
     pub self_zone: ZoneId,
-    /// Which deliveries each peer may make. A peer absent from this map may
-    /// deliver nothing.
-    pub allowed_routes: BTreeMap<ZoneId, Vec<CrossZoneRoute>>,
 }
 
 impl InboxConfig {
-    /// Whether `src_zone` may deliver from `src_program_id` to
-    /// `target_program_id`. A peer with no routes may deliver nothing.
-    #[must_use]
-    pub fn permits(
-        &self,
-        src_zone: &ZoneId,
-        src_program_id: ProgramId,
-        target_program_id: ProgramId,
-    ) -> bool {
-        self.allowed_routes
-            .get(src_zone)
-            .is_some_and(|routes| routes_permit(routes, src_program_id, target_program_id))
-    }
-
     /// Borsh-encoded form stored in the inbox config account.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -203,25 +191,6 @@ pub enum Instruction {
     /// default (unclaimed) config PDA; the guest refuses a non-default pre-state,
     /// so it cannot be re-run to overwrite the allowlists.
     InitConfig(InboxConfig),
-}
-
-/// Whether `routes` authorize a delivery from `src_program_id` to
-/// `target_program_id`.
-///
-/// The one place the rule lives. The inbox guest decides with it and the
-/// sequencer's watcher drops unroutable messages with it, and those two must
-/// agree: a watcher stricter than the guest loses messages silently, and one
-/// looser records deliveries the guest will refuse, which production then feeds
-/// in and gives up on.
-#[must_use]
-pub fn routes_permit(
-    routes: &[CrossZoneRoute],
-    src_program_id: ProgramId,
-    target_program_id: ProgramId,
-) -> bool {
-    routes.iter().any(|route| {
-        route.src_program_id == src_program_id && route.target_program_id == target_program_id
-    })
 }
 
 /// Content-addressed replay key for a delivered message.
@@ -334,63 +303,6 @@ mod tests {
 
     fn zone(b: u8) -> ZoneId {
         [b; 32]
-    }
-
-    fn program(n: u32) -> ProgramId {
-        [n; 8]
-    }
-
-    /// The route is the pair. Two entries that are each reasonable on their own,
-    /// a lock program that may mint and a ping emitter that may reach a
-    /// receiver, must not compose into the lock program's target being
-    /// reachable from the ping emitter: that emitter lets its caller choose the
-    /// target, so it would mint with nothing locked behind it.
-    #[test]
-    fn a_route_authorizes_one_pair_and_does_not_compose() {
-        let lock = program(1);
-        let wrapped_token = program(2);
-        let ping_sender = program(3);
-        let ping_receiver = program(4);
-
-        let mut allowed_routes = BTreeMap::new();
-        allowed_routes.insert(
-            zone(9),
-            vec![
-                CrossZoneRoute {
-                    src_program_id: lock,
-                    target_program_id: wrapped_token,
-                },
-                CrossZoneRoute {
-                    src_program_id: ping_sender,
-                    target_program_id: ping_receiver,
-                },
-            ],
-        );
-        let config = InboxConfig {
-            self_zone: zone(1),
-            allowed_routes,
-        };
-
-        assert!(config.permits(&zone(9), lock, wrapped_token));
-        assert!(config.permits(&zone(9), ping_sender, ping_receiver));
-
-        assert!(
-            !config.permits(&zone(9), ping_sender, wrapped_token),
-            "an emitter whose caller picks the target must not reach the bridge's target"
-        );
-        assert!(
-            !config.permits(&zone(9), lock, ping_receiver),
-            "a route grants its own target, not every target the peer has"
-        );
-    }
-
-    #[test]
-    fn a_peer_with_no_routes_may_deliver_nothing() {
-        let config = InboxConfig {
-            self_zone: zone(1),
-            allowed_routes: BTreeMap::new(),
-        };
-        assert!(!config.permits(&zone(9), program(1), program(2)));
     }
 
     #[test]

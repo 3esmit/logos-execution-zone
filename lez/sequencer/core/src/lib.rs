@@ -1537,9 +1537,9 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         config.cross_zone.as_ref(),
     ));
     let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|cross_zone| {
+    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
         let self_zone = *config.bedrock_config.channel_id.as_ref();
-        cross_zone::build_inbox_init_config_tx(self_zone, cross_zone)
+        cross_zone::build_inbox_init_config_tx(self_zone)
     });
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
