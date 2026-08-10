@@ -849,7 +849,7 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
-/// An `ask` tthat does not derive this account's `npk` is not a credential for it.
+/// An `ask` that does not derive this account's `npk` is not a credential for it.
 #[test]
 fn regular_init_with_non_chaining_ask_npk_is_rejected() {
     let program = crate::test_methods::claimer();
