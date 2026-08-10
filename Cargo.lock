@@ -9106,6 +9106,7 @@ dependencies = [
  "common",
  "jsonrpsee",
  "sequencer_service_protocol",
+ "serde",
  "serde_json",
 ]
 

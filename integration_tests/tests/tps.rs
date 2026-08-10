@@ -110,7 +110,7 @@ impl TpsTestManager {
                     .get_transaction(*tx_hash)
                     .await
                     .ok()
-                    .flatten()
+                    .and_then(|response| response.0)
                     .is_some();
                 if found {
                     break;
@@ -223,7 +223,7 @@ pub async fn tps_test() -> Result<()> {
                     log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                 });
 
-            if tx_obj.is_ok_and(|opt| opt.is_some()) {
+            if tx_obj.is_ok_and(|response| response.0.is_some()) {
                 info!("Found tx {i} with hash {tx_hash}");
                 break;
             }

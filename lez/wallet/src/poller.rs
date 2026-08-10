@@ -41,8 +41,11 @@ impl TxPoller {
 
             loop {
                 match self.client.get_transaction(tx_hash).await {
-                    Ok(Some(tx)) => return Ok(tx),
-                    Ok(None) => {}
+                    Ok(response) => {
+                        if let Some(tx) = response.0 {
+                            return Ok(tx);
+                        }
+                    }
                     Err(err) => {
                         warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                     }

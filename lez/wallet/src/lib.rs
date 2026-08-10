@@ -596,7 +596,8 @@ impl WalletCore {
         Ok(self
             .multi_sequencer_client
             .metered_call(async |client: &SequencerClient| client.get_transaction(hash).await)
-            .await?)
+            .await?
+            .0)
     }
 
     /// Get public account.
@@ -905,7 +906,7 @@ impl WalletCore {
 
                 match readback {
                     Ok(readback) => {
-                        verify_deployment_readback(expected_hash, &expected_bytecode, readback)
+                        verify_deployment_readback(expected_hash, &expected_bytecode, readback.0)
                     }
                     Err(readback_error) => anyhow::bail!(
                         "deployment submission outcome is unknown for {expected_hash}: submission failed: {submission_error:#}; hash lookup failed: {readback_error:#}"

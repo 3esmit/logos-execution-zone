@@ -13,6 +13,7 @@ use sequencer_service_protocol::{
     LeeTransaction, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
     LocalPublicTransactionReceiptV1, MembershipProof, Nonce, ProgramId,
 };
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -38,6 +39,93 @@ compile_error!("At least one of `server` or `client` features must be enabled.")
 /// ```
 #[cfg(feature = "client")]
 pub type SequencerClient = jsonrpsee::http_client::HttpClient;
+
+/// Result returned by `getTransaction`.
+///
+/// The canonical response is a single serialized transaction. Some deployed
+/// Testnet sequencers still return the older `(transaction, block_id)` tuple;
+/// accepting that shape here keeps clients compatible while the transaction
+/// payload itself remains decoded and validated by `LeeTransaction`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionLookupResponse(pub Option<LeeTransaction>);
+
+impl Serialize for TransactionLookupResponse {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TransactionLookupResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct TransactionLookupVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for TransactionLookupVisitor {
+            type Value = TransactionLookupResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(
+                    "null, a serialized transaction string, or a two-element transaction tuple",
+                )
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(TransactionLookupResponse(None))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(TransactionLookupResponse(None))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                LeeTransaction::deserialize(serde::de::value::StrDeserializer::<E>::new(v))
+                    .map(|transaction| TransactionLookupResponse(Some(transaction)))
+                    .map_err(E::custom)
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                self.visit_str(&v)
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let transaction = seq
+                    .next_element::<LeeTransaction>()?
+                    .ok_or_else(|| A::Error::custom("transaction tuple is missing payload"))?;
+                let _block_id = seq
+                    .next_element::<u64>()?
+                    .ok_or_else(|| A::Error::custom("transaction tuple is missing block id"))?;
+                if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                    return Err(A::Error::custom(
+                        "transaction tuple has more than two elements",
+                    ));
+                }
+                Ok(TransactionLookupResponse(Some(transaction)))
+            }
+        }
+
+        deserializer.deserialize_any(TransactionLookupVisitor)
+    }
+}
 
 #[cfg_attr(all(feature = "server", not(feature = "client")), rpc(server))]
 #[cfg_attr(all(feature = "client", not(feature = "server")), rpc(client))]
@@ -76,7 +164,7 @@ pub trait Rpc {
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned>;
+    ) -> Result<TransactionLookupResponse, ErrorObjectOwned>;
 
     /// Returns a bounded receipt from the local sequencer for a public transaction.
     ///
@@ -137,16 +225,62 @@ mod tests {
         LocalPublicTransactionV1,
     };
 
-    use super::LeeTransaction;
+    use super::TransactionLookupResponse;
 
     #[test]
-    fn transaction_lookup_wire_result_is_a_single_transaction() -> Result<(), serde_json::Error> {
+    fn transaction_lookup_wire_result_accepts_canonical_string() -> Result<(), serde_json::Error> {
         let expected = common::test_utils::produce_dummy_empty_transaction();
         let wire = serde_json::to_value(&expected)?;
         assert!(wire.is_string());
 
-        let decoded = serde_json::from_value::<Option<LeeTransaction>>(wire)?;
-        assert_eq!(decoded, Some(expected));
+        let decoded = serde_json::from_value::<TransactionLookupResponse>(wire)?;
+        assert_eq!(decoded, TransactionLookupResponse(Some(expected)));
+        Ok(())
+    }
+
+    #[test]
+    fn transaction_lookup_wire_result_accepts_legacy_tuple() -> Result<(), serde_json::Error> {
+        let expected = common::test_utils::produce_dummy_empty_transaction();
+        let wire = serde_json::json!([serde_json::to_value(&expected)?, 2638_u64]);
+
+        let decoded = serde_json::from_value::<TransactionLookupResponse>(wire)?;
+        assert_eq!(decoded, TransactionLookupResponse(Some(expected)));
+        Ok(())
+    }
+
+    #[test]
+    fn transaction_lookup_wire_result_accepts_null() -> Result<(), serde_json::Error> {
+        let decoded = serde_json::from_value::<TransactionLookupResponse>(serde_json::Value::Null)?;
+        assert_eq!(decoded, TransactionLookupResponse(None));
+        Ok(())
+    }
+
+    #[test]
+    fn transaction_lookup_wire_result_rejects_malformed_tuple() {
+        let error = serde_json::from_value::<TransactionLookupResponse>(serde_json::json!([]))
+            .expect_err("empty transaction tuple must fail");
+        assert!(error.to_string().contains("missing payload"));
+
+        let extra_field_error =
+            serde_json::from_value::<TransactionLookupResponse>(serde_json::json!([
+                serde_json::to_value(common::test_utils::produce_dummy_empty_transaction())
+                    .unwrap(),
+                2638_u64,
+                1_u64,
+            ]))
+            .expect_err("extra tuple fields must fail");
+        assert!(
+            extra_field_error
+                .to_string()
+                .contains("more than two elements")
+        );
+    }
+
+    #[test]
+    fn transaction_lookup_wire_result_serializes_canonically() -> Result<(), serde_json::Error> {
+        let expected = common::test_utils::produce_dummy_empty_transaction();
+        let wire = serde_json::to_value(TransactionLookupResponse(Some(expected)))?;
+        assert!(wire.is_string());
         Ok(())
     }
 

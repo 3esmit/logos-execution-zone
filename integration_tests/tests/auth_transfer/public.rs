@@ -303,7 +303,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let recipient_balance_after = account_balance(&ctx, recipient).await?;
     let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
     assert_eq!(faucet_balance_after, faucet_balance_before);
@@ -349,7 +349,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let recipient_balance_after = account_balance(&ctx, recipient).await?;
     let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
     assert_eq!(faucet_balance_after, faucet_balance_before);
@@ -399,7 +399,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
     let vault_balance_after = account_balance(&ctx, attacker_vault_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(faucet_balance_after, faucet_balance_before);
     assert_eq!(vault_balance_after, vault_balance_before);
