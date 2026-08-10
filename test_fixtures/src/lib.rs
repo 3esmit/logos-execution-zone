@@ -125,7 +125,7 @@ impl TestContext {
 
     /// Get a builder for the test context to customize its configuration.
     #[must_use]
-    pub fn builder(configs: Vec<MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
+    pub fn builder(configs: impl IntoIterator<Item = MultiNodeTestContextConfig>) -> MultiZoneTestContextBuilder {
         MultiZoneTestContextBuilder {
             zone_builders: configs
                 .into_iter()
@@ -173,9 +173,9 @@ impl TestContext {
             .map(|zone| zone.sequencers.iter())
     }
 
-    #[must_use]
     /// Reference for the default sequencer component for a zone (in case, if only one sequencer
     /// exists).
+    #[must_use]
     pub fn zone_default_sequencer_component(&self, channel_id: ChannelId) -> &SequencerComponents {
         self.sequencer_components_iter(channel_id)
             .unwrap()

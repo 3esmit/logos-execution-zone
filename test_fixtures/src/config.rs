@@ -297,8 +297,8 @@ pub fn bedrock_channel_id_b() -> ChannelId {
     ChannelId::from(channel_id)
 }
 
-#[must_use]
 /// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
+#[must_use]
 pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
     seed.to_le_bytes()
         .repeat(8)
@@ -306,11 +306,11 @@ pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
         .unwrap_or_else(|_| unreachable!())
 }
 
-#[must_use]
 /// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.
 ///
 /// Counting from the end of `u32` to guarantee, that it is different from
 /// `sequencer_signing_key_from_seed`.
+#[must_use]
 pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
     let channel_id: [u8; 32] =
     // Useless in this case, but will make clippy happy
