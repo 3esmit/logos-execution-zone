@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, str::FromStr as _};
 use clock_core::ClockAccountData;
 use lee_core::account::{Account, AccountId, Nonce};
 
+// TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
 pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 
