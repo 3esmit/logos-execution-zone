@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use cross_zone_inbox_core::{
     CrossZoneMessage, CrossZoneRoute, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id,
+    inbox_config_account_id, inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
@@ -133,6 +133,22 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     )]);
 }
 
+/// The account list a dispatch declares, mirroring `cross_zone::build_inbox_dispatch_tx`:
+/// config, seen shard, source marker, then the target's own accounts.
+fn dispatch_accounts(
+    inbox_id: lee_core::program::ProgramId,
+    msg: &CrossZoneMessage,
+    targets: Vec<AccountId>,
+) -> Vec<AccountId> {
+    let mut ids = vec![
+        inbox_config_account_id(inbox_id),
+        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_program_id),
+    ];
+    ids.extend(targets);
+    ids
+}
+
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
@@ -199,12 +215,14 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id),
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
-        ],
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -271,12 +289,11 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let record_id = ping_record_pda(receiver_id);
 
     let message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(inbox_id, &msg, vec![record_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -972,18 +989,12 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1030,18 +1041,12 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1115,12 +1120,7 @@ fn mint_replay_rejected() {
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1202,7 +1202,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let record_id = ping_record_pda(receiver_id);
     let message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(inbox_id, &msg, vec![record_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1235,7 +1235,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     };
     let control_message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(inbox_id, &control_msg, vec![record_id]),
         vec![],
         InboxInstruction::Dispatch(control_msg),
     )

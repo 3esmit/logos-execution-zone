@@ -45,16 +45,16 @@ fn mint(
     recipient: [u8; 32],
     amount: u128,
 ) {
-    // pre_states: [config PDA, recipient holding PDA].
-    let [config, holding] = <[AccountWithMetadata; 2]>::try_from(pre_states)
-        .expect("Mint requires the config and recipient holding accounts");
+    // pre_states: [source marker, config PDA, recipient holding PDA].
+    let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
+        .expect("Mint requires the source marker, config, and recipient holding accounts");
 
     // The config PDA is genesis-seeded with the authorized minter (the cross-zone
     // inbox). Pin the caller to it, since the guest cannot import the inbox id.
     assert_eq!(
         config.account_id,
         config_account_id(self_program_id),
-        "first account must be the wrapped-token config PDA"
+        "second account must be the wrapped-token config PDA"
     );
     let minter = read_minter(&config.account.data.clone().into_inner())
         .expect("config account holds an authorized minter id");
@@ -67,7 +67,7 @@ fn mint(
     assert_eq!(
         holding.account_id,
         holding_account_id(self_program_id, &recipient),
-        "second account must be the recipient holding PDA"
+        "third account must be the recipient holding PDA"
     );
 
     assert!(
@@ -93,8 +93,12 @@ fn mint(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![config, holding],
-        vec![config_post, holding_post],
+        vec![marker.clone(), config, holding],
+        vec![
+            AccountPostState::new(marker.account),
+            config_post,
+            holding_post,
+        ],
     )
     .write();
 }

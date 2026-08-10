@@ -13,6 +13,7 @@ const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
 /// indistinguishable under one domain. Belt and braces, since the image id
 /// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/01/";
+const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";
 
 /// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
 pub type ZoneId = [u8; 32];
@@ -279,6 +280,45 @@ pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     bytes[..32].copy_from_slice(&INBOX_SEEN_SEED_DOMAIN);
     bytes[32..64].copy_from_slice(src_zone);
     bytes[64..].copy_from_slice(&src_block_id.to_le_bytes());
+
+    let seed: [u8; 32] = Impl::hash_bytes(&bytes)
+        .as_bytes()
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    PdaSeed::new(seed)
+}
+
+/// The account naming who sent a delivery, which the inbox passes at position 0
+/// of the chained call so the target can authenticate its own sources.
+///
+/// It is never written and never claimed, so it stays `Account::default()` for
+/// ever and the state machine's uninitialized-account rule skips it. The address
+/// is the whole message: only the inbox can derive it, and it commits to the pair
+/// the target cares about.
+#[must_use]
+pub fn inbox_source_marker_account_id(
+    inbox_id: ProgramId,
+    src_zone: &ZoneId,
+    src_program_id: ProgramId,
+) -> AccountId {
+    AccountId::for_public_pda(
+        &inbox_id,
+        &inbox_source_marker_seed(src_zone, src_program_id),
+    )
+}
+
+/// Seed of the source marker, exposed so a target can re-derive the address of
+/// the one source it accepts and compare.
+#[must_use]
+pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+
+    let mut bytes = [0_u8; 96];
+    bytes[..32].copy_from_slice(&SOURCE_MARKER_SEED_DOMAIN);
+    bytes[32..64].copy_from_slice(src_zone);
+    for (word, chunk) in src_program_id.iter().zip(bytes[64..].chunks_exact_mut(4)) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
 
     let seed: [u8; 32] = Impl::hash_bytes(&bytes)
         .as_bytes()

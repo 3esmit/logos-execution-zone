@@ -24,12 +24,14 @@ fn main() {
         ReceiverInstruction::Record { payload } => payload,
     };
 
-    let [record] = <[AccountWithMetadata; 1]>::try_from(pre_states)
-        .expect("Record requires exactly 1 account");
+    // pre_states: [source marker, record PDA]. The marker names the peer program
+    // the message came from; this program records anything, so it only forwards it.
+    let [marker, record] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+        .expect("Record requires the source marker and the record account");
     assert_eq!(
         record.account_id,
         ping_record_pda(self_program_id),
-        "Account must be the ping record PDA"
+        "Second account must be the ping record PDA"
     );
 
     let mut post_account = record.account.clone();
@@ -41,8 +43,8 @@ fn main() {
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![record],
-        vec![post],
+        vec![marker.clone(), record],
+        vec![AccountPostState::new(marker.account), post],
     )
     .write();
 }

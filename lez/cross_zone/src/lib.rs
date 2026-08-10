@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
-    inbox_seen_shard_account_id,
+    inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
 use lee_core::{
     account::{Account, AccountId, Balance},
@@ -111,12 +111,20 @@ fn build_inbox_dispatch_tx(
     msg: &CrossZoneMessage,
     target_account_ids: Vec<AccountId>,
 ) -> lee::PublicTransaction {
-    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(2));
+    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(3));
     account_ids.push(inbox_config_account_id(inbox_id));
     account_ids.push(inbox_seen_shard_account_id(
         inbox_id,
         &msg.src_zone,
         msg.src_block_id,
+    ));
+    // Declared here rather than derived by the guest, since a guest cannot
+    // conjure an account. Both the watcher and the verifier build it through this
+    // one function, so they cannot disagree about the source a target will see.
+    account_ids.push(inbox_source_marker_account_id(
+        inbox_id,
+        &msg.src_zone,
+        msg.src_program_id,
     ));
     account_ids.extend(target_account_ids);
 

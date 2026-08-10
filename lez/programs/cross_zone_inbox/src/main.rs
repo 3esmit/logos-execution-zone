@@ -1,6 +1,7 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
+    inbox_source_marker_account_id,
 };
 use lee_core::{
     account::{Account, AccountWithMetadata},
@@ -61,10 +62,11 @@ fn dispatch(
         "l1_inclusion_witness must be None in v1"
     );
 
-    // pre_states layout: [config, seen_shard, then the target accounts].
+    // pre_states layout: [config, seen_shard, source marker, then the target accounts].
     let mut accounts = pre_states.into_iter();
     let config = accounts.next().expect("config account required");
     let seen = accounts.next().expect("seen shard account required");
+    let marker = accounts.next().expect("source marker account required");
     let target_accounts: Vec<AccountWithMetadata> = accounts.collect();
 
     assert_eq!(
@@ -76,6 +78,14 @@ fn dispatch(
         seen.account_id,
         inbox_seen_shard_account_id(self_program_id, &msg.src_zone, msg.src_block_id),
         "Second account must be the seen-shard PDA"
+    );
+    // The one value the chained call carries about where the message came from.
+    // The target re-derives this address from the source it accepts, so binding it
+    // here is what makes a target's own check meaningful.
+    assert_eq!(
+        marker.account_id,
+        inbox_source_marker_account_id(self_program_id, &msg.src_zone, msg.src_program_id),
+        "Third account must be the source marker PDA for this message"
     );
 
     let cfg = InboxConfig::from_bytes(&config.account.data.clone().into_inner())
@@ -137,19 +147,23 @@ fn dispatch(
             .map(|c| u32::from_le_bytes(c.try_into().unwrap_or_else(|_| unreachable!())))
             .collect();
 
+        // The marker leads, so a target reads its source at a fixed position
+        // without knowing anything about the accounts that follow it.
+        let mut call_pre_states = vec![marker.clone()];
+        call_pre_states.extend(target_accounts.clone());
         let call = ChainedCall {
             program_id: msg.target_program_id,
-            pre_states: target_accounts.clone(),
+            pre_states: call_pre_states,
             instruction_data,
             pda_seeds: vec![],
         };
         (seen_post, vec![call])
     };
 
-    let mut post_states = vec![unchanged(&config), seen_post];
+    let mut post_states = vec![unchanged(&config), seen_post, unchanged(&marker)];
     post_states.extend(target_accounts.iter().map(unchanged));
 
-    let mut output_pre_states = vec![config, seen];
+    let mut output_pre_states = vec![config, seen, marker];
     output_pre_states.extend(target_accounts);
 
     ProgramOutput::new(
