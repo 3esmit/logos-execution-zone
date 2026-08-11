@@ -24,6 +24,9 @@ pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
 /// [`SEQUENCER_SIGNING_KEY`]: block signing and stake control are distinct roles.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
+/// Bedrock signing key used by the prebuilt dump as first accredited key.
+pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
+
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
 // them.

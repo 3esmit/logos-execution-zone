@@ -121,6 +121,11 @@ impl SequencerSetup {
 
         debug!("Using sequencer home at {}", home.display());
 
+        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+            genesis_transactions
+                .is_none()
+                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+        });
         if let Some(key_bytes) = bedrock_signing_key {
             std::fs::write(home.join("bedrock_signing_key"), key_bytes)
                 .context("Failed to write pre-generated bedrock signing key")?;
