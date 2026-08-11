@@ -90,14 +90,14 @@ impl SequencerHandle {
         } = self;
 
         select! {
-            () = executor_ref.wait_for_shutdown() => {
-                Err(anyhow!("Executor actor has been stopped"))
+            err = executor_ref.wait_for_shutdown_with_result(|res| stop_res_into_anyhow("Executor", res)) => {
+                Err(err)
             }
-            () = rpc_server_ref.wait_for_shutdown() => {
-                Err(anyhow!("RPC server actor has been stopped"))
+            err = rpc_server_ref.wait_for_shutdown_with_result(|res| stop_res_into_anyhow("RPC Server", res)) => {
+                Err(err)
             }
-            () = scheduler_ref.wait_for_shutdown() => {
-                Err(anyhow!("Scheduler actor has been stopped"))
+            err = scheduler_ref.wait_for_shutdown_with_result(|res| stop_res_into_anyhow("Scheduler", res)) => {
+                Err(err)
             }
         }
     }
@@ -179,4 +179,24 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         scheduler_ref,
         addr,
     ))
+}
+
+fn stop_res_into_anyhow<E: std::fmt::Display>(
+    actor_name: &str,
+    res: Result<&kameo::error::ActorStopReason, kameo::error::HookError<&E>>,
+) -> anyhow::Error {
+    match res {
+        Ok(reason) => anyhow!("{actor_name} actor has been stopped: {reason}"),
+        Err(kameo::error::HookError::Panicked(err)) => {
+            anyhow!(err).context(format!("{actor_name} actor has been stopped due to panic"))
+        }
+        Err(kameo::error::HookError::Error(err)) => {
+            // Can't use `anyhow!(err)` here because `err` is a reference to the error, not
+            // the error itself. Also can't require `E: Clone` as a lot
+            // of error types don't implement `Clone`
+            // (e.g. `std::io::Error` and `anyhow::Error`).
+            anyhow!(format!("{err:#}"))
+                .context(format!("{actor_name} actor has been stopped due to error"))
+        }
+    }
 }
