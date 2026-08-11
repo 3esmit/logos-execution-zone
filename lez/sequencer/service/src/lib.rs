@@ -153,8 +153,6 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let max_block_size = config.max_block_size;
 
     let executor = ExecutorActor::new(config).await;
-    // Taken while the actor is still owned here: once it is spawned its state
-    // lives on the actor's task and there is no way to reach into it.
     let executor_ref = ExecutorActor::spawn(executor);
     info!("Executor Actor spawned");
 

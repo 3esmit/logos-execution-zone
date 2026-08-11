@@ -1,4 +1,4 @@
-//! RPC Server Actor server RPC queries and retranslates them to Executor.
+//! RPC Server Actor serves RPC queries and forwards them to Executor.
 
 use std::net::SocketAddr;
 
