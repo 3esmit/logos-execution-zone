@@ -10,11 +10,17 @@ use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
 use tokio::select;
 
+#[cfg(not(feature = "standalone"))]
+type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
+
+#[cfg(feature = "standalone")]
+type BlockPublisher = sequencer_core::mock::MockBlockPublisher;
+
 /// Handle to manage the sequencer and its tasks.
 ///
 /// Implements `Drop` to ensure all actors are killed when dropped.
 pub struct SequencerHandle {
-    executor_ref: ActorRef<ExecutorActor>,
+    executor_ref: ActorRef<ExecutorActor<BlockPublisher>>,
     rpc_server_ref: ActorRef<RpcServerActor>,
     scheduler_ref: ActorRef<Scheduler>,
     addr: SocketAddr,
@@ -22,7 +28,7 @@ pub struct SequencerHandle {
 
 impl SequencerHandle {
     const fn new(
-        executor_ref: ActorRef<ExecutorActor>,
+        executor_ref: ActorRef<ExecutorActor<BlockPublisher>>,
         rpc_server_ref: ActorRef<RpcServerActor>,
         scheduler_ref: ActorRef<Scheduler>,
         addr: SocketAddr,

@@ -16,10 +16,8 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    SequencerCore, TransactionOrigin,
-    block_publisher::{BlockPublisherTrait as _, ZoneSdkPublisher},
-    config::SequencerConfig,
-    task_group::TaskGroup,
+    SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
+    config::SequencerConfig, task_group::TaskGroup,
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -32,11 +30,14 @@ use crate::protocol::{
 
 pub mod error;
 pub mod protocol;
+#[cfg(test)]
+mod tests;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-pub struct ExecutorActor {
-    sequencer: SequencerCore<ZoneSdkPublisher>,
+// TODO: Remove `BP` once this part is moved to a separate actor
+pub struct ExecutorActor<BP: BlockPublisherTrait> {
+    sequencer: SequencerCore<BP>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 
     // --- TODO: Remove these fields below ---
@@ -49,10 +50,9 @@ pub struct ExecutorActor {
     background_tasks: Vec<TaskGroup>,
 }
 
-impl ExecutorActor {
+impl<BP: BlockPublisherTrait> ExecutorActor<BP> {
     pub async fn new(config: SequencerConfig) -> Self {
-        let (sequencer, mempool_handle): (SequencerCore, _) =
-            SequencerCore::start_from_config(config).await;
+        let (sequencer, mempool_handle) = SequencerCore::<BP>::start_from_config(config).await;
 
         let driver_cancellation = sequencer.block_publisher().driver_cancellation();
         let background_tasks = sequencer.background_tasks();
@@ -66,7 +66,7 @@ impl ExecutorActor {
     }
 }
 
-impl Actor for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Actor for ExecutorActor<BP> {
     type Args = Self;
     type Error = Error;
 
@@ -95,7 +95,7 @@ impl Actor for ExecutorActor {
                 Ok(signal)
             }
             () = self.driver_cancellation.cancelled() => {
-                return Err(Error::BlockPublisherFinishedUnexpectedly);
+                Err(Error::BlockPublisherFinishedUnexpectedly)
             }
         }
     }
@@ -113,7 +113,7 @@ impl Actor for ExecutorActor {
     }
 }
 
-impl Message<Transaction> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<Transaction> for ExecutorActor<BP> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -123,11 +123,11 @@ impl Message<Transaction> for ExecutorActor {
     ) -> Self::Reply {
         self.mempool_handle
             .try_push((TransactionOrigin::User, transaction))
-            .map_err(|_| Error::MempoolIsFull)
+            .map_err(|_err| Error::MempoolIsFull)
     }
 }
 
-impl Message<GetBlock> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlock> for ExecutorActor<BP> {
     type Reply = Result<Option<Block>>;
 
     async fn handle(
@@ -142,7 +142,7 @@ impl Message<GetBlock> for ExecutorActor {
     }
 }
 
-impl Message<GetBlockRange> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlockRange> for ExecutorActor<BP> {
     type Reply = Result<Vec<Block>>;
 
     async fn handle(
@@ -162,7 +162,7 @@ impl Message<GetBlockRange> for ExecutorActor {
     }
 }
 
-impl Message<GetLastBlockId> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetLastBlockId> for ExecutorActor<BP> {
     type Reply = Result<BlockId>;
 
     async fn handle(
@@ -174,7 +174,7 @@ impl Message<GetLastBlockId> for ExecutorActor {
     }
 }
 
-impl Message<GetAccountBalance> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountBalance> for ExecutorActor<BP> {
     type Reply = Balance;
 
     async fn handle(
@@ -187,7 +187,7 @@ impl Message<GetAccountBalance> for ExecutorActor {
     }
 }
 
-impl Message<GetTransaction> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetTransaction> for ExecutorActor<BP> {
     type Reply = Option<(LeeTransaction, BlockId)>;
 
     async fn handle(
@@ -201,7 +201,7 @@ impl Message<GetTransaction> for ExecutorActor {
     }
 }
 
-impl Message<GetAccountNonces> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountNonces> for ExecutorActor<BP> {
     type Reply = Vec<Nonce>;
 
     async fn handle(
@@ -218,7 +218,7 @@ impl Message<GetAccountNonces> for ExecutorActor {
     }
 }
 
-impl Message<GetProofsAndRoot> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProofsAndRoot> for ExecutorActor<BP> {
     type Reply = (
         Vec<Option<lee_core::MembershipProof>>,
         lee_core::CommitmentSetDigest,
@@ -239,7 +239,7 @@ impl Message<GetProofsAndRoot> for ExecutorActor {
     }
 }
 
-impl Message<GetAccount> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccount> for ExecutorActor<BP> {
     type Reply = GetAccountReply;
 
     async fn handle(
@@ -255,7 +255,7 @@ impl Message<GetAccount> for ExecutorActor {
     }
 }
 
-impl Message<GetChannelId> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetChannelId> for ExecutorActor<BP> {
     type Reply = GetChannelIdReply;
 
     async fn handle(
@@ -269,7 +269,7 @@ impl Message<GetChannelId> for ExecutorActor {
     }
 }
 
-impl Message<ProduceBlock> for ExecutorActor {
+impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for ExecutorActor<BP> {
     type Reply = Result<()>;
 
     async fn handle(

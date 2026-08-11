@@ -8,19 +8,20 @@ use jsonrpsee::{
 };
 use kameo::actor::ActorRef;
 use log::{error, warn};
+use sequencer_core::block_publisher::BlockPublisherTrait;
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
     CrossZoneDeadLetter, CrossZoneDeadLetterReport, HashType, MembershipProof, Nonce, ProgramId,
 };
 
-pub struct Service {
-    executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor>,
+pub struct Service<BP: BlockPublisherTrait + Send + 'static> {
+    executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
     max_block_size: ByteSize,
 }
 
-impl Service {
+impl<BP: BlockPublisherTrait + Send + 'static> Service<BP> {
     pub fn new(
-        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor>,
+        executor_ref: ActorRef<sequencer_executor_actor::ExecutorActor<BP>>,
         max_block_size: ByteSize,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
@@ -33,7 +34,7 @@ impl Service {
 }
 
 #[async_trait]
-impl sequencer_service_rpc::RpcServer for Service {
+impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer for Service<BP> {
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
         sequencer_rpc_server_actor_metrics::increment_submitted_transactions_total();
 
