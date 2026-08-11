@@ -10,6 +10,8 @@ use tokio::select;
 
 use crate::{Result, error::Error};
 
+mod service;
+
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
 pub struct RpcServerActor {
@@ -41,7 +43,7 @@ impl RpcServerActor {
 
         info!("Starting RPC Server on {addr}");
 
-        let service = crate::service::Service::new(executor_ref, max_block_size);
+        let service = service::Service::new(executor_ref, max_block_size);
         let server_handle = server.start(service.into_rpc());
 
         Ok(Self {
