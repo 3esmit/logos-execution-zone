@@ -9604,7 +9604,6 @@ dependencies = [
 name = "sequencer_rpc_server_actor"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "borsh",
  "bytesize",
  "common",
@@ -9618,6 +9617,7 @@ dependencies = [
  "sequencer_rpc_server_actor_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "thiserror 2.0.18",
  "tokio",
 ]
 

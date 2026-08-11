@@ -2,8 +2,8 @@
 
 use std::net::SocketAddr;
 
-use anyhow::{Context as _, Result, anyhow};
 use bytesize::ByteSize;
+use error::Error;
 use jsonrpsee::server::ServerHandle;
 use kameo::{Actor, actor::ActorRef, mailbox::Signal};
 use log::info;
@@ -11,9 +11,12 @@ use sequencer_core::block_publisher::BlockPublisherTrait;
 use sequencer_service_rpc::RpcServer as _;
 use tokio::select;
 
+pub mod error;
 mod service;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct RpcServerActor {
     server_handle: Option<ServerHandle>,
@@ -36,11 +39,11 @@ impl RpcServerActor {
         )
         .build(listen_addr)
         .await
-        .context("Failed to build RPC server")?;
+        .map_err(Error::RpcServerSetupFailed)?;
 
         let addr = server
             .local_addr()
-            .context("Failed to get local address of RPC server")?;
+            .map_err(Error::LocalAddrRetrievingFailed)?;
 
         info!("Starting RPC Server on {addr}");
 
@@ -61,9 +64,9 @@ impl RpcServerActor {
 
 impl Actor for RpcServerActor {
     type Args = Self;
-    type Error = anyhow::Error;
+    type Error = Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
         Ok(args)
     }
 
@@ -75,7 +78,7 @@ impl Actor for RpcServerActor {
         &mut self,
         _actor_ref: kameo::prelude::WeakActorRef<Self>,
         mailbox_rx: &mut kameo::prelude::MailboxReceiver<Self>,
-    ) -> Result<Option<Signal<Self>>, Self::Error> {
+    ) -> Result<Option<Signal<Self>>> {
         let handle = self
             .server_handle
             .clone()
@@ -86,7 +89,7 @@ impl Actor for RpcServerActor {
                 Ok(signal)
             }
             () = handle.stopped() => {
-                Err(anyhow!("RPC server has stopped unexpectedly"))
+                Err(Error::RpcServerStoppedUnexpectedly)
             }
         }
     }
@@ -95,7 +98,7 @@ impl Actor for RpcServerActor {
         &mut self,
         _actor_ref: kameo::prelude::WeakActorRef<Self>,
         _reason: kameo::prelude::ActorStopReason,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<()> {
         if let Some(server_handle) = self.server_handle.take() {
             server_handle.stop()?;
             server_handle.stopped().await;
