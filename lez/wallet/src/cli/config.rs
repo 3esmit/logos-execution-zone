@@ -59,6 +59,15 @@ impl ConfigSubcommand {
                 "seq_block_poll_max_amount" => {
                     println!("{}", config.seq_block_poll_max_amount);
                 }
+                "distribution_limit" => {
+                    println!(
+                        "{}",
+                        config.multi_sequencer_client_config.distribution_limit
+                    );
+                }
+                "calibration_limit" => {
+                    println!("{}", config.multi_sequencer_client_config.calibration_limit);
+                }
                 _ => {
                     println!("Unknown field");
                 }
@@ -77,6 +86,9 @@ impl ConfigSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let mut config = wallet_core.config().clone();
         match key.as_str() {
+            "sequencers" => {
+                anyhow::bail!("Not settable via this method, use add-sequencer subcommand");
+            }
             "seq_poll_timeout" => {
                 config.seq_poll_timeout = humantime::parse_duration(&value)
                     .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
@@ -90,8 +102,11 @@ impl ConfigSubcommand {
             "seq_block_poll_max_amount" => {
                 config.seq_block_poll_max_amount = value.parse()?;
             }
-            "initial_accounts" => {
-                anyhow::bail!("Setting this field from wallet is not supported");
+            "distribution_limit" => {
+                config.multi_sequencer_client_config.distribution_limit = value.parse()?;
+            }
+            "calibration_limit" => {
+                config.multi_sequencer_client_config.calibration_limit = value.parse()?;
             }
             _ => {
                 anyhow::bail!("Unknown field");
@@ -109,8 +124,8 @@ impl ConfigSubcommand {
             "override_rust_log" => {
                 println!("Value of variable RUST_LOG to override, affects logging");
             }
-            "sequencer_addr" => {
-                println!("HTTP V4 account_id of sequencer");
+            "sequencer" => {
+                println!("A list of HTTP V4 addresses of sequencer, with authorization");
             }
             "seq_poll_timeout" => {
                 println!(
@@ -132,11 +147,15 @@ impl ConfigSubcommand {
                     "Sequencer client polling variable: max number of blocks to request in one polling call"
                 );
             }
-            "initial_accounts" => {
-                println!("List of initial accounts' keys(both public and private)");
+            "distribution_limit" => {
+                println!(
+                    "Sequencer multi node variable: max number of nodes to distribute transaction(can not be zero)"
+                );
             }
-            "basic_auth" => {
-                println!("Basic authentication credentials for sequencer HTTP requests");
+            "calibration_limit" => {
+                println!(
+                    "Sequencer multi node variable: max number of callibration runs before the end of handshake(can not be zero)"
+                );
             }
             _ => {
                 println!("Unknown field");
