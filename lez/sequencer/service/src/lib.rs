@@ -163,11 +163,15 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
 
     let scheduler_ref = Scheduler::spawn(Scheduler::new());
     scheduler_ref
-        .tell(SetInterval::new(
-            executor_ref.downgrade(),
-            block_timeout,
-            sequencer_executor_actor::protocol::ProduceBlock,
-        ))
+        .tell(
+            SetInterval::new(
+                executor_ref.downgrade(),
+                block_timeout,
+                sequencer_executor_actor::protocol::ProduceBlock,
+            )
+            .start_delay(block_timeout)
+            .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+        )
         .await?;
     info!("Block production scheduler started");
 
