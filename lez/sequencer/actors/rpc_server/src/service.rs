@@ -97,7 +97,7 @@ impl sequencer_service_rpc::RpcServer for Service {
         })?;
 
         self.executor_ref
-            .tell(sequencer_executor_actor::protocol::Transaction {
+            .ask(sequencer_executor_actor::protocol::Transaction {
                 transaction: authenticated_tx,
             })
             .await

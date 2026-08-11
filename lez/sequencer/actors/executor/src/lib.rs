@@ -1,7 +1,7 @@
 //! Executor Actor performs the main logic of the Sequencer.
 
-use anyhow::{Ok, Result, anyhow, bail};
 use common::{block::Block, transaction::LeeTransaction};
+use error::Error;
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -30,7 +30,10 @@ use crate::protocol::{
     ProduceBlock, Transaction,
 };
 
+pub mod error;
 pub mod protocol;
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct ExecutorActor {
     sequencer: SequencerCore<ZoneSdkPublisher>,
@@ -65,9 +68,9 @@ impl ExecutorActor {
 
 impl Actor for ExecutorActor {
     type Args = Self;
-    type Error = anyhow::Error;
+    type Error = Error;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
         Ok(args)
     }
 
@@ -79,11 +82,11 @@ impl Actor for ExecutorActor {
         &mut self,
         _actor_ref: WeakActorRef<Self>,
         mailbox_rx: &mut MailboxReceiver<Self>,
-    ) -> Result<Option<Signal<Self>>, Self::Error> {
+    ) -> Result<Option<Signal<Self>>> {
         // TODO: Remove this please
         for task in &self.background_tasks {
             if task.any_finished() {
-                bail!("One of the sequencer's background tasks has finished unexpectedly");
+                return Err(Error::BackgroundTaskFinishedUnexpectedly);
             }
         }
 
@@ -92,7 +95,7 @@ impl Actor for ExecutorActor {
                 Ok(signal)
             }
             () = self.driver_cancellation.cancelled() => {
-                Err(anyhow!("The sequencer's block publisher has stopped unexpectedly"))
+                return Err(Error::BlockPublisherFinishedUnexpectedly);
             }
         }
     }
@@ -101,7 +104,7 @@ impl Actor for ExecutorActor {
         &mut self,
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
-    ) -> std::prelude::v1::Result<(), Self::Error> {
+    ) -> Result<()> {
         for tasks in &self.background_tasks {
             tasks.shutdown().await;
         }
@@ -111,7 +114,7 @@ impl Actor for ExecutorActor {
 }
 
 impl Message<Transaction> for ExecutorActor {
-    type Reply = ();
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,
@@ -119,9 +122,8 @@ impl Message<Transaction> for ExecutorActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.mempool_handle
-            .push((TransactionOrigin::User, transaction))
-            .await
-            .expect("Mempool is closed, this is a bug");
+            .try_push((TransactionOrigin::User, transaction))
+            .map_err(|_| Error::MempoolIsFull)
     }
 }
 
@@ -156,7 +158,7 @@ impl Message<GetBlockRange> for ExecutorActor {
                     .map_err(Into::into)
                     .transpose()
             })
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Vec<_>>>()
     }
 }
 
@@ -295,7 +297,12 @@ impl Message<ProduceBlock> for ExecutorActor {
         }
 
         info!("Our turn: collecting transactions from mempool, creating block");
-        let id = self.sequencer.produce_new_block().await?;
+        let id = self
+            .sequencer
+            .produce_new_block()
+            .await
+            .map_err(Error::BlockProductionFailed)?;
+
         info!("Block with id {id} created");
         Ok(())
     }

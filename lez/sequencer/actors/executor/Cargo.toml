@@ -12,9 +12,11 @@ sequencer_core.workspace = true
 common.workspace = true
 lee_core.workspace = true
 mempool.workspace = true
+storage.workspace = true
 
 kameo.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 log.workspace = true
 anyhow.workspace = true
+thiserror.workspace = true
