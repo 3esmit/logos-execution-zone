@@ -87,6 +87,9 @@ const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 // once that path exists, instead of a fixed genesis-only key.
 const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 
+/// A number of Bedrock slots, as opposed to a [`Slot`] position.
+type SlotCount = u64;
+
 /// A founding sequencer's key, plus the ownership account attesting to its stake.
 type FoundingStake = (
     sequencer_stake_core::SequencerKey,
@@ -132,23 +135,16 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
     watchers: TaskGroup,
-    /// When the last committee-config submission went out, or `None` if none
-    /// has. See [`Self::COMMITTEE_SUBMISSION_COOLDOWN`].
-    last_committee_submission_at: Option<Instant>,
+    /// Channel tip slot as of the last committee-config submission.
+    last_committee_submission_slot: Option<Slot>,
 }
 
 impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     const CHANNEL_PROBE_RETRIES: usize = 29;
     const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
-    /// Minimum wait between committee-config submission attempts.
-    /// [`committee_discovery::committee_update`] re-detects the same mismatch
-    /// on every block until Bedrock's live state catches up; without a
-    /// cooldown that resubmits every block cycle, each attempt racing (and
-    /// likely invalidating) the last one before it has any chance to land.
-    /// Comfortably above the round-robin reclaim window
-    /// (`DEFAULT_SEQUENCER_POSTING_TIMEFRAME` +
-    /// `DEFAULT_SEQUENCER_POSTING_TIMEOUT` slots) plus normal confirmation lag.
-    const COMMITTEE_SUBMISSION_COOLDOWN: Duration = Duration::from_secs(20);
+    /// Channel slots between committee-config submissions; a margin over
+    /// observed Bedrock confirmation lag.
+    const COMMITTEE_SUBMISSION_COOLDOWN: SlotCount = 10;
 
     /// Starts the sequencer using the provided configuration.
     /// If an existing database is found, the sequencer state is loaded from it and
@@ -419,7 +415,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             sequencer_config: config,
             block_publisher,
             watchers,
-            last_committee_submission_at: None,
+            last_committee_submission_slot: None,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
@@ -728,6 +724,19 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
     }
 
+    /// Whether the channel has advanced far enough past `last_submission` to
+    /// submit again. A missing tip counts as no advance.
+    fn committee_cooldown_elapsed(last_submission: Option<Slot>, tip: Option<Slot>) -> bool {
+        let Some(last_submission) = last_submission else {
+            return true;
+        };
+        tip.is_some_and(|tip| {
+            tip.into_inner()
+                .saturating_sub(last_submission.into_inner())
+                >= Self::COMMITTEE_SUBMISSION_COOLDOWN
+        })
+    }
+
     async fn submit_committee_update(
         &mut self,
         committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
@@ -735,10 +744,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let Some(new_keys) = committee_update else {
             return;
         };
-        if self
-            .last_committee_submission_at
-            .is_some_and(|at| at.elapsed() < Self::COMMITTEE_SUBMISSION_COOLDOWN)
-        {
+        let tip_slot = match self.block_publisher.channel_tip_slot().await {
+            Ok(tip_slot) => tip_slot,
+            Err(err) => {
+                warn!("Failed to read channel tip slot; skipping committee update: {err:#}");
+                return;
+            }
+        };
+        if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
             return;
         }
         let new_keys = new_keys
@@ -748,7 +761,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     .expect("sequencer key was decoded from a valid Ed25519 public key")
             })
             .collect();
-        self.last_committee_submission_at = Some(Instant::now());
+        self.last_committee_submission_slot = tip_slot;
         if let Err(err) = self.block_publisher.submit_channel_config(new_keys).await {
             warn!("Failed to submit committee channel-config update: {err:#}");
         }

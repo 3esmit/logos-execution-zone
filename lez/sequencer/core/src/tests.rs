@@ -21,7 +21,7 @@ use logos_blockchain_core::{
     },
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
-use logos_blockchain_zone_sdk::sequencer::DepositInfo;
+use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
 use mempool::MemPoolHandle;
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use storage::sequencer::sequencer_cells::{
@@ -133,6 +133,24 @@ fn only_the_cross_zone_inbox_is_sequencer_only() {
     assert!(!is_sequencer_only_program(programs::wrapped_token().id()));
     assert!(!is_sequencer_only_program(programs::ping_sender().id()));
     assert!(!is_sequencer_only_program(programs::clock().id()));
+}
+
+#[test]
+fn committee_cooldown_needs_the_channel_to_advance() {
+    type Core = SequencerCoreWithMockClients;
+    let cooldown = Core::COMMITTEE_SUBMISSION_COOLDOWN;
+    let submitted_at = Slot::new(100);
+
+    assert!(Core::committee_cooldown_elapsed(None, None));
+    assert!(!Core::committee_cooldown_elapsed(Some(submitted_at), None));
+    assert!(!Core::committee_cooldown_elapsed(
+        Some(submitted_at),
+        Some(Slot::new(100 + cooldown - 1))
+    ));
+    assert!(Core::committee_cooldown_elapsed(
+        Some(submitted_at),
+        Some(Slot::new(100 + cooldown))
+    ));
 }
 
 fn create_signing_key_for_account1() -> lee::PrivateKey {
