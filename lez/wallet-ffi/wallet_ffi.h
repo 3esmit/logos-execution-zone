@@ -670,6 +670,24 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
                                                                 struct FfiTransactionResult *out_result);
 
 /**
+ * Poll transaction for its status.
+ *
+ * # Parameters
+ * - `handle`: Valid pointer to wallet handle.
+ * - `tx_hash`: Bytes of a transaction hash,
+ * - `transaction_status`: Valid pointer into `bool`.
+ *
+ * # Returns
+ * - `true` if seen included, `false` othervise.
+ *
+ * # Safety
+ * - `handle` must be a valid pointer.
+ */
+enum WalletFfiError wallet_ffi_poll_transaction_status(struct WalletHandle *handle,
+                                                       struct FfiBytes32 tx_hash,
+                                                       bool *transaction_status);
+
+/**
  * Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or
  * `wallet_ffi_send_generic_private_transaction`.
  *

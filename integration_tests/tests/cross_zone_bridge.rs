@@ -98,7 +98,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .zone_default_sequencer_component(channel_a)
         .sequencer_client;
 
-    let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     // Lock LOCK_AMOUNT on zone A, addressed to the recipient on zone B.
     let lock = build_lock_tx(&holder_key, holder_id, zone_b);

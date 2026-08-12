@@ -53,8 +53,8 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
         .build()
         .await?;
 
-    let ind_client_a = ctx.indexer_client_getter(channel_a).unwrap();
-    let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();
+    let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     let seq_client_a = &ctx
         .zone_default_sequencer_component(channel_a)

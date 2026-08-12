@@ -12,8 +12,6 @@ use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, Sequ
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
-use crate::config;
-
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
@@ -90,7 +88,7 @@ impl Default for MultiNodeTestContextConfig {
     fn default() -> Self {
         Self {
             num_nodes: 1,
-            bedrock_channel: config::bedrock_channel_id(),
+            bedrock_channel: bedrock_channel_id(),
         }
     }
 }
