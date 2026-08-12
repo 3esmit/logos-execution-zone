@@ -192,6 +192,18 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     assert!(sequencer.store.latest_block_meta().is_ok());
 }
 
+#[cfg(feature = "testnet")]
+#[test]
+#[should_panic(
+    expected = "initial_state_profile `development_fixture` is unsupported in binaries compiled with the `testnet` feature"
+)]
+fn build_genesis_state_rejects_development_fixture_in_testnet_builds() {
+    let mut config = setup_sequencer_config();
+    config.initial_state_profile = InitialStateProfile::DevelopmentFixture;
+
+    let _ = build_genesis_state(&config);
+}
+
 #[should_panic(expected = "Failed to open database")]
 #[tokio::test]
 async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {

@@ -60,12 +60,62 @@ impl IndexerConfig {
             format!("Failed to open indexer config at {}", config_path.display())
         })?;
         let reader = BufReader::new(file);
-
-        serde_json::from_reader(reader).with_context(|| {
+        let config: Self = serde_json::from_reader(reader).with_context(|| {
             format!(
                 "Failed to parse indexer config at {}",
                 config_path.display()
             )
-        })
+        })?;
+        config
+            .validate()
+            .with_context(|| format!("Invalid indexer config at {}", config_path.display()))?;
+
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Err(err) = self.initial_state_profile.validate_for_compiled_network() {
+            anyhow::bail!("{err}");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    fn sample_config(profile: InitialStateProfile) -> IndexerConfig {
+        IndexerConfig {
+            consensus_info_polling_interval: Duration::from_secs(1),
+            bedrock_config: ClientConfig {
+                addr: "http://127.0.0.1:8545".parse().unwrap(),
+                auth: None,
+            },
+            channel_id: ChannelId::from([0; 32]),
+            cross_zone: None,
+            bridge_lock_holdings: vec![],
+            initial_state_profile: profile,
+            allow_chain_reset: false,
+        }
+    }
+
+    #[test]
+    fn validate_accepts_default_profile() {
+        sample_config(InitialStateProfile::Default)
+            .validate()
+            .unwrap();
+    }
+
+    #[cfg(feature = "testnet")]
+    #[test]
+    fn validate_rejects_development_fixture_in_testnet_builds() {
+        let err = sample_config(InitialStateProfile::DevelopmentFixture)
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("development_fixture"));
     }
 }
