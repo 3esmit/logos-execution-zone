@@ -142,5 +142,6 @@ fn parse_sequencer_key(hex_key: &str) -> Result<sequencer_stake_core::SequencerK
     let mut bytes = [0_u8; 32];
     hex::decode_to_slice(hex_key, &mut bytes)
         .with_context(|| format!("Invalid hex-encoded key {hex_key}"))?;
-    Ok(bytes)
+    sequencer_stake_core::SequencerKey::new(bytes)
+        .with_context(|| format!("{hex_key} is not a valid Ed25519 public key"))
 }

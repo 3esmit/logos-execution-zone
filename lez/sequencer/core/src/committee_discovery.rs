@@ -161,7 +161,7 @@ mod tests {
     impl Staked {
         fn new(tag: u8, total: u128) -> Self {
             Self {
-                key: [tag; 32],
+                key: test_key(tag),
                 account_id: lee::AccountId::new([tag.wrapping_add(100); 32]),
                 total,
                 pending: None,
@@ -234,6 +234,14 @@ mod tests {
         lee::V03State::new()
             .with_public_accounts(ownership_accounts)
             .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
+    }
+
+    /// A distinct valid key per `tag`.
+    fn test_key(tag: u8) -> SequencerKey {
+        let bytes = crate::block_publisher::Ed25519Key::from_bytes(&[tag; 32])
+            .public_key()
+            .to_bytes();
+        SequencerKey::new(bytes).expect("a derived public key is a curve point")
     }
 
     #[test]

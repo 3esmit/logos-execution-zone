@@ -65,14 +65,18 @@ struct DepositMetadataForEncoding {
 /// rather than a fixed constant, so it always matches what's actually on
 /// disk.
 fn test_bootstrap_sequencer_key(config: &SequencerConfig) -> sequencer_stake_core::SequencerKey {
-    crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+    let bytes = crate::load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
         .expect("Failed to load or create bedrock signing key")
         .public_key()
-        .to_bytes()
+        .to_bytes();
+    sequencer_stake_core::SequencerKey::new(bytes)
+        .expect("a Bedrock public key is a valid Ed25519 public key")
 }
 
 fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
-    Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes()
+    let bytes = Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes();
+    sequencer_stake_core::SequencerKey::new(bytes)
+        .expect("a Bedrock public key is a valid Ed25519 public key")
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not

@@ -9,10 +9,61 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
+const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
 
-/// The Bedrock sequencer identity a stake backs.
-pub type SequencerKey = [u8; 32];
+/// The Bedrock sequencer identity a stake backs. Holds only a valid Ed25519
+/// public key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SequencerKey([u8; 32]);
+
+impl SequencerKey {
+    /// `None` if `bytes` is not a valid Ed25519 public key.
+    #[must_use]
+    pub fn new(bytes: [u8; 32]) -> Option<Self> {
+        ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+            .is_ok()
+            .then_some(Self(bytes))
+    }
+
+    #[must_use]
+    pub const fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+impl AsRef<[u8]> for SequencerKey {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Serialize for SequencerKey {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for SequencerKey {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = <[u8; 32]>::deserialize(deserializer)?;
+        Self::new(bytes).ok_or_else(|| serde::de::Error::custom(INVALID_KEY))
+    }
+}
+
+impl borsh::BorshSerialize for SequencerKey {
+    fn serialize<W: borsh::io::Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
+        borsh::BorshSerialize::serialize(&self.0, writer)
+    }
+}
+
+impl borsh::BorshDeserialize for SequencerKey {
+    fn deserialize_reader<R: borsh::io::Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        let bytes = <[u8; 32]>::deserialize_reader(reader)?;
+        Self::new(bytes)
+            .ok_or_else(|| borsh::io::Error::new(borsh::io::ErrorKind::InvalidData, INVALID_KEY))
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Instruction {
@@ -132,11 +183,6 @@ pub fn sequencer_stake_config_account_id(program_id: ProgramId) -> AccountId {
     AccountId::for_public_pda(&program_id, &sequencer_stake_config_seed())
 }
 
-#[must_use]
-pub fn is_valid_sequencer_key(key: &SequencerKey) -> bool {
-    ed25519_dalek::VerifyingKey::from_bytes(key).is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,10 +193,29 @@ mod tests {
         AccountId::new([3; 32])
     }
 
+    /// A distinct valid key per `seed`.
+    fn test_key(seed: u8) -> SequencerKey {
+        let bytes = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes();
+        SequencerKey::new(bytes).expect("a derived public key is a curve point")
+    }
+
+    #[test]
+    fn a_non_curve_point_is_not_a_sequencer_key() {
+        let off_curve = [2_u8; 32];
+        assert!(SequencerKey::new(off_curve).is_none());
+
+        // 32 key bytes then a `None` discriminant: a `StakeRecord` with no
+        // pending unstake.
+        let record = [&off_curve[..], &[0_u8][..]].concat();
+        assert_eq!(StakeRecord::from_bytes(&record), None);
+    }
+
     #[test]
     fn stake_record_roundtrip() {
         let record = StakeRecord {
-            sequencer_key: [7; 32],
+            sequencer_key: test_key(7),
             pending_unstake: None,
         };
         let bytes = record.to_bytes();
@@ -160,7 +225,7 @@ mod tests {
     #[test]
     fn stake_record_with_pending_unstake_roundtrip() {
         let record = StakeRecord {
-            sequencer_key: [7; 32],
+            sequencer_key: test_key(7),
             pending_unstake: Some(PendingUnstake {
                 amount: 42,
                 destination: test_destination(),
@@ -173,7 +238,7 @@ mod tests {
     fn test_config() -> SequencerStakeConfig {
         let mut entries = BTreeMap::new();
         entries.insert(
-            [1; 32],
+            test_key(1),
             SequencerEntry {
                 account_id: test_destination(),
                 total_staked: 1_000_000,
@@ -204,9 +269,7 @@ mod tests {
             }),
         ] {
             let bytes = StakeRecord {
-                // Caller-chosen bytes, picked to look like a config: a zero
-                // `minimum_sequencer_stake` followed by an empty entries map.
-                sequencer_key: [0; 32],
+                sequencer_key: test_key(0),
                 pending_unstake,
             }
             .to_bytes();

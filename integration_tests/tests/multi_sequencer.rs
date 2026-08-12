@@ -49,8 +49,8 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
 
     // Each operator signs its own stake offchain.
     let genesis = vec![
-        founding_stake(0, pub_a.to_bytes(), [0x51_u8; 32])?,
-        founding_stake(1, pub_b.to_bytes(), [0x52_u8; 32])?,
+        founding_stake(0, stake_key(&pub_a), [0x51_u8; 32])?,
+        founding_stake(1, stake_key(&pub_b), [0x52_u8; 32])?,
     ];
 
     let bedrock_config = BedrockConfig {
@@ -171,6 +171,11 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn stake_key(key: &Ed25519PublicKey) -> sequencer_stake_core::SequencerKey {
+    sequencer_stake_core::SequencerKey::new(key.to_bytes())
+        .expect("a Bedrock key is a valid Ed25519 public key")
 }
 
 /// Builds a founding-sequencer genesis entry, signing its stake the way an

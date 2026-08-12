@@ -43,6 +43,8 @@ fn fast_blocks() -> SequencerPartialConfig {
 async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Placeholder sequencer identity; must be a genuine Ed25519 point.
     let demo_sequencer_key = Ed25519Key::from_bytes(&[0x42; 32]).public_key();
+    let demo_stake_key = sequencer_stake_core::SequencerKey::new(demo_sequencer_key.to_bytes())
+        .expect("a Bedrock key is a valid Ed25519 public key");
 
     let funding_private_key = PrivateKey::new_os_random();
     let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
@@ -106,7 +108,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         .context("Failed to serialize mover instruction")?;
     let stake_instruction_data =
         Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: demo_sequencer_key.to_bytes(),
+            sequencer_key: demo_stake_key,
             amount: FUNDING_BALANCE,
             mover_program_id: programs::authenticated_transfer().id(),
             mover_instruction_data,
@@ -154,7 +156,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     );
     let record = sequencer_stake_core::StakeRecord::from_bytes(ownership_account.data.as_ref())
         .context("ownership account data did not decode as a StakeRecord")?;
-    assert_eq!(record.sequencer_key, demo_sequencer_key.to_bytes());
+    assert_eq!(record.sequencer_key, demo_stake_key);
     info!(
         "Ownership account confirmed: {} staked for sequencer key {}",
         ownership_account.balance,
@@ -280,7 +282,7 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
     // Nothing is at stake for this key any more: a fully drained account has
     // its config entry removed outright.
     assert!(
-        stake_entry(&ctx, config_id, demo_sequencer_key.to_bytes())
+        stake_entry(&ctx, config_id, demo_stake_key)
             .await?
             .is_none(),
         "the config entry should be gone once the stake is fully released"

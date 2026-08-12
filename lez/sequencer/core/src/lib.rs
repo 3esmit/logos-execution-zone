@@ -265,7 +265,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hex::encode(bedrock_signing_key.public_key().to_bytes())
         );
 
-        let own_sequencer_key = bedrock_signing_key.public_key().to_bytes();
+        let own_sequencer_key =
+            sequencer_stake_core::SequencerKey::new(bedrock_signing_key.public_key().to_bytes())
+                .expect("our own Bedrock public key is a valid Ed25519 public key");
 
         // Only seed our own key into genesis as the bootstrap sequencer if the
         // channel doesn't exist yet. Otherwise it's someone else's channel and
@@ -713,7 +715,19 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &self,
     ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
         match self.block_publisher.accredited_keys().await {
-            Ok(keys) => Some(keys.iter().map(Ed25519PublicKey::to_bytes).collect()),
+            Ok(keys) => Some(
+                keys.iter()
+                    .filter_map(|key| {
+                        sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
+                            warn!(
+                                "Ignoring accredited key {}: not a valid Ed25519 public key",
+                                hex::encode(key.to_bytes())
+                            );
+                            None
+                        })
+                    })
+                    .collect(),
+            ),
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
@@ -757,7 +771,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let new_keys = new_keys
             .into_iter()
             .map(|key| {
-                Ed25519PublicKey::from_bytes(&key)
+                Ed25519PublicKey::from_bytes(&key.to_bytes())
                     .expect("sequencer key was decoded from a valid Ed25519 public key")
             })
             .collect();
@@ -1829,7 +1843,7 @@ fn founding_committee(
         std::iter::once(own_key)
             .chain(keys)
             .map(|key| {
-                block_publisher::Ed25519PublicKey::from_bytes(&key)
+                block_publisher::Ed25519PublicKey::from_bytes(&key.to_bytes())
                     .expect("sequencer key was decoded from a valid Ed25519 public key")
             })
             .collect(),

@@ -9,7 +9,7 @@ use lee_core::{
 };
 use sequencer_stake_core::{
     Instruction, PendingUnstake, SequencerEntry, SequencerKey, SequencerStakeConfig, StakeRecord,
-    is_valid_sequencer_key, sequencer_stake_config_account_id,
+    sequencer_stake_config_account_id,
 };
 
 fn main() {
@@ -117,11 +117,6 @@ fn stake(
         <[AccountWithMetadata; 3]>::try_from(pre_states).expect(
             "Stake requires a funding account, an ownership account, and the config account",
         );
-
-    assert!(
-        is_valid_sequencer_key(&sequencer_key),
-        "sequencer_key is not a valid Ed25519 public key"
-    );
 
     assert!(
         ownership_account.is_authorized,
