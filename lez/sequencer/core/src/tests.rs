@@ -296,7 +296,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
     SequencerStore::create_db_with_genesis(
-        &config.home.join("rocksdb"),
+        &config.db_path(),
         &genesis_block,
         &genesis_state,
         signing_key,
@@ -316,7 +316,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
     let temp_dir = tempdir().unwrap();
     config.home = temp_dir.path().to_path_buf();
 
-    let db_path = config.home.join("rocksdb");
+    let db_path = config.db_path();
 
     std::fs::create_dir_all(&config.home).unwrap();
     // Force RocksDB open to fail with an IO error by placing a file at DB path.
@@ -348,7 +348,7 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
 
     {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let store = SequencerStore::open_db(&config.home.join("rocksdb"), signing_key).unwrap();
+        let store = SequencerStore::open_db(&config.db_path(), signing_key).unwrap();
 
         let inserted = store
             .dbio()
