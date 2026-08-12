@@ -1,3 +1,5 @@
+use std::collections::btree_map::Entry;
+
 use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::{
@@ -154,34 +156,35 @@ fn stake(
         );
     }
 
-    if let Some(entry) = config.entries.get_mut(&sequencer_key) {
-        // top up: same already-claimed account only
-        assert!(
-            is_claimed,
-            "this sequencer key already has an ownership account"
-        );
-        assert_eq!(
-            entry.account_id, ownership_account.account_id,
-            "config entry points at a different ownership account"
-        );
-        entry.total_staked = entry
-            .total_staked
-            .checked_add(amount)
-            .expect("total staked overflow");
-    } else {
-        // first stake for this key, or a new one after a full exit
-        assert!(
-            amount >= minimum_sequencer_stake,
-            "an initial stake must already meet the minimum"
-        );
-        config.entries.insert(
-            sequencer_key,
-            SequencerEntry {
+    match config.entries.entry(sequencer_key) {
+        Entry::Occupied(mut occupied) => {
+            // top up: same already-claimed account only
+            assert!(
+                is_claimed,
+                "this sequencer key already has an ownership account"
+            );
+            let entry = occupied.get_mut();
+            assert_eq!(
+                entry.account_id, ownership_account.account_id,
+                "config entry points at a different ownership account"
+            );
+            entry.total_staked = entry
+                .total_staked
+                .checked_add(amount)
+                .expect("total staked overflow");
+        }
+        Entry::Vacant(vacant) => {
+            // first stake for this key, or a new one after a full exit
+            assert!(
+                amount >= minimum_sequencer_stake,
+                "an initial stake must already meet the minimum"
+            );
+            vacant.insert(SequencerEntry {
                 account_id: ownership_account.account_id,
                 total_staked: amount,
                 total_pending_unstake: 0,
-            },
-        );
+            });
+        }
     }
 
     // pass-through: propagates authorization into the nested mover call
