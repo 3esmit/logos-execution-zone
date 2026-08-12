@@ -82,6 +82,10 @@ impl IndexerCore {
 
     /// Opens the store and builds the core without the chain-identity check.
     fn open(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+        if let Err(err) = config.initial_state_profile.validate_for_compiled_network() {
+            return Err(anyhow::anyhow!(err));
+        }
+
         // Namespace the DB by channel so indexers on different channels can
         // share a storage dir without their RocksDB state colliding.
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));

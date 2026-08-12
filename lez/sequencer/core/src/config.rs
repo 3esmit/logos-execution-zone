@@ -86,8 +86,17 @@ impl SequencerConfig {
     pub fn from_path(config_home: &Path) -> Result<Self> {
         let file = File::open(config_home)?;
         let reader = BufReader::new(file);
+        let config: Self = serde_json::from_reader(reader)?;
+        config.validate()?;
 
-        Ok(serde_json::from_reader(reader)?)
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Err(err) = self.initial_state_profile.validate_for_compiled_network() {
+            anyhow::bail!("{err}");
+        }
+        Ok(())
     }
 }
 
