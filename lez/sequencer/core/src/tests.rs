@@ -204,6 +204,40 @@ fn build_genesis_state_rejects_development_fixture_in_testnet_builds() {
     let _ = build_genesis_state(&config);
 }
 
+#[cfg(feature = "testnet")]
+#[should_panic(
+    expected = "Invalid sequencer config: initial_state_profile `development_fixture` is unsupported in binaries compiled with the `testnet` feature"
+)]
+#[tokio::test]
+async fn start_from_config_rejects_development_fixture_in_testnet_builds_with_existing_db() {
+    let config = setup_sequencer_config();
+    let temp_dir = tempdir().unwrap();
+    let mut config = config;
+    config.home = temp_dir.path().to_path_buf();
+
+    let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
+    let (genesis_state, genesis_txs) = build_genesis_state(&config);
+    let genesis_hashable_data = HashableBlockData {
+        block_id: 1,
+        transactions: genesis_txs,
+        prev_block_hash: HashType([0; 32]),
+        timestamp: 0,
+    };
+    let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
+
+    SequencerStore::create_db_with_genesis(
+        &config.home.join("rocksdb"),
+        &genesis_block,
+        &genesis_state,
+        signing_key,
+    )
+    .unwrap();
+
+    config.initial_state_profile = InitialStateProfile::DevelopmentFixture;
+
+    let _ = SequencerCoreWithMockClients::start_from_config(config).await;
+}
+
 #[should_panic(expected = "Failed to open database")]
 #[tokio::test]
 async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {

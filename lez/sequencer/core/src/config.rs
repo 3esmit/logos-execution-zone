@@ -92,7 +92,7 @@ impl SequencerConfig {
         Ok(config)
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if let Err(err) = self.initial_state_profile.validate_for_compiled_network() {
             anyhow::bail!("{err}");
         }

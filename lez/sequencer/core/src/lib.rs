@@ -126,6 +126,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        config
+            .validate()
+            .unwrap_or_else(|err| panic!("Invalid sequencer config: {err}"));
+
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
