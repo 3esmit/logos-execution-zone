@@ -655,7 +655,7 @@ mod tests {
     };
     use sequencer_core::{
         SequencerCoreWithMockClients,
-        config::{BedrockConfig, SequencerConfig},
+        config::{BedrockConfig, InitialStateProfile, SequencerConfig},
     };
     use sequencer_service_protocol::{LocalPublicBlockHistoryRequestV1, Nonce};
     use sequencer_service_rpc::RpcServer as _;
@@ -849,6 +849,7 @@ mod tests {
             },
             retry_pending_blocks_timeout: Duration::from_secs(1),
             genesis: vec![],
+            initial_state_profile: InitialStateProfile::default(),
             cross_zone: None,
         };
         let max_block_size = config.max_block_size.as_u64();

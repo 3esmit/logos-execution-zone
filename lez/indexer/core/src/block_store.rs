@@ -12,6 +12,7 @@ use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
+use testnet_initial_state::InitialStateProfile;
 use tokio::sync::RwLock;
 
 use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
@@ -46,11 +47,16 @@ impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
     pub fn open_db(location: &Path, genesis_seed: Vec<(AccountId, Account)>) -> Result<Self> {
-        #[cfg(not(feature = "testnet"))]
-        let mut initial_state = testnet_initial_state::initial_state();
+        Self::open_db_with_profile(location, genesis_seed, InitialStateProfile::Default)
+    }
 
-        #[cfg(feature = "testnet")]
-        let mut initial_state = testnet_initial_state::initial_state_testnet();
+    pub(crate) fn open_db_with_profile(
+        location: &Path,
+        genesis_seed: Vec<(AccountId, Account)>,
+        initial_state_profile: InitialStateProfile,
+    ) -> Result<Self> {
+        let mut initial_state =
+            testnet_initial_state::initial_state_for_profile(initial_state_profile);
 
         // Seed any zone-specific genesis accounts (the cross-zone inbox config and
         // bridge-lock holdings) so the indexer's replayed state matches the

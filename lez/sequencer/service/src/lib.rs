@@ -199,7 +199,7 @@ mod tests {
         use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
         use tempfile::tempdir;
 
-        use super::super::{BedrockConfig, SequencerConfig, run};
+        use super::super::{BedrockConfig, InitialStateProfile, SequencerConfig, run};
 
         #[tokio::test]
         async fn local_public_block_history_round_trips_through_standalone_rpc()
@@ -219,6 +219,7 @@ mod tests {
                 },
                 retry_pending_blocks_timeout: Duration::from_mins(4),
                 genesis: vec![],
+                initial_state_profile: InitialStateProfile::default(),
                 cross_zone: None,
             };
 

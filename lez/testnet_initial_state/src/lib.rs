@@ -80,6 +80,22 @@ const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
 const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
 
+/// Selects the builtin state used to initialize a sequencer or indexer store.
+///
+/// [`Self::Default`] preserves the state selected by the running binary's
+/// feature set. [`Self::DevelopmentFixture`] is deliberately limited to the
+/// end-to-end test fixture: it adds the development Pinata program and its
+/// account so a fresh indexer can replay the committed development fixture.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitialStateProfile {
+    /// Preserve the state selected by the running binary's feature set.
+    #[default]
+    Default,
+    /// Development state required to replay the committed end-to-end fixture.
+    DevelopmentFixture,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
     pub account_id: AccountId,
@@ -265,6 +281,80 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
+/// Development system accounts used only by the committed end-to-end fixture.
+///
+/// Do not route these through `system_accounts`' active-profile helpers: the
+/// fixture must remain on development program IDs even when tests enable the
+/// deployed Testnet feature elsewhere in the workspace.
+fn development_fixture_public_accounts() -> HashMap<AccountId, Account> {
+    initial_public_user_accounts()
+        .iter()
+        .map(|acc_data| {
+            (
+                acc_data.account_id,
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: acc_data.balance,
+                    ..Default::default()
+                },
+            )
+        })
+        .chain([
+            (
+                faucet_core::compute_faucet_account_id(programs::faucet().id()),
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    balance: u128::MAX,
+                    ..Default::default()
+                },
+            ),
+            (
+                bridge_core::compute_bridge_account_id(programs::bridge().id()),
+                Account {
+                    program_owner: programs::authenticated_transfer().id(),
+                    ..Default::default()
+                },
+            ),
+            development_fixture_pinata_account(),
+        ])
+        .chain(
+            clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+                .into_iter()
+                .map(|clock_id| {
+                    (
+                        clock_id,
+                        Account {
+                            program_owner: programs::clock().id(),
+                            data: clock_core::ClockAccountData {
+                                block_id: 0,
+                                timestamp: 0,
+                            }
+                            .to_bytes()
+                            .try_into()
+                            .expect("Clock account data should fit"),
+                            ..Default::default()
+                        },
+                    )
+                }),
+        )
+        .chain(std::iter::once(wrapped_token_config_account()))
+        .collect()
+}
+
+fn development_fixture_pinata_account() -> (AccountId, Account) {
+    (
+        system_accounts::pinata_account_id(),
+        Account {
+            program_owner: programs::pinata().id(),
+            balance: 1_500_000,
+            data: vec![3; 33]
+                .try_into()
+                .expect("Pinata account data should fit"),
+            ..Default::default()
+        },
+    )
+}
+
 /// The wrapped-token config account.
 ///
 /// Seeded so the `wrapped_token` guest can pin its authorized minter (the
@@ -312,6 +402,38 @@ pub fn initial_state() -> V03State {
         .with_programs(initial_programs())
 }
 
+/// Builds the initial state selected by a persisted service configuration.
+///
+/// The default profile intentionally retains the existing feature-selected
+/// behavior. The fixture profile is explicit so a restored development dump
+/// and a freshly initialized indexer start with the same builtin programs.
+#[must_use]
+pub fn initial_state_for_profile(profile: InitialStateProfile) -> V03State {
+    match profile {
+        InitialStateProfile::Default => {
+            #[cfg(feature = "testnet")]
+            {
+                initial_state_testnet()
+            }
+            #[cfg(not(feature = "testnet"))]
+            {
+                initial_state()
+            }
+        }
+        InitialStateProfile::DevelopmentFixture => development_fixture_initial_state(),
+    }
+}
+
+fn development_fixture_initial_state() -> V03State {
+    let mut programs = initial_programs();
+    programs.push(programs::pinata());
+
+    V03State::new()
+        .with_public_accounts(development_fixture_public_accounts())
+        .with_private_accounts(initial_private_accounts())
+        .with_programs(programs)
+}
+
 /// Builds the state required to replay the deployed Testnet protocol.
 #[cfg(feature = "testnet")]
 #[must_use]
@@ -332,11 +454,100 @@ mod tests {
 
     use super::*;
 
+    const LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID: [u32; 8] = [
+        935_822_905,
+        2_171_623_149,
+        744_937_015,
+        1_506_430_310,
+        1_901_389_662,
+        3_451_554_932,
+        486_932_678,
+        2_054_999_670,
+    ];
+    const LEGACY_DEVELOPMENT_PINATA_ACCOUNT_ID: &str =
+        "EfQhKQAkX2FJiwNii2WFQsGndjvF1Mzd7RuVe7QdPLw7";
+
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
     const PRIV_ACC_A_TEXT_ADDR: &str = "EVesBKsYRVtkjnTcsbk8tWHkBn2xZmzAXzwgrP3ZaVoZ";
     const PRIV_ACC_B_TEXT_ADDR: &str = "94MXhZnueurjX6v37CYDKVEKYBiyhYArvtEdceq2XDQP";
+
+    #[test]
+    fn default_profile_preserves_current_build_state() {
+        let profile_state = initial_state_for_profile(InitialStateProfile::Default);
+
+        #[cfg(feature = "testnet")]
+        let expected_state = initial_state_testnet();
+        #[cfg(not(feature = "testnet"))]
+        let expected_state = initial_state();
+
+        assert_eq!(profile_state.program_ids(), expected_state.program_ids());
+        assert_eq!(
+            profile_state.get_account_by_id(system_accounts::pinata_account_id()),
+            expected_state.get_account_by_id(system_accounts::pinata_account_id()),
+        );
+    }
+
+    #[test]
+    fn development_fixture_profile_contains_development_pinata_state() {
+        let state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
+        let expected_pinata_account_id =
+            AccountId::from_str(LEGACY_DEVELOPMENT_PINATA_ACCOUNT_ID).unwrap();
+        let expected_pinata_account = Account {
+            program_owner: LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID,
+            balance: 1_500_000,
+            data: vec![3; 33]
+                .try_into()
+                .expect("Pinata account data should fit"),
+            ..Account::default()
+        };
+
+        assert_eq!(
+            programs::pinata().id(),
+            LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID,
+        );
+        assert_eq!(
+            system_accounts::pinata_account_id(),
+            expected_pinata_account_id,
+        );
+        assert!(
+            state
+                .program_ids()
+                .contains(&LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID)
+        );
+        assert_eq!(
+            state.get_account_by_id(expected_pinata_account_id),
+            expected_pinata_account,
+        );
+    }
+
+    #[cfg(not(feature = "testnet"))]
+    #[test]
+    fn development_fixture_profile_matches_legacy_development_state() {
+        // The committed prebuilt fixture was created before the Testnet profile
+        // gate, from this exact development state plus Pinata. Keep the explicit
+        // fixture profile byte-for-byte compatible without depending on active
+        // Testnet feature selection.
+        let mut legacy_public_accounts = initial_public_accounts();
+        legacy_public_accounts.insert(
+            system_accounts::pinata_account_id(),
+            system_accounts::pinata_account(),
+        );
+        let mut legacy_programs = initial_programs();
+        legacy_programs.push(programs::pinata());
+
+        let legacy_state = V03State::new()
+            .with_public_accounts(legacy_public_accounts.clone())
+            .with_private_accounts(initial_private_accounts())
+            .with_programs(legacy_programs);
+        let fixture_state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
+
+        assert_eq!(fixture_state.program_ids(), legacy_state.program_ids());
+        for (account_id, account) in legacy_public_accounts {
+            assert_eq!(fixture_state.get_account_by_id(account_id), account);
+        }
+    }
 
     #[test]
     fn pub_state_consistency() {

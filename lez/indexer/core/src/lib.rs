@@ -117,7 +117,11 @@ impl IndexerCore {
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
-            store: IndexerStore::open_db(&home, genesis_seed)?,
+            store: IndexerStore::open_db_with_profile(
+                &home,
+                genesis_seed,
+                config.initial_state_profile,
+            )?,
             node,
             config,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
