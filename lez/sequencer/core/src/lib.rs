@@ -635,11 +635,7 @@ fn replay_unfulfilled_deposit_events(
 /// transactions. Returns the final state and the list of [`LeeTransaction`]s that should be
 /// committed to the genesis block so external observers can replay them.
 fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
-    #[cfg(not(feature = "testnet"))]
-    let mut state = testnet_initial_state::initial_state();
-
-    #[cfg(feature = "testnet")]
-    let mut state = testnet_initial_state::initial_state_testnet();
+    let mut state = testnet_initial_state::initial_state_for_profile(config.initial_state_profile);
 
     let genesis_txs = config
         .genesis

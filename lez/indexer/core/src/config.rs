@@ -7,6 +7,7 @@ use humantime_serde;
 use lee::AccountId;
 pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
+pub use testnet_initial_state::InitialStateProfile;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,12 @@ pub struct IndexerConfig {
     /// transaction, so the indexer must seed them to match the sequencer's state.
     #[serde(default)]
     pub bridge_lock_holdings: Vec<BridgeLockHolding>,
+    /// Builtin state profile used to create a new store before applying indexed blocks.
+    ///
+    /// Missing values retain the current binary-selected profile. Changing this
+    /// value does not migrate an existing store.
+    #[serde(default)]
+    pub initial_state_profile: InitialStateProfile,
     /// Whether to wipe the indexer store and re-index from scratch when the startup
     /// chain-identity check finds the channel serving a different block than the one
     /// stored at the same id.

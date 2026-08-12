@@ -307,7 +307,7 @@ mod tests {
     use crate::{
         BlockIngestError,
         block_store::AcceptOutcome,
-        config::{ChannelId, ClientConfig, IndexerConfig},
+        config::{ChannelId, ClientConfig, IndexerConfig, InitialStateProfile},
     };
 
     fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
@@ -321,6 +321,7 @@ mod tests {
             allow_chain_reset: false,
             cross_zone: None,
             bridge_lock_holdings: Vec::new(),
+            initial_state_profile: InitialStateProfile::default(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }

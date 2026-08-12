@@ -13,6 +13,7 @@ use humantime_serde;
 use lee::AccountId;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
+pub use testnet_initial_state::InitialStateProfile;
 use url::Url;
 
 /// A transaction to be applied at genesis to supply initial balances.
@@ -59,6 +60,13 @@ pub struct SequencerConfig {
     /// Genesis configuration.
     #[serde(default)]
     pub genesis: Vec<GenesisAction>,
+    /// Builtin state profile used to create a new store before applying configured genesis
+    /// actions.
+    ///
+    /// Missing values retain the current binary-selected profile. Changing this
+    /// value does not migrate an existing store.
+    #[serde(default)]
+    pub initial_state_profile: InitialStateProfile,
     /// Cross-zone messaging configuration. `None` disables the watcher.
     #[serde(default)]
     pub cross_zone: Option<CrossZoneConfig>,

@@ -9902,6 +9902,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "testcontainers",
+ "testnet_initial_state",
  "tokio",
  "tokio-util",
  "url",
@@ -9980,6 +9981,9 @@ dependencies = [
 name = "testnet_initial_state"
 version = "0.1.0"
 dependencies = [
+ "bridge_core",
+ "clock_core",
+ "faucet_core",
  "key_protocol",
  "lee",
  "lee_core",

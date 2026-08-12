@@ -33,7 +33,7 @@ use crate::{
     TransactionOrigin,
     block_store::SequencerStore,
     build_genesis_state,
-    config::{BedrockConfig, SequencerConfig},
+    config::{BedrockConfig, InitialStateProfile, SequencerConfig},
     is_sequencer_only_program,
     mock::SequencerCoreWithMockClients,
 };
@@ -61,6 +61,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
+        initial_state_profile: InitialStateProfile::default(),
         cross_zone: None,
     }
 }
