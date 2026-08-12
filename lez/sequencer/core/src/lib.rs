@@ -1152,6 +1152,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let total = dbio.get_dead_letter_cross_zone_dispatch_count()?;
         Ok((total, retained))
     }
+
     /// Every background task that holds this sequencer's store handle.
     ///
     /// Taken before the core is shared, so a shutdown path can wait for them

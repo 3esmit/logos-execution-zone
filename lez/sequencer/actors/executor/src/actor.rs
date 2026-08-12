@@ -24,8 +24,8 @@ use crate::{
     error::Error,
     protocol::{
         GetAccount, GetAccountBalance, GetAccountNonces, GetAccountReply, GetBlock, GetBlockRange,
-        GetChannelId, GetChannelIdReply, GetLastBlockId, GetProofsAndRoot, GetTransaction,
-        ProduceBlock, Transaction,
+        GetChannelId, GetChannelIdReply, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply,
+        GetLastBlockId, GetProofsAndRoot, GetTransaction, ProduceBlock, Transaction,
     },
 };
 
@@ -103,6 +103,45 @@ impl<BP: BlockPublisherTrait + Send + 'static> Actor for ExecutorActor<BP> {
             tasks.shutdown().await;
         }
 
+        Ok(())
+    }
+}
+
+impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for ExecutorActor<BP> {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        ProduceBlock: ProduceBlock,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // Only produce on our turn.
+        if !self.sequencer.is_our_turn() {
+            info!("Not our turn to produce a block, skipping");
+            return Ok(());
+        }
+
+        // Never inscribe a second block at a height we already published: the
+        // channel would carry two chains from there and nothing resolves that.
+        // The head rewinds under us when the sdk orphans our own unfinalized
+        // blocks, and recovers once they finalize, so this is a wait.
+        if let Some(high_water) = self.sequencer.rewound_below_published() {
+            warn!(
+                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
+                 waiting for the channel to restore it",
+                self.sequencer.next_block_height().saturating_sub(1),
+            );
+            return Ok(());
+        }
+
+        info!("Our turn: collecting transactions from mempool, creating block");
+        let id = self
+            .sequencer
+            .produce_new_block()
+            .await
+            .map_err(Error::BlockProductionFailed)?;
+
+        info!("Block with id {id} created");
         Ok(())
     }
 }
@@ -263,41 +302,20 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetChannelId> for Executo
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for ExecutorActor<BP> {
-    type Reply = Result<()>;
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetCrossZoneDeadLetters>
+    for ExecutorActor<BP>
+{
+    type Reply = Result<GetCrossZoneDeadLettersReply>;
 
     async fn handle(
         &mut self,
-        ProduceBlock: ProduceBlock,
+        GetCrossZoneDeadLetters: GetCrossZoneDeadLetters,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        // Only produce on our turn.
-        if !self.sequencer.is_our_turn() {
-            info!("Not our turn to produce a block, skipping");
-            return Ok(());
-        }
-
-        // Never inscribe a second block at a height we already published: the
-        // channel would carry two chains from there and nothing resolves that.
-        // The head rewinds under us when the sdk orphans our own unfinalized
-        // blocks, and recovers once they finalize, so this is a wait.
-        if let Some(high_water) = self.sequencer.rewound_below_published() {
-            warn!(
-                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
-                 waiting for the channel to restore it",
-                self.sequencer.next_block_height().saturating_sub(1),
-            );
-            return Ok(());
-        }
-
-        info!("Our turn: collecting transactions from mempool, creating block");
-        let id = self
-            .sequencer
-            .produce_new_block()
-            .await
-            .map_err(Error::BlockProductionFailed)?;
-
-        info!("Block with id {id} created");
-        Ok(())
+        let (total_retired, retained) = self.sequencer.cross_zone_dead_letters()?;
+        Ok(GetCrossZoneDeadLettersReply {
+            total_retired,
+            retained,
+        })
     }
 }

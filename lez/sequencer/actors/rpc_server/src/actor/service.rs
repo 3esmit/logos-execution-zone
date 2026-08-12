@@ -211,16 +211,18 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
     async fn get_cross_zone_dead_letters(
         &self,
     ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned> {
-        let (total_retired, records) = self
-            .sequencer
-            .lock()
+        let sequencer_executor_actor::protocol::GetCrossZoneDeadLettersReply {
+            total_retired,
+            retained,
+        } = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetCrossZoneDeadLetters)
             .await
-            .cross_zone_dead_letters()
-            .map_err(|err| internal_error(&err))?;
+            .map_err(internal_error)?;
 
         Ok(CrossZoneDeadLetterReport {
             total_retired,
-            retained: records
+            retained: retained
                 .into_iter()
                 .map(|record| CrossZoneDeadLetter {
                     message_key: HashType(record.message_key),
