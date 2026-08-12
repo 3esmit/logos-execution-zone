@@ -10,11 +10,9 @@
 //! `outbox::Emit`). Fast, so they pin guest logic before the e2e exercises the
 //! plumbing. Run with `RISC0_DEV_MODE=1`.
 
-use std::collections::BTreeMap;
-
 use cross_zone_inbox_core::{
-    CrossZoneMessage, CrossZoneRoute, InboxConfig, Instruction as InboxInstruction, SeenShard,
-    inbox_config_account_id, inbox_seen_shard_account_id,
+    CrossZoneMessage, InboxConfig, Instruction as InboxInstruction, SeenShard,
+    inbox_config_account_id, inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
 use lee::{
@@ -23,7 +21,8 @@ use lee::{
 };
 use lee_core::account::Account;
 use ping_core::{
-    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, sender_config_account_id,
+    ReceiverInstruction, outbox_bytes, ping_record_pda, read_outbox, receiver_config_account_id,
+    sender_config_account_id,
 };
 
 const INITIAL_BALANCE: u128 = 100;
@@ -44,27 +43,10 @@ fn base_state() -> V03State {
     ])
 }
 
-/// Seeds an inbox config (inbox-owned) allowing `src_zone -> target`.
-fn seed_inbox_config(
-    state: &mut V03State,
-    self_zone: [u8; 32],
-    src_zone: [u8; 32],
-    src_program_id: lee_core::program::ProgramId,
-    target: lee_core::program::ProgramId,
-) {
+/// Seeds the inbox config (inbox-owned), which is now just this zone's id.
+fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     let inbox_id = programs::cross_zone_inbox().id();
-    let mut allowed_routes = BTreeMap::new();
-    allowed_routes.insert(
-        src_zone,
-        vec![CrossZoneRoute {
-            src_program_id,
-            target_program_id: target,
-        }],
-    );
-    let config = InboxConfig {
-        self_zone,
-        allowed_routes,
-    };
+    let config = InboxConfig { self_zone };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
         Account {
@@ -79,18 +61,49 @@ fn seed_inbox_config(
     )]);
 }
 
-/// Seeds the wrapped-token config account pinning the inbox as authorized minter,
-/// matching what genesis seeds for a real zone.
-fn seed_wrapped_config(state: &mut V03State) {
+/// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
+/// peer pairs it will mint for, matching what genesis seeds for a real zone.
+fn seed_wrapped_config(
+    state: &mut V03State,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
     let wrapped_token_id = programs::wrapped_token().id();
+    let config = wrapped_token_core::WrappedTokenConfig {
+        minter: programs::cross_zone_inbox().id(),
+        sources,
+    };
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
         Account {
             program_owner: wrapped_token_id,
-            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
-                .to_vec()
+            data: config
+                .to_bytes()
                 .try_into()
-                .expect("minter id fits in account data"),
+                .expect("wrapped-token config fits in account data"),
+            ..Default::default()
+        },
+    )]);
+}
+
+/// Seeds the ping-receiver config pinning the inbox as deliverer and `sources` as
+/// the peer pairs it accepts a delivery from.
+fn seed_receiver_config(
+    state: &mut V03State,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
+    let receiver_id = programs::ping_receiver().id();
+    let config = ping_core::ReceiverConfig {
+        deliverer: programs::cross_zone_inbox().id(),
+        sources,
+    };
+    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
+        receiver_config_account_id(receiver_id),
+        Account {
+            program_owner: receiver_id,
+            data: config
+                .to_bytes()
+                .try_into()
+                .expect("receiver config fits in account data"),
             ..Default::default()
         },
     )]);
@@ -133,6 +146,22 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     )]);
 }
 
+/// The account list a dispatch declares, mirroring `cross_zone::build_inbox_dispatch_tx`:
+/// config, seen shard, source marker, then the target's own accounts.
+fn dispatch_accounts(
+    inbox_id: lee_core::program::ProgramId,
+    msg: &CrossZoneMessage,
+    targets: Vec<AccountId>,
+) -> Vec<AccountId> {
+    let mut ids = vec![
+        inbox_config_account_id(inbox_id),
+        inbox_seen_shard_account_id(inbox_id, &msg.src_zone, msg.src_block_id),
+        inbox_source_marker_account_id(inbox_id, &msg.src_zone, msg.src_program_id),
+    ];
+    ids.extend(targets);
+    ids
+}
+
 /// A `ping_sender::Send` carrying `payload` to `target_zone`, over the accounts
 /// given rather than the correct ones, so tests can vary them.
 fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> PublicTransaction {
@@ -144,7 +173,10 @@ fn send_tx(accounts: Vec<AccountId>, target_zone: [u8; 32], ordinal: u32) -> Pub
     let send = ping_core::SenderInstruction::Send {
         target_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
         ordinal,
     };
@@ -177,14 +209,8 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
     let src_block_id = 5;
 
     let mut state = base_state();
-    seed_inbox_config(
-        &mut state,
-        self_zone,
-        src_zone,
-        [9_u32; 8],
-        wrapped_token_id,
-    );
-    seed_wrapped_config(&mut state);
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -199,12 +225,14 @@ fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeErro
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id),
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
-        ],
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -249,7 +277,8 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     let src_block_id = 5;
 
     let mut state = base_state();
-    seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // The payload is the ping_receiver instruction, serialized as risc0 words in
     // little-endian bytes (the contract the inbox reverses when forwarding).
@@ -271,12 +300,15 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let record_id = ping_record_pda(receiver_id);
 
     let message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -918,6 +950,94 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     );
 }
 
+/// A token that authorizes nothing mints for nobody. The state a zone reaches with
+/// no peers configured, where the config is still seeded so its PDA cannot be
+/// claimed by a first initializer.
+#[test]
+fn a_mint_is_refused_when_the_token_authorizes_no_source() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![]);
+
+    let msg = CrossZoneMessage {
+        src_zone,
+        src_block_id: 5,
+        src_block_hash: SRC_BLOCK_HASH,
+        src_tx_index: 0,
+        src_program_id: programs::bridge_lock().id(),
+        target_program_id: wrapped_token_id,
+        payload: mint_payload(),
+        l1_inclusion_witness: None,
+    };
+    let message = Message::try_new(
+        inbox_id,
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+            ],
+        ),
+        vec![],
+        InboxInstruction::Dispatch(msg),
+    )
+    .expect("build dispatch message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a token authorizing nothing must not mint");
+    };
+    assert!(
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
+/// The marker only means something because the caller is pinned to the inbox.
+/// Invoked directly, with the caller handing in the marker themselves, the mint
+/// must refuse before it ever looks at it.
+#[test]
+fn a_top_level_mint_is_refused() {
+    let inbox_id = programs::cross_zone_inbox().id();
+    let wrapped_token_id = programs::wrapped_token().id();
+    let src_zone = [2_u8; 32];
+    let src_program_id = programs::bridge_lock().id();
+
+    let mut state = base_state();
+    seed_wrapped_config(&mut state, vec![(src_zone, src_program_id)]);
+
+    let marker_id = inbox_source_marker_account_id(inbox_id, &src_zone, src_program_id);
+    let message = Message::try_new(
+        wrapped_token_id,
+        vec![
+            marker_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+        ],
+        vec![],
+        wrapped_token_core::Instruction::Mint {
+            recipient: RECIPIENT,
+            amount: LOCK_AMOUNT,
+        },
+    )
+    .expect("build mint message");
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a directly invoked mint must not execute");
+    };
+    assert!(
+        format!("{err:?}").contains("only callable by the authorized minter"),
+        "rejected for the wrong reason: {err:?}"
+    );
+}
+
 /// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)
 /// and asserts it chains into `wrapped_token::Mint`, crediting the recipient.
 #[test]
@@ -934,12 +1054,11 @@ fn inbox_dispatch_mints_wrapped_token() {
     );
 }
 
-/// A zone that bridges must allow `wrapped_token` as a target. When that
-/// allowance was per peer rather than per source program, it was enough for any
-/// emitter on the peer to reach it, and `ping_sender` lets its caller choose the
-/// target and payload freely. Any user on the peer could therefore mint wrapped
-/// tokens with no lock and no escrow behind them, by routing a `Mint` payload
-/// through the ping emitter. The route is the pair, so this must not execute.
+/// `ping_sender` lets its caller choose the target and payload freely, so any user
+/// on a peer can aim a `Mint` payload at `wrapped_token`. The inbox no longer
+/// refuses it; the token does, because the marker names `ping_sender` and the
+/// token authorized only the bridge. This is the check that replaced the central
+/// route table, so it must be the thing that rejects here.
 #[test]
 fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let inbox_id = programs::cross_zone_inbox().id();
@@ -951,14 +1070,8 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
 
     let mut state = base_state();
     // The config a bridging zone writes: the lock program may mint, nothing else.
-    seed_inbox_config(
-        &mut state,
-        self_zone,
-        src_zone,
-        programs::bridge_lock().id(),
-        wrapped_token_id,
-    );
-    seed_wrapped_config(&mut state);
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -972,27 +1085,24 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
+    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
+        panic!("a delivery from a source the token did not authorize must not mint");
+    };
     assert!(
-        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_err(),
-        "a delivery from an emitter with no route to wrapped_token must not mint"
+        format!("{err:?}").contains("peer source this token authorizes"),
+        "rejected for the wrong reason: {err:?}"
     );
 }
 
@@ -1010,14 +1120,8 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     let src_block_id = 5;
 
     let mut state = base_state();
-    seed_inbox_config(
-        &mut state,
-        self_zone,
-        src_zone,
-        bridge_lock_id,
-        wrapped_token_id,
-    );
-    seed_wrapped_config(&mut state);
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![(src_zone, programs::bridge_lock().id())]);
 
     let msg = CrossZoneMessage {
         src_zone,
@@ -1030,18 +1134,12 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         l1_inclusion_witness: None,
     };
 
-    let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let wrapped_config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let holding_id = wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT);
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1070,14 +1168,8 @@ fn mint_replay_rejected() {
     let src_tx_index = 0;
 
     let mut state = base_state();
-    seed_inbox_config(
-        &mut state,
-        self_zone,
-        src_zone,
-        [9_u32; 8],
-        wrapped_token_id,
-    );
-    seed_wrapped_config(&mut state);
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // Seed the seen-shard as already holding this delivery, so the inbox takes
     // the replay no-op branch. The shard is inbox-owned (claimed on a prior
@@ -1115,12 +1207,7 @@ fn mint_replay_rejected() {
 
     let message = Message::try_new(
         inbox_id,
-        vec![
-            inbox_config_account_id(inbox_id),
-            seen_id,
-            wrapped_config_id,
-            holding_id,
-        ],
+        dispatch_accounts(inbox_id, &msg, vec![wrapped_config_id, holding_id]),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1161,7 +1248,8 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let other_block_hash = [8_u8; 32];
 
     let mut state = base_state();
-    seed_inbox_config(&mut state, self_zone, src_zone, [9_u32; 8], receiver_id);
+    seed_inbox_config(&mut state, self_zone);
+    seed_receiver_config(&mut state, vec![(src_zone, [9_u32; 8])]);
 
     // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
@@ -1202,7 +1290,11 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let record_id = ping_record_pda(receiver_id);
     let message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(
+            inbox_id,
+            &msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(msg),
     )
@@ -1235,7 +1327,11 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     };
     let control_message = Message::try_new(
         inbox_id,
-        vec![inbox_config_account_id(inbox_id), seen_id, record_id],
+        dispatch_accounts(
+            inbox_id,
+            &control_msg,
+            vec![receiver_config_account_id(receiver_id), record_id],
+        ),
         vec![],
         InboxInstruction::Dispatch(control_msg),
     )

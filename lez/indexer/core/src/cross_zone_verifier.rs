@@ -718,7 +718,7 @@ mod tests {
     };
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use ping_core::{SenderInstruction, ping_record_pda};
+    use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
 
     use super::*;
 
@@ -748,7 +748,10 @@ mod tests {
         let send = SenderInstruction::Send {
             target_zone: SELF_ZONE,
             target_program_id: receiver_id,
-            target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+            target_accounts: vec![
+                receiver_config_account_id(receiver_id).into_value(),
+                ping_record_pda(receiver_id).into_value(),
+            ],
             payload: payload.to_vec(),
             ordinal: 0,
         };
@@ -845,7 +848,10 @@ mod tests {
                 src_program_id: programs::ping_sender().id(),
             },
             receiver_id,
-            &[ping_record_pda(receiver_id).into_value()],
+            &[
+                receiver_config_account_id(receiver_id).into_value(),
+                ping_record_pda(receiver_id).into_value(),
+            ],
             payload.to_vec(),
         ))
     }
