@@ -192,4 +192,44 @@ pub fn dashboard() -> Dashboard {
                     ),
             ],
         )
+        .row(
+            7,
+            [
+                // A failed dispatch is left out of the block, so nothing on chain
+                // records it. These panels are the only signal.
+                Panel::stat("Cross-zone deliveries given up on since startup")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .color(Color::fixed("red"))
+                    .target(
+                        Target::new(
+                            sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL,
+                        )
+                        .legend("given up on"),
+                    ),
+                Panel::stat("Dead letters retained")
+                    .width(6)
+                    .unit(Unit::Short)
+                    .decimals(0)
+                    .color(Color::fixed("orange"))
+                    .target(
+                        Target::new(
+                            sequencer_core_metrics::names::CROSS_ZONE_DEAD_LETTER_DISPATCHES,
+                        )
+                        .legend("retained"),
+                    ),
+                Panel::timeseries("Cross-zone deliveries given up on (per minute)")
+                    .width(12)
+                    .unit(Unit::Short)
+                    .min(0.0)
+                    .target(rate_per_min(
+                        sequencer_core_metrics::names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL,
+                        "given up on",
+                    ))
+                    .with_override(
+                        FieldOverride::by_name("given up on").color(Color::fixed("red")),
+                    ),
+            ],
+        )
 }

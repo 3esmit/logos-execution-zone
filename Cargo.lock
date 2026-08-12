@@ -4388,7 +4388,6 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
- "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "ping_core",
  "programs",
@@ -9573,6 +9572,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 
