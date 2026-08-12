@@ -75,7 +75,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
     let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(vault_balance_after, vault_balance_before);
@@ -135,7 +135,7 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         .sequencer_client()
         .get_account_balance(recipient_vault_id)
         .await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(vault_balance_after, vault_balance_before);
@@ -223,7 +223,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 
     let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
     let vault_balance_after = account_balance(&ctx, recipient_vault_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?.0;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(vault_balance_after, vault_balance_before);
@@ -473,7 +473,7 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let claim_on_chain = ctx.sequencer_client().get_transaction(claim_hash).await?;
+    let claim_on_chain = ctx.sequencer_client().get_transaction(claim_hash).await?.0;
     let vault_balance_after_claim = account_balance(&ctx, recipient_vault_id).await?;
     let recipient_balance_after_claim = account_balance(&ctx, recipient_id).await?;
 

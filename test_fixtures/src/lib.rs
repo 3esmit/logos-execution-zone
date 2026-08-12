@@ -517,7 +517,12 @@ pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
 ) -> PrivacyPreservingTransaction {
-    let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
+    let tx = seq_client
+        .get_transaction(tx_hash)
+        .await
+        .unwrap()
+        .0
+        .unwrap();
 
     match tx {
         LeeTransaction::PrivacyPreserving(privacy_preserving_transaction) => {

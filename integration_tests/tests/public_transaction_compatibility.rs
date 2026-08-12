@@ -125,6 +125,7 @@ async fn public_transaction_reaches_send_transaction_without_bulk_proofs() -> Re
                 .sequencer_client()
                 .get_transaction(transaction_hash)
                 .await?
+                .0
                 .is_some()
             {
                 return Ok::<(), anyhow::Error>(());

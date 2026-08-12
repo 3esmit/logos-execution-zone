@@ -22,6 +22,7 @@ use sequencer_service_protocol::{
     MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS, MAX_LOCAL_PUBLIC_TRANSACTION_RECEIPT_CONFIRMATIONS,
     MembershipProof, Nonce, ProgramId,
 };
+use sequencer_service_rpc::TransactionLookupResponse;
 use sha2::{Digest as _, Sha256};
 use tokio::sync::Mutex;
 
@@ -164,12 +165,14 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
     async fn get_transaction(
         &self,
         tx_hash: HashType,
-    ) -> Result<Option<LeeTransaction>, ErrorObjectOwned> {
+    ) -> Result<TransactionLookupResponse, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer
-            .block_store()
-            .get_transaction_by_hash(tx_hash)
-            .map(|(transaction, _block_id)| transaction))
+        Ok(TransactionLookupResponse(
+            sequencer
+                .block_store()
+                .get_transaction_by_hash(tx_hash)
+                .map(|(transaction, _block_id)| transaction),
+        ))
     }
 
     async fn get_local_public_transaction_receipt(
