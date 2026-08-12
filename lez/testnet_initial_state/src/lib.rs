@@ -80,12 +80,16 @@ const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
 const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
 
+const DEVELOPMENT_FIXTURE_TESTNET_ERROR: &str = "initial_state_profile `development_fixture` is unsupported in binaries compiled with the `testnet` feature";
+
 /// Selects the builtin state used to initialize a sequencer or indexer store.
 ///
 /// [`Self::Default`] preserves the state selected by the running binary's
 /// feature set. [`Self::DevelopmentFixture`] is deliberately limited to the
 /// end-to-end test fixture: it adds the development Pinata program and its
 /// account so a fresh indexer can replay the committed development fixture.
+/// Binaries compiled with `testnet` must reject it because their clock and
+/// builtin program transactions still target the Testnet program IDs.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InitialStateProfile {
@@ -93,7 +97,21 @@ pub enum InitialStateProfile {
     #[default]
     Default,
     /// Development state required to replay the committed end-to-end fixture.
+    ///
+    /// Unsupported in binaries compiled with `testnet`.
     DevelopmentFixture,
+}
+
+impl InitialStateProfile {
+    /// Validates that the profile can be used by the current binary.
+    pub const fn validate_for_compiled_network(self) -> Result<(), &'static str> {
+        match self {
+            Self::DevelopmentFixture if cfg!(feature = "testnet") => {
+                Err(DEVELOPMENT_FIXTURE_TESTNET_ERROR)
+            }
+            Self::Default | Self::DevelopmentFixture => Ok(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -739,6 +757,32 @@ mod tests {
         assert_ne!(
             bridge.program_owner, default_owner,
             "bridge must have a non-default program_owner"
+        );
+    }
+
+    #[test]
+    fn default_profile_is_supported_by_current_binary() {
+        assert_eq!(
+            InitialStateProfile::Default.validate_for_compiled_network(),
+            Ok(())
+        );
+    }
+
+    #[cfg(feature = "testnet")]
+    #[test]
+    fn development_fixture_profile_is_rejected_in_testnet_builds() {
+        assert_eq!(
+            InitialStateProfile::DevelopmentFixture.validate_for_compiled_network(),
+            Err(DEVELOPMENT_FIXTURE_TESTNET_ERROR)
+        );
+    }
+
+    #[cfg(not(feature = "testnet"))]
+    #[test]
+    fn development_fixture_profile_is_allowed_in_non_testnet_builds() {
+        assert_eq!(
+            InitialStateProfile::DevelopmentFixture.validate_for_compiled_network(),
+            Ok(())
         );
     }
 }

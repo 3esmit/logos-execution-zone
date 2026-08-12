@@ -126,6 +126,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        config
+            .validate()
+            .unwrap_or_else(|err| panic!("Invalid sequencer config: {err}"));
+
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
@@ -635,6 +639,10 @@ fn replay_unfulfilled_deposit_events(
 /// transactions. Returns the final state and the list of [`LeeTransaction`]s that should be
 /// committed to the genesis block so external observers can replay them.
 fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
+    if let Err(err) = config.initial_state_profile.validate_for_compiled_network() {
+        panic!("{err}");
+    }
+
     let mut state = testnet_initial_state::initial_state_for_profile(config.initial_state_profile);
 
     let genesis_txs = config
