@@ -87,6 +87,13 @@ const MAX_DISPATCHES_PER_BLOCK: usize = 16;
 // once that path exists, instead of a fixed genesis-only key.
 const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
 
+/// A founding sequencer's key, plus the ownership account attesting to its stake.
+type FoundingStake = (
+    sequencer_stake_core::SequencerKey,
+    lee::PublicKey,
+    lee::Signature,
+);
+
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
 pub enum TransactionOrigin {
@@ -368,17 +375,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 "First pending block on fresh start should be the genesis block"
             );
 
+            // The channel is born holding only its creator's key, so a configured
+            // founding set is applied by the same tx that writes genesis; the
+            // committee is never observable without it.
+            let founding_committee = founding_committee(&config, own_sequencer_key);
+
             let mut last_checkpoint = None;
             for block in &pending_blocks {
-                let outcome = block_publisher
-                    .publish_block(block, vec![])
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "Failed to publish block {} on fresh start: {err:#}",
-                            block.header.block_id
-                        )
-                    });
+                let publish = match &founding_committee {
+                    Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => {
+                        block_publisher
+                            .publish_genesis_creating_channel(block, keys.clone())
+                            .await
+                    }
+                    _ => block_publisher.publish_block(block, vec![]).await,
+                };
+                let outcome = publish.unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to publish block {} on fresh start: {err:#}",
+                        block.header.block_id
+                    )
+                });
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -1720,12 +1737,23 @@ fn build_genesis_state(
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
         // Seeded directly in `build_initial_state` (holdings via `build_holding_account`), not a
-        // genesis tx.
-        GenesisAction::SupplyBridgeLockHolding { .. } => None,
+        // genesis tx. Stakes are built separately below.
+        GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
+            None
+        }
     });
-    let bootstrap_stake_txs = bootstrap_sequencer_key.into_iter().flat_map(|key| {
-        build_bootstrap_stake_genesis_transactions(key, config.sequencer_stake_signing_key)
-    });
+
+    // The creator falls back to staking itself, signing with the key it owns.
+    let mut staked = founding_stakes(config);
+    if staked.is_empty() {
+        staked.extend(bootstrap_sequencer_key.map(|key| {
+            let owner = lee::PrivateKey::try_new(config.sequencer_stake_signing_key)
+                .expect("sequencer stake signing key is a valid private key");
+            let signature = sign_genesis_stake(0, key, &owner);
+            (key, lee::PublicKey::new_from_private_key(&owner), signature)
+        }));
+    }
+    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
     let genesis_txs = wrapped_token_config_tx
         .chain(ping_sender_config_tx)
@@ -1746,45 +1774,91 @@ fn build_genesis_state(
     (state, genesis_txs)
 }
 
-/// The bootstrap sequencer's own `Stake`, funded via the faucet and signed
-/// with `stake_signing_key` so a later top-up/unstake use the same account.
-/// Real transactions, not raw state, so followers replay them instead of
-/// missing them.
-fn build_bootstrap_stake_genesis_transactions(
-    sequencer_key: sequencer_stake_core::SequencerKey,
-    stake_signing_key: [u8; 32],
-) -> [PublicTransaction; 2] {
-    let stake_key = lee::PrivateKey::try_new(stake_signing_key).unwrap();
-    let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(&stake_key));
-    let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
-    let funding_id = AccountId::from(&lee::PublicKey::new_from_private_key(&funding_key));
-    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+fn founding_stakes(config: &SequencerConfig) -> Vec<FoundingStake> {
+    config
+        .genesis
+        .iter()
+        .filter_map(|action| match action {
+            GenesisAction::StakeSequencer {
+                sequencer_key,
+                ownership_public_key,
+                stake_signature,
+            } => Some((
+                *sequencer_key,
+                ownership_public_key.clone(),
+                stake_signature.clone(),
+            )),
+            GenesisAction::SupplyAccount { .. }
+            | GenesisAction::SupplyBridgeAccount { .. }
+            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+        })
+        .collect()
+}
 
-    let fund_message = Message::try_new(
-        programs::faucet().id(),
-        vec![system_accounts::faucet_account_id(), funding_id],
-        vec![lee_core::account::Nonce(0)],
-        faucet_core::Instruction::GenesisTransferDirect { amount },
+/// The accredited keys a newly created channel should carry, `own_key` first
+/// because creation gives the turn to index 0. `None` leaves creation to the
+/// plain inscription path.
+fn founding_committee(
+    config: &SequencerConfig,
+    own_key: sequencer_stake_core::SequencerKey,
+) -> Option<Vec<block_publisher::Ed25519PublicKey>> {
+    let mut keys: Vec<_> = founding_stakes(config)
+        .into_iter()
+        .map(|(key, ..)| key)
+        .collect();
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_unstable();
+    keys.retain(|key| *key != own_key);
+
+    Some(
+        std::iter::once(own_key)
+            .chain(keys)
+            .map(|key| {
+                block_publisher::Ed25519PublicKey::from_bytes(&key)
+                    .expect("sequencer key was decoded from a valid Ed25519 public key")
+            })
+            .collect(),
     )
-    .expect("Failed to build genesis funding message");
-    let fund_witness_set =
-        lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
-    let fund_tx = PublicTransaction::new(fund_message, fund_witness_set);
+}
 
+fn genesis_stake_funding_account() -> AccountId {
+    let key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY)
+        .expect("GENESIS_STAKE_FUNDING_KEY is a valid private key");
+    AccountId::from(&lee::PublicKey::new_from_private_key(&key))
+}
+
+/// The exact `Stake` message the founding sequencer at `index` must sign. Shared
+/// offchain by the genesis sequencer.
+fn genesis_stake_message(
+    index: usize,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    ownership_id: AccountId,
+) -> Message {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let mover_instruction_data = lee::program::Program::serialize_instruction(
         authenticated_transfer_core::Instruction::Transfer { amount },
     )
     .expect("Failed to serialize genesis mover instruction");
-    let stake_message = Message::try_new(
+    // A nonce counts how many times an account has signed. The funding account
+    // signed the faucet tx already, so its count starts at 1 here.
+    let funding_nonce = u128::try_from(index)
+        .expect("founding sequencer count fits in u128")
+        .checked_add(1)
+        .expect("genesis funding nonce overflow");
+
+    Message::try_new(
         programs::sequencer_stake().id(),
         vec![
-            funding_id,
+            genesis_stake_funding_account(),
             ownership_id,
             system_accounts::sequencer_stake_config_account_id(),
         ],
-        // funding_key already signed fund_tx above, so it's at nonce 1; stake_key
-        // signs for the first time here, still at nonce 0.
-        vec![lee_core::account::Nonce(1), lee_core::account::Nonce(0)],
+        vec![
+            lee_core::account::Nonce(funding_nonce),
+            lee_core::account::Nonce(0),
+        ],
         sequencer_stake_core::Instruction::Stake {
             sequencer_key,
             amount,
@@ -1792,14 +1866,77 @@ fn build_bootstrap_stake_genesis_transactions(
             mover_instruction_data,
         },
     )
-    .expect("Failed to build genesis Stake message");
-    let stake_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &stake_message,
-        &[&funding_key, &stake_key],
-    );
-    let stake_tx = PublicTransaction::new(stake_message, stake_witness_set);
+    .expect("Failed to build genesis Stake message")
+}
 
-    [fund_tx, stake_tx]
+/// Signs the founding sequencer at `index`'s genesis `Stake`, for an operator
+/// producing their `GenesisAction::StakeSequencer` entry.
+#[must_use]
+pub fn sign_genesis_stake(
+    index: usize,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    ownership_key: &lee::PrivateKey,
+) -> lee::Signature {
+    let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(ownership_key));
+    let message = genesis_stake_message(index, sequencer_key, ownership_id);
+    lee::Signature::new(ownership_key, &message.hash())
+}
+
+/// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
+/// not raw state, so followers replay them instead of missing them.
+fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
+    if staked.is_empty() {
+        return Vec::new();
+    }
+
+    let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
+    let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let total = u128::try_from(staked.len())
+        .ok()
+        .and_then(|count| amount.checked_mul(count))
+        .expect("genesis stake total overflow");
+
+    let fund_message = Message::try_new(
+        programs::faucet().id(),
+        vec![
+            system_accounts::faucet_account_id(),
+            genesis_stake_funding_account(),
+        ],
+        vec![lee_core::account::Nonce(0)],
+        faucet_core::Instruction::GenesisTransferDirect { amount: total },
+    )
+    .expect("Failed to build genesis funding message");
+    // The funding account signs even though it is only receiving. It is a brand
+    // new account, so the transfer claims it, and a claim needs that account's
+    // own signature.
+    let fund_witness_set =
+        lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
+
+    let mut txs = vec![PublicTransaction::new(fund_message, fund_witness_set)];
+
+    for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
+        let ownership_id = AccountId::from(ownership_public_key);
+        let stake_message = genesis_stake_message(index, *sequencer_key, ownership_id);
+        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
+            (
+                lee::Signature::new(&funding_key, &stake_message.hash()),
+                funding_public_key.clone(),
+            ),
+            (signature.clone(), ownership_public_key.clone()),
+        ]);
+
+        // Redundant with the signature check every tx gets, but names the entry.
+        assert!(
+            stake_witness_set.is_valid_for(&stake_message),
+            "genesis stake signature does not match founding sequencer {index} ({})",
+            hex::encode(sequencer_key)
+        );
+
+        txs.push(PublicTransaction::new(stake_message, stake_witness_set));
+    }
+
+    txs
 }
 
 /// Bridge-lock holder balances configured for this zone's genesis.
@@ -1808,7 +1945,9 @@ fn bridge_lock_holdings(
 ) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
     genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
+        GenesisAction::SupplyAccount { .. }
+        | GenesisAction::SupplyBridgeAccount { .. }
+        | GenesisAction::StakeSequencer { .. } => None,
     })
 }
 

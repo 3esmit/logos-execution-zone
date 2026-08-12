@@ -11,7 +11,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use lee::{AccountId, Balance};
+use lee::{AccountId, Balance, PublicKey, Signature};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,12 @@ pub enum GenesisAction {
     SupplyBridgeLockHolding {
         holder: AccountId,
         amount: Balance,
+    },
+    /// Stakes `sequencer_key` at genesis.
+    StakeSequencer {
+        sequencer_key: sequencer_stake_core::SequencerKey,
+        ownership_public_key: PublicKey,
+        stake_signature: Signature,
     },
 }
 

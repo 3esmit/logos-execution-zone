@@ -90,6 +90,14 @@ impl BlockPublisherTrait for MockBlockPublisher {
         })
     }
 
+    async fn publish_genesis_creating_channel(
+        &self,
+        block: &Block,
+        _keys: Vec<Ed25519PublicKey>,
+    ) -> Result<PublishOutcome> {
+        self.publish_block(block, Vec::new()).await
+    }
+
     async fn accredited_keys(&self) -> Result<Vec<Ed25519PublicKey>> {
         Ok(Vec::new())
     }

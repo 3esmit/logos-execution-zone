@@ -1043,6 +1043,12 @@ pub async fn verify_commitment_is_in_state(
         .is_some()
 }
 
+/// Initializes the global logger once, for tests that build their fixtures
+/// without going through [`TestContextBuilder`].
+pub fn init_logger() {
+    *LOGGER;
+}
+
 fn dir_size_bytes(path: &Path) -> u64 {
     let mut total = 0_u64;
     let Ok(entries) = std::fs::read_dir(path) else {
