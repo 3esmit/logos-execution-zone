@@ -111,7 +111,7 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// Create new test context with singulat config(1 zone, 1 sequencer).
+    /// Create new test context with singular config(1 zone, 1 sequencer).
     pub async fn new() -> Result<Self> {
         MultiZoneTestContextBuilder::default()
             .with_zone(ZoneTestContextBuilder::new(
@@ -122,8 +122,12 @@ impl TestContext {
     }
 
     /// Reference for the default zone(in case if only one present).
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn default_zone(&self) -> &TestContextZone {
+        assert!(self.zones.len() == 1);
+
         self.zones
             .values()
             .next()
@@ -132,6 +136,8 @@ impl TestContext {
 
     /// Reference for the default sequencer component(in case, if only one zone exists and only
     /// one sequencer exists).
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn default_sequencer_component(&self) -> &SequencerComponents {
         self.default_zone()
@@ -167,7 +173,11 @@ impl TestContext {
     }
 
     /// Mutable reference for the default zone(in case if only one present).
+    ///
+    /// Panics in case if there is more than one zone.
     pub fn default_zone_mut(&mut self) -> &mut TestContextZone {
+        assert!(self.zones.len() == 1);
+
         self.zones
             .values_mut()
             .next()
@@ -176,6 +186,8 @@ impl TestContext {
 
     /// Mutable reference for the default sequencer component(in case, if only one zone exists and
     /// only one sequencer exists).
+    ///
+    /// Panics in case if there is more than one zone.
     pub fn default_sequencer_component_mut(&mut self) -> &mut SequencerComponents {
         self.default_zone_mut()
             .sequencers
@@ -185,18 +197,24 @@ impl TestContext {
     }
 
     /// Get reference to the default wallet.
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn wallet(&self) -> &WalletCore {
         &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
     /// Get password of the default wallet password.
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn wallet_password(&self) -> &str {
         &self.default_zone().wallet.as_ref().unwrap().wallet_password
     }
 
     /// Get mutable reference to default the wallet.
+    ///
+    /// Panics in case if there is more than one zone.
     pub fn wallet_mut(&mut self) -> &mut WalletCore {
         &mut self.default_zone_mut().wallet.as_mut().unwrap().wallet
     }
@@ -225,6 +243,8 @@ impl TestContext {
     }
 
     /// Get reference to the sequencer client in default case (1 zone, 1 sequencer).
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn sequencer_client(&self) -> &SequencerClient {
         &self.default_sequencer_component().sequencer_client
@@ -253,6 +273,8 @@ impl TestContext {
     ///
     /// Panics if the indexer is not enabled in the test context. See
     /// [`ZoneTestContextBuilder::disable_indexer()`].
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn indexer(&self) -> &IndexerHandle {
         &self
@@ -268,6 +290,8 @@ impl TestContext {
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context.
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn indexer_addr(&self) -> SocketAddr {
         self.indexer().addr()
@@ -279,6 +303,8 @@ impl TestContext {
     ///
     /// Panics if the indexer is not enabled in the test context. See
     /// [`ZoneTestContextBuilder::disable_indexer()`].
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
         &self
@@ -353,6 +379,8 @@ impl TestContext {
     }
 
     /// Get default(1 zone) existing public account IDs in the wallet.
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
@@ -368,6 +396,8 @@ impl TestContext {
     }
 
     /// Get default (1 zone) existing private account IDs in the wallet.
+    ///
+    /// Panics in case if there is more than one zone.
     #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.default_zone()
@@ -638,7 +668,7 @@ impl ZoneTestContextBuilder {
         .await?;
 
         // Wait for genesis to be published
-        wait_untill_genesis(&leader_components.sequencer_client)
+        wait_until_genesis(&leader_components.sequencer_client)
             .await
             .context("Encountered an error while waiting for genesis to be published")?;
 
@@ -767,6 +797,12 @@ impl MultiZoneTestContextBuilder {
 
     #[must_use]
     pub fn with_zone(mut self, zone_builder: ZoneTestContextBuilder) -> Self {
+        assert!(
+            !self
+                .zone_builders
+                .contains_key(&zone_builder.bedrock_channel())
+        );
+
         self.zone_builders
             .insert(zone_builder.bedrock_channel(), zone_builder);
 
@@ -858,7 +894,7 @@ pub struct BlockingTestContext {
 }
 
 impl BlockingTestContext {
-    /// For now, only one zone and one sequecner is supported for blocking operations.
+    /// For now, only one zone and one sequencer is supported for blocking operations.
     pub fn new_default() -> Result<Self> {
         let mut zone_builders = HashMap::new();
 
@@ -983,7 +1019,7 @@ async fn post_chain_config_with_default_parameters(
     sequencer_keys: Vec<[u8; 32]>,
 ) -> Result<()> {
     log::info!(
-        "Sequencer comitee is {:?} at {channel_id}",
+        "Sequencer committee is {:?} at {channel_id}",
         sequencer_keys
             .iter()
             .map(|key| Ed25519Key::from_bytes(key).public_key().as_bytes().to_vec())
@@ -1018,7 +1054,7 @@ async fn post_chain_config_with_default_parameters(
     .context("Failed to configure the channel committee")
 }
 
-async fn wait_untill_genesis(client: &SequencerClient) -> Result<()> {
+async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
     log::info!("Waiting for leader to send genesis");
 
     let wait = async {
@@ -1053,7 +1089,7 @@ async fn build_sequencer_components(
         // Wallet genesis must always be present so that
         // setup_public/private_accounts_with_initial_supply can claim from the vault
         // PDAs. When a test supplies custom genesis, merge rather
-        // thanreplace.
+        // than replace.
         let wallet_genesis =
             config::genesis_from_accounts(initial_public_accounts, initial_private_accounts);
         match genesis_transactions {
