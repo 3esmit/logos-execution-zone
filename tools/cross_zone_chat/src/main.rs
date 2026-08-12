@@ -61,7 +61,10 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use log::{info, warn};
-use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
+use ping_core::{
+    ReceiverInstruction, SenderInstruction, ping_record_pda, receiver_config_account_id,
+    sender_config_account_id,
+};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
 use test_fixtures::{
@@ -522,7 +525,9 @@ fn decode_inbox_text(instruction_data: &[u32]) -> Option<String> {
 fn decode_send_ordinal(instruction_data: &[u32]) -> Option<u32> {
     let instruction: SenderInstruction =
         risc0_zkvm::serde::from_slice::<SenderInstruction, u32>(instruction_data).ok()?;
-    let SenderInstruction::Send { ordinal, .. } = instruction;
+    let SenderInstruction::Send { ordinal, .. } = instruction else {
+        return None;
+    };
     Some(ordinal)
 }
 
@@ -537,7 +542,9 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
         .collect();
     let instruction: ReceiverInstruction =
         risc0_zkvm::serde::from_slice::<ReceiverInstruction, u32>(&words).ok()?;
-    let ReceiverInstruction::Record { payload: bytes } = instruction;
+    let ReceiverInstruction::Record { payload: bytes } = instruction else {
+        return None;
+    };
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -554,23 +561,21 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
     let payload: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
 
     let send = SenderInstruction::Send {
-        outbox_program_id: outbox_id,
         target_zone: other_zone,
         target_program_id: receiver_id,
-        target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+        target_accounts: vec![
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
         ordinal,
     };
 
-    let outbox_account = outbox_pda(
-        outbox_id,
-        programs::ping_sender().id(),
-        &other_zone,
-        ordinal,
-    );
+    let sender_id = programs::ping_sender().id();
+    let outbox_account = outbox_pda(outbox_id, sender_id, &other_zone, ordinal);
     let message = Message::try_new(
-        programs::ping_sender().id(),
-        vec![outbox_account],
+        sender_id,
+        vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,
     )
