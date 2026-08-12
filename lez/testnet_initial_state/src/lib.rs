@@ -80,6 +80,8 @@ const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
 const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
 
+const DEVELOPMENT_FIXTURE_TESTNET_ERROR: &str = "initial_state_profile `development_fixture` is unsupported in binaries compiled with the `testnet` feature";
+
 /// Selects the builtin state used to initialize a sequencer or indexer store.
 ///
 /// [`Self::Default`] preserves the state selected by the running binary's
@@ -100,17 +102,14 @@ pub enum InitialStateProfile {
     DevelopmentFixture,
 }
 
-const DEVELOPMENT_FIXTURE_TESTNET_ERROR: &str = "initial_state_profile `development_fixture` is unsupported in binaries compiled with the `testnet` feature";
-
 impl InitialStateProfile {
     /// Validates that the profile can be used by the current binary.
     pub const fn validate_for_compiled_network(self) -> Result<(), &'static str> {
         match self {
-            Self::Default => Ok(()),
             Self::DevelopmentFixture if cfg!(feature = "testnet") => {
                 Err(DEVELOPMENT_FIXTURE_TESTNET_ERROR)
             }
-            Self::DevelopmentFixture => Ok(()),
+            Self::Default | Self::DevelopmentFixture => Ok(()),
         }
     }
 }
