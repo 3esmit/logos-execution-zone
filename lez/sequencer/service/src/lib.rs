@@ -126,13 +126,6 @@ impl SequencerHandle {
 
 /// Best-effort teardown for callers that drop the handle instead of awaiting
 /// [`SequencerHandle::shutdown`].
-///
-/// Dropping the refs alone is not enough: the `ExecutorActor` reference held by
-/// the RPC module keeps the executor — and the `RocksDB` lock — alive for an
-/// unbounded stretch afterwards, long enough for a restart on the same home
-/// directory to fail outright. Killing runs each actor's `on_stop` and drops its
-/// state, which is the same teardown `shutdown` performs, just without anything
-/// to await it on.
 impl Drop for SequencerHandle {
     fn drop(&mut self) {
         let Self {
