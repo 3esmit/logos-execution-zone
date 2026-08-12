@@ -76,7 +76,7 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
 
     // Zone A: source. Zone B: destination, with the watcher on its sequencer and
     // the verifier on its indexer.
-    let ind_client_b = ctx.indexer_client_getter(channel_b).unwrap();
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     let seq_client_a = &ctx
         .zone_default_sequencer_component(channel_a)

@@ -230,9 +230,9 @@ impl TestContext {
         &self.default_sequencer_component().sequencer_client
     }
 
-    /// Get reference to the sequencer client.
+    /// Get reference to the sequencer client by node zone `channel_id` and its `id`.
     #[must_use]
-    pub fn sequencer_client_getter(
+    pub fn sequencer_client_by_node_ids(
         &self,
         channel_id: ChannelId,
         id: usize,
@@ -289,37 +289,37 @@ impl TestContext {
             .indexer_client
     }
 
-    /// Get reference to the indexer.
+    /// Get reference to the indexer for corresponding zone.
     ///
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
     /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
-    pub fn indexer_getter(&self, channel_id: ChannelId) -> Option<&IndexerHandle> {
+    pub fn indexer_zone(&self, channel_id: ChannelId) -> Option<&IndexerHandle> {
         let val = self.zones.get(&channel_id)?;
         val.indexer.as_ref().map(|val| &val.indexer_handle)
     }
 
-    /// Get the default indexer's bound socket address.
+    /// Get the default indexer's bound socket address for corresponding zone.
     ///
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context.
     #[must_use]
-    pub fn indexer_addr_getter(&self, channel_id: ChannelId) -> Option<SocketAddr> {
-        self.indexer_getter(channel_id)
+    pub fn indexer_addr_zone(&self, channel_id: ChannelId) -> Option<SocketAddr> {
+        self.indexer_zone(channel_id)
             .map(indexer_service::IndexerHandle::addr)
     }
 
-    /// Get reference to the indexer client.
+    /// Get reference to the indexer client for corresponding zone.
     ///
     /// # Panics
     ///
     /// Panics if the indexer is not enabled in the test context. See
     /// [`ZoneTestContextBuilder::disable_indexer()`].
     #[must_use]
-    pub fn indexer_client_getter(&self, channel_id: ChannelId) -> Option<&IndexerClient> {
+    pub fn indexer_client_zone(&self, channel_id: ChannelId) -> Option<&IndexerClient> {
         let val = self.zones.get(&channel_id)?;
         val.indexer.as_ref().map(|val| &val.indexer_client)
     }
@@ -343,9 +343,11 @@ impl TestContext {
                 )
             }),
             wallet_bytes: self.zones.values().fold(0, |acc, zone| {
-                acc.saturating_add(dir_size_bytes(
-                    zone.wallet.as_ref().unwrap().temp_wallet_dir.path(),
-                ))
+                acc.saturating_add(
+                    zone.wallet
+                        .as_ref()
+                        .map_or(0, |val| dir_size_bytes(val.temp_wallet_dir.path())),
+                )
             }),
         }
     }
@@ -645,12 +647,15 @@ impl ZoneTestContextBuilder {
         sequencer_addrs.push(leader_addr);
         sequencer_components.push(leader_components);
 
-        post_chain_config_with_default_parameters(
-            mn_config.bedrock_channel,
-            bedrock_addr,
-            sequencer_keys.clone(),
-        )
-        .await?;
+        // Skip posting chain config with just one node.
+        if mn_config.num_nodes != 1 {
+            post_chain_config_with_default_parameters(
+                mn_config.bedrock_channel,
+                bedrock_addr,
+                sequencer_keys.clone(),
+            )
+            .await?;
+        }
 
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
             let (sequencer_addr, sequencer_component) = build_sequencer_components(
@@ -979,7 +984,11 @@ async fn post_chain_config_with_default_parameters(
 ) -> Result<()> {
     log::info!(
         "Sequencer comitee is {:?} at {channel_id}",
-        sequencer_keys.iter().map(hex::encode).collect::<Vec<_>>()
+        sequencer_keys
+            .iter()
+            .map(|key| Ed25519Key::from_bytes(key).public_key().as_bytes().to_vec())
+            .map(hex::encode)
+            .collect::<Vec<_>>()
     );
 
     post_channel_config(

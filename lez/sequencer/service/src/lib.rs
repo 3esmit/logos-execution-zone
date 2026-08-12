@@ -14,7 +14,7 @@ use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
 pub use sequencer_core::config::*;
 use sequencer_core::{
     TransactionOrigin,
-    block_publisher::BlockPublisherTrait as _,
+    block_publisher::{BlockPublisherTrait as _, Ed25519Key},
     task_group::{StoreRelease, TaskGroup},
 };
 use sequencer_service_rpc::RpcServer as _;
@@ -309,7 +309,11 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 
         log::info!("Our turn: collecting transactions from mempool, creating block");
         let id = state.produce_new_block().await?;
-        let author_identity = hex::encode(state.sequencer_config().signing_key);
+        let author_identity = hex::encode(
+            Ed25519Key::from_bytes(&state.sequencer_config().signing_key)
+                .public_key()
+                .as_bytes(),
+        );
         log::info!("Block with id {id} created by {author_identity:?}");
     }
 }
