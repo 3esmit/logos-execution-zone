@@ -130,6 +130,12 @@ impl SequencerSetup {
             std::fs::write(home.join("bedrock_signing_key"), key_bytes)
                 .context("Failed to write pre-generated bedrock signing key")?;
         }
+        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        std::fs::write(
+            home.join("sequencer_stake_signing_key"),
+            config::SEQUENCER_STAKE_KEY,
+        )
+        .context("Failed to write pre-generated stake signing key")?;
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis

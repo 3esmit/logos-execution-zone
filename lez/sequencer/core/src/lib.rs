@@ -1774,8 +1774,9 @@ fn build_genesis_state(
     let mut staked = founding_stakes(config);
     if staked.is_empty() {
         staked.extend(bootstrap_sequencer_key.map(|key| {
-            let owner = lee::PrivateKey::try_new(config.sequencer_stake_signing_key)
-                .expect("sequencer stake signing key is a valid private key");
+            let key_path = config.home.join("sequencer_stake_signing_key");
+            let owner = load_or_create_stake_signing_key(&key_path)
+                .expect("Failed to load or create the stake signing key");
             let signature = sign_genesis_stake(0, key, &owner);
             (key, lee::PublicKey::new_from_private_key(&owner), signature)
         }));
@@ -2344,16 +2345,14 @@ fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKe
     WithdrawalReconciliationKey { released_note_id }
 }
 
-/// Load signing key from file or generate a new one if it doesn't exist.
-pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
+/// Load key bytes from file or generate a new set if it doesn't exist.
+fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
 
-        let key_array: [u8; ED25519_SECRET_KEY_SIZE] = key_bytes
+        key_bytes
             .try_into()
-            .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
-
-        Ok(Ed25519Key::from_bytes(&key_array))
+            .map_err(|_bytes| anyhow!("Found key with incorrect length"))
     } else {
         let mut key_bytes = [0_u8; ED25519_SECRET_KEY_SIZE];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
@@ -2362,8 +2361,22 @@ pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, key_bytes)?;
-        Ok(Ed25519Key::from_bytes(&key_bytes))
+        Ok(key_bytes)
     }
+}
+
+/// Load signing key from file or generate a new one if it doesn't exist.
+pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
+    Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
+}
+
+/// Load the key owning this sequencer's genesis stake, or generate one.
+///
+/// Only read when a solo sequencer creates the channel: a configured founding
+/// set carries a signature instead, so the key never reaches the node.
+pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> {
+    let bytes = load_or_create_key_bytes(path)?;
+    lee::PrivateKey::try_new(bytes).context("stake signing key file holds an invalid private key")
 }
 
 #[cfg(test)]

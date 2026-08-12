@@ -133,7 +133,6 @@ pub fn sequencer_config(
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
         signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
-        sequencer_stake_signing_key: SEQUENCER_STAKE_KEY,
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)

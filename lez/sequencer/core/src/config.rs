@@ -56,7 +56,8 @@ pub struct GossipConfig {
 // TODO: Provide default values
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
-    /// Home dir of sequencer storage.
+    /// Home dir of sequencer storage. Holds `bedrock_signing_key`, and
+    /// `sequencer_stake_signing_key` when a solo sequencer creates the channel.
     pub home: PathBuf,
     /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
     pub max_num_tx_in_block: usize,
@@ -74,11 +75,6 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Sequencer own signing key.
     pub signing_key: [u8; 32],
-    /// Signing key of the LEZ account backing this sequencer's genesis stake.
-    /// Needed to sign the genesis `Stake` transaction, so top-up/unstake later
-    /// use the same account.
-    // TODO: move out of the config file and into its own file, like `signing_key`.
-    pub sequencer_stake_signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
     /// Genesis configuration.

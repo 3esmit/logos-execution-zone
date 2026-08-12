@@ -92,13 +92,17 @@ fn empty_follow_update() -> FollowUpdate {
     }
 }
 
-/// Key of the account holding the bootstrap sequencer's genesis stake in tests.
-fn bootstrap_stake_key() -> PrivateKey {
-    PrivateKey::try_new([55; 32]).unwrap()
+/// Key of the account holding a solo channel creator's genesis stake. Read
+/// from the same file genesis uses, which creates it on first read.
+fn bootstrap_stake_key(config: &SequencerConfig) -> PrivateKey {
+    crate::load_or_create_stake_signing_key(&config.home.join("sequencer_stake_signing_key"))
+        .expect("Failed to load or create the stake signing key")
 }
 
-fn bootstrap_stake_account_id() -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key()))
+fn bootstrap_stake_account_id(config: &SequencerConfig) -> AccountId {
+    AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key(
+        config,
+    )))
 }
 
 fn setup_sequencer_config() -> SequencerConfig {
@@ -112,7 +116,6 @@ fn setup_sequencer_config() -> SequencerConfig {
         mempool_max_size: 10000,
         block_create_timeout: Duration::from_secs(1),
         signing_key: *sequencer_sign_key_for_testing().value(),
-        sequencer_stake_signing_key: *bootstrap_stake_key().value(),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
@@ -3395,7 +3398,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let (state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
-    let stake_account = state.get_account_by_id(bootstrap_stake_account_id());
+    let stake_account = state.get_account_by_id(bootstrap_stake_account_id(&config));
     assert_eq!(
         stake_account.program_owner,
         programs::sequencer_stake().id()
@@ -3414,7 +3417,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     .expect("genesis config account should decode");
     assert_eq!(
         stake_config.entries[&bootstrap_sequencer_key].account_id,
-        bootstrap_stake_account_id()
+        bootstrap_stake_account_id(&config)
     );
 }
 
@@ -3426,7 +3429,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let bootstrap_sequencer_key = test_bootstrap_sequencer_key(&config);
     let (mut state, _genesis_txs) = build_genesis_state(&config, Some(bootstrap_sequencer_key));
 
-    let stake_id = bootstrap_stake_account_id();
+    let stake_id = bootstrap_stake_account_id(&config);
     let destination = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::try_new([56; 32]).unwrap(),
     ));
@@ -3445,8 +3448,10 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         },
     )
     .unwrap();
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&bootstrap_stake_key()]);
+    let witness_set = lee::public_transaction::WitnessSet::for_message(
+        &message,
+        &[&bootstrap_stake_key(&config)],
+    );
     let tx = PublicTransaction::new(message, witness_set);
 
     state
