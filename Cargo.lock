@@ -4390,7 +4390,6 @@ dependencies = [
  "lee",
  "lee_core",
  "log",
- "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
  "ping_core",
  "programs",
@@ -11580,6 +11579,7 @@ version = "0.1.0"
 dependencies = [
  "bip39",
  "cbindgen",
+ "common",
  "key_protocol",
  "lee",
  "lee_core",

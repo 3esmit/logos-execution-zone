@@ -119,7 +119,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// initializing its state with the accounts defined in the configuration file.
     fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let db_path = config.home.join("rocksdb");
+        let db_path = config.db_path();
 
         if db_path.exists() {
             let store = SequencerStore::open_db(&db_path, signing_key).unwrap_or_else(|err| {
@@ -133,6 +133,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .expect("Failed to read state from store");
             (store, state)
         } else {
+            let legacy = config.home.join("rocksdb");
+            if legacy.exists() {
+                warn!(
+                    "Ignoring pre-channel-suffix database at {}; rename it to {} to resume it",
+                    legacy.display(),
+                    db_path.display()
+                );
+            }
             warn!(
                 "Database not found at {}, starting from genesis",
                 db_path.display()
