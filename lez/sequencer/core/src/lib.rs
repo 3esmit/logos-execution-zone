@@ -662,8 +662,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    /// Produces a new block from mempool transactions and publishes it via zone-sdk.
-    pub async fn produce_new_block(&mut self) -> Result<u64> {
+    /// Runs everything this sequencer owes its turn: builds a block from
+    /// mempool transactions, publishes it via zone-sdk, and submits any
+    /// committee-config update the new state calls for.
+    pub async fn run_production_turn(&mut self) -> Result<u64> {
         let live_accredited_keys = self.live_accredited_sequencer_keys().await;
 
         let BlockWithMeta {

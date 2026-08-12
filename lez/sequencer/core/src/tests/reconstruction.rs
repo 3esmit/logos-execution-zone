@@ -58,8 +58,8 @@ async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     let config_a = setup_sequencer_config();
     let (mut seq_a, _handle_a) =
         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
-    seq_a.produce_new_block().await.unwrap();
-    seq_a.produce_new_block().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
 
     let messages = channel_from_store(seq_a.block_store(), 10);
@@ -196,8 +196,8 @@ async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     // A sequencer that committed blocks past genesis but never recorded an anchor.
     let config = setup_sequencer_config();
     let (mut seq, _handle) = SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    seq.produce_new_block().await.unwrap();
-    seq.produce_new_block().await.unwrap();
+    seq.run_production_turn().await.unwrap();
+    seq.run_production_turn().await.unwrap();
 
     // A below-tip block re-served with a corrupted hash. Holding a different
     // block at that id is not itself grounds to abort — the head tier is
@@ -291,7 +291,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     let config_a = setup_sequencer_config();
     let (mut seq_a, _mempool_a) =
         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
-    seq_a.produce_new_block().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let mut messages = channel_from_store(seq_a.block_store(), 10);
     let settled_slot = messages.last().unwrap().1;
@@ -374,7 +374,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     let config_a = setup_sequencer_config();
     let (mut seq_a, _mempool_a) =
         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
-    seq_a.produce_new_block().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -508,7 +508,7 @@ fn deposit_event_record(
 //         .push((TransactionOrigin::Sequencer, deposit_tx))
 //         .await
 //         .unwrap();
-//     seq_a.produce_new_block().await.unwrap();
+//     seq_a.run_production_turn().await.unwrap();
 
 //     let withdraw_tx = build_public_withdraw_tx(
 //         recipient,
@@ -521,7 +521,7 @@ fn deposit_event_record(
 //         .push((TransactionOrigin::User, withdraw_tx.clone()))
 //         .await
 //         .unwrap();
-//     seq_a.produce_new_block().await.unwrap();
+//     seq_a.run_production_turn().await.unwrap();
 
 //     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
 //     let messages = channel_from_store(seq_a.block_store(), 10);
@@ -571,7 +571,7 @@ fn deposit_event_record(
 //         "reconstruction must drop the re-delivered pending deposit record"
 //     );
 
-//     seq_b.produce_new_block().await.unwrap();
+//     seq_b.run_production_turn().await.unwrap();
 
 //     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
 //     let bridge_id = system_accounts::bridge_account_id();
@@ -643,7 +643,7 @@ fn deposit_event_record(
 //         .push((TransactionOrigin::User, withdraw_tx.clone()))
 //         .await
 //         .unwrap();
-//     seq_a.produce_new_block().await.unwrap();
+//     seq_a.run_production_turn().await.unwrap();
 
 //     let key = produced_withdraw_key(&withdraw_tx);
 //     // Producing the withdraw counts it as unseen, awaiting its L1 event.
@@ -696,7 +696,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .push((TransactionOrigin::Sequencer, deposit_tx))
         .await
         .unwrap();
-    seq_a.produce_new_block().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
 
     let messages = channel_from_store(seq_a.block_store(), 10);
     let tip_slot = messages.last().unwrap().1;
@@ -768,7 +768,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
         .dbio()
         .add_pending_cross_zone_dispatches(vec![record.clone()])
         .unwrap();
-    seq_a.produce_new_block().await.unwrap();
+    seq_a.run_production_turn().await.unwrap();
 
     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
     let messages = channel_from_store(seq_a.block_store(), 10);
@@ -818,7 +818,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
         payload,
         "the reconstructed delivery must reach its target program"
     );
-    seq_b.produce_new_block().await.unwrap();
+    seq_b.run_production_turn().await.unwrap();
     let produced = seq_b
         .block_store()
         .get_block_at_id(tip_b.id + 1)
@@ -847,7 +847,7 @@ async fn a_verified_own_block_settles_its_delivery_records() {
         .add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
-    let block_id = seq.produce_new_block().await.unwrap();
+    let block_id = seq.run_production_turn().await.unwrap();
     let block = seq
         .block_store()
         .get_block_at_id(block_id)
@@ -898,8 +898,8 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
     {
         let (mut seq, _handle) =
             SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-        seq.produce_new_block().await.unwrap();
-        seq.produce_new_block().await.unwrap();
+        seq.run_production_turn().await.unwrap();
+        seq.run_production_turn().await.unwrap();
         assert!(seq.block_store().latest_block_meta().unwrap().unwrap().id > 1);
     } // drop releases the store so we can reopen it
 

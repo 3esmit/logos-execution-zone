@@ -77,6 +77,14 @@ impl SequencerSetup {
         self
     }
 
+    /// Build a sequencer that joins a channel another node already created,
+    /// replaying its genesis from the channel instead of the prebuilt dump.
+    #[must_use]
+    pub fn joining_existing_channel(mut self) -> Self {
+        self.genesis_transactions = Some(Vec::new());
+        self
+    }
+
     /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).

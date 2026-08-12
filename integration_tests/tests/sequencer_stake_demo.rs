@@ -18,18 +18,23 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
 };
 use sequencer_core::config::GenesisAction;
+use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{
         MultiNodeTestContextConfig, SequencerPartialConfig, UrlProtocol, addr_to_url,
         bedrock_channel_id,
     },
+    setup::{SequencerSetup, sequencer_client},
 };
 use tokio::test;
 use wallet::AccountIdentity;
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+
+/// Bedrock signing key of the sequencer that stakes its way in.
+const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// Short block cadence for the demo.
 fn fast_blocks() -> SequencerPartialConfig {
@@ -41,8 +46,7 @@ fn fast_blocks() -> SequencerPartialConfig {
 
 #[test]
 async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
-    // Placeholder sequencer identity; must be a genuine Ed25519 point.
-    let demo_sequencer_key = Ed25519Key::from_bytes(&[0x42; 32]).public_key();
+    let demo_sequencer_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let demo_stake_key = sequencer_stake_core::SequencerKey::new(demo_sequencer_key.to_bytes())
         .expect("a Bedrock key is a valid Ed25519 public key");
 
@@ -193,6 +197,67 @@ async fn stake_transaction_joins_the_bedrock_committee() -> Result<()> {
         "Bedrock channel now accredits {} key(s), including the demo sequencer key — self-join complete",
         channel_state.accredited_keys.len()
     );
+
+    // Only now start a node behind the key, against a channel that already has a chain.
+    let (joiner, _joiner_home) = SequencerSetup::new(fast_blocks(), ctx.bedrock_addr())
+        .with_channel_id(bedrock_channel_id())
+        .with_bedrock_signing_key(JOINER_SIGNING_KEY)
+        .joining_existing_channel()
+        .setup()
+        .await
+        .context("Failed to start the joining sequencer")?;
+    let joiner_client = sequencer_client(joiner.addr())?;
+
+    let joined_at = ctx.sequencer_client().get_last_block_id().await?;
+    poll_until("the joining sequencer to sync the existing chain", 120, {
+        let joiner_client = &joiner_client;
+        move || async move { Ok(joiner_client.get_last_block_id().await? >= joined_at) }
+    })
+    .await?;
+    info!("Joining sequencer synced to block {joined_at}");
+
+    // A tip past `joined_at` under the demo key is a block this node built.
+    poll_until("the joining sequencer to build a block on its turn", 180, {
+        let node = &node;
+        let ctx = &ctx;
+        move || async move {
+            let Some(state) = node.channel_state(bedrock_channel_id()).await? else {
+                return Ok(false);
+            };
+            let turn = state
+                .accredited_keys
+                .get(usize::from(state.tip_sequencer))
+                .copied();
+            Ok(turn == Some(demo_sequencer_key)
+                && ctx.sequencer_client().get_last_block_id().await? > joined_at)
+        }
+    })
+    .await?;
+    info!("Joining sequencer produced a block on its round-robin turn");
+
+    // Both nodes agree, block for block, over everything they share.
+    let leader_client = ctx.sequencer_client();
+    let common = leader_client
+        .get_last_block_id()
+        .await?
+        .min(joiner_client.get_last_block_id().await?);
+    for id in 1..=common {
+        let leader_block = leader_client
+            .get_block(id)
+            .await?
+            .with_context(|| format!("Leader is missing block {id}"))?;
+        let joiner_block = joiner_client
+            .get_block(id)
+            .await?
+            .with_context(|| format!("Joining sequencer is missing block {id}"))?;
+        anyhow::ensure!(
+            leader_block.header.hash == joiner_block.header.hash,
+            "Chain divergence at block {id}: leader {:?} vs joiner {:?}",
+            leader_block.header.hash,
+            joiner_block.header.hash
+        );
+    }
+    info!("Leader and joining sequencer agree on all {common} shared blocks");
 
     // Exit flow: full UnstakeRequest, wait for the committee removal to land on
     // Bedrock, then check the sequencer's own FinalizeUnstake releases the stake.

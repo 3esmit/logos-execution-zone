@@ -191,7 +191,7 @@ async fn common_setup_with_config(
         .await
         .unwrap();
 
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     (sequencer, mempool_handle)
 }
@@ -425,7 +425,7 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
         "deposit mints are drained from the store, never queued in the mempool"
     );
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
         .get_block_at_id(block_id)
@@ -477,8 +477,8 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
         })
         .unwrap();
 
-    let first = sequencer.produce_new_block().await.unwrap();
-    let second = sequencer.produce_new_block().await.unwrap();
+    let first = sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.run_production_turn().await.unwrap();
 
     let minted_in = |block_id: u64| {
         sequencer
@@ -527,7 +527,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         .unwrap();
 
     // Produce the block that mints the deposit; its receipt marks it minted.
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let minted_block = sequencer.store.get_block_at_id(2).unwrap().unwrap();
     assert!(
         sequencer.with_state(|s| deposit_already_minted(s, HashType(deposit_op_id))),
@@ -554,7 +554,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
 
     // Next turn: the still-pending record is drained and re-minted on the new
     // head, exactly once.
-    let replacement = sequencer.produce_new_block().await.unwrap();
+    let replacement = sequencer.run_production_turn().await.unwrap();
     let mints = sequencer
         .store
         .get_block_at_id(replacement)
@@ -657,7 +657,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
         "deliveries are drained from the store, never queued in the mempool"
     );
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
         .get_block_at_id(block_id)
@@ -704,8 +704,8 @@ async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
         .add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
-    let first = sequencer.produce_new_block().await.unwrap();
-    let second = sequencer.produce_new_block().await.unwrap();
+    let first = sequencer.run_production_turn().await.unwrap();
+    let second = sequencer.run_production_turn().await.unwrap();
 
     let delivered_in = |block_id: u64| {
         dispatches_in(
@@ -747,7 +747,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         .unwrap();
 
     for attempt in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        let block_id = sequencer.produce_new_block().await.unwrap();
+        let block_id = sequencer.run_production_turn().await.unwrap();
         let block = sequencer
             .store
             .get_block_at_id(block_id)
@@ -770,7 +770,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     // pending list. Anything else leaves an entry no later block can ever
     // remove, which is how a peer that can make deliveries fail would grow this
     // list without bound.
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     assert!(
         pending_dispatches(&sequencer).is_empty(),
         "giving up on a delivery must take its record out of the pending list"
@@ -806,7 +806,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     assert_eq!(retained, dead_letters);
 
     // And nothing re-feeds it, so it stops costing a guest execution per block.
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert!(dispatches_in(&block).is_empty());
     assert!(pending_dispatches(&sequencer).is_empty());
@@ -830,7 +830,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
         .add_pending_cross_zone_dispatches(vec![record.clone()])
         .unwrap();
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
 
@@ -853,7 +853,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
         .unwrap();
     assert_eq!(pending_dispatches(&sequencer).len(), 1);
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert!(
         dispatches_in(&block).is_empty(),
@@ -882,8 +882,8 @@ async fn a_delivery_still_reversible_keeps_its_record() {
         .add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
-    sequencer.produce_new_block().await.unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     assert_eq!(
         pending_dispatches(&sequencer)
@@ -963,7 +963,7 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
         .unwrap();
 
     // Production must get past it to the mempool in the very first block.
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert!(
         block.body.transactions.contains(&user_tx),
@@ -973,7 +973,7 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
 
     // And it is given up on rather than retried for ever.
     for _ in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        sequencer.produce_new_block().await.unwrap();
+        sequencer.run_production_turn().await.unwrap();
     }
     assert!(
         pending_dispatches(&sequencer).is_empty(),
@@ -1005,7 +1005,7 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
         .add_pending_cross_zone_dispatches(records)
         .unwrap();
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert_eq!(
         dispatches_in(&block).len(),
@@ -1014,7 +1014,7 @@ async fn a_delivery_backlog_is_spread_across_blocks() {
     );
 
     // Deferred, not dropped: the rest go in the next block.
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert_eq!(dispatches_in(&block).len(), 3);
 }
@@ -1163,7 +1163,7 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
     assert!(poll.is_pending());
 
     // Empty the mempool by producing a block
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     // Resolve the pending push
     assert!(push_fut.await.is_ok());
@@ -1246,7 +1246,7 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
         .unwrap();
 
     // Create block
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
         .get_block_at_id(sequencer.chain_height())
@@ -1281,7 +1281,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .push((TransactionOrigin::User, tx.clone()))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
         .get_block_at_id(sequencer.chain_height())
@@ -1300,7 +1300,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
         .push((TransactionOrigin::User, tx.clone()))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .store
         .get_block_at_id(sequencer.chain_height())
@@ -1342,7 +1342,7 @@ async fn restart_from_storage() {
             .push((TransactionOrigin::User, tx.clone()))
             .await
             .unwrap();
-        sequencer.produce_new_block().await.unwrap();
+        sequencer.run_production_turn().await.unwrap();
         let block = sequencer
             .store
             .get_block_at_id(sequencer.chain_height())
@@ -1380,9 +1380,9 @@ async fn get_pending_blocks() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config).await;
-    sequencer.produce_new_block().await.unwrap();
-    sequencer.produce_new_block().await.unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 4);
 }
 
@@ -1391,9 +1391,9 @@ async fn delete_blocks() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config).await;
-    sequencer.produce_new_block().await.unwrap();
-    sequencer.produce_new_block().await.unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     let last_finalized_block = 3;
     sequencer
@@ -1429,7 +1429,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
             .push((TransactionOrigin::User, tx))
             .await
             .unwrap();
-        sequencer.produce_new_block().await.unwrap();
+        sequencer.run_production_turn().await.unwrap();
 
         // Get the metadata of the last block produced
         sequencer.store.latest_block_meta().unwrap().unwrap()
@@ -1455,7 +1455,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         .unwrap();
 
     // Step 4: Produce new block
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     // Step 5: Verify the new block has correct previous block metadata
     let new_block = sequencer
@@ -1508,7 +1508,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
         .push((TransactionOrigin::User, crafted_clock_tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     let block = sequencer
         .store
@@ -1538,7 +1538,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .push((TransactionOrigin::User, deploy_tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     // Build a user transaction that invokes clock_chain_caller, which in turn chain-calls the
     // clock program with the clock accounts. The sequencer should detect that the resulting
@@ -1563,7 +1563,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         .push((TransactionOrigin::User, user_tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     let block = sequencer
         .store
@@ -1603,7 +1603,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
         .unwrap();
 
     // Block production must fail because the appended clock tx cannot execute.
-    let result = sequencer.produce_new_block().await;
+    let result = sequencer.run_production_turn().await;
     assert!(
         result.is_err(),
         "Block production should abort when clock account data is corrupted"
@@ -2154,8 +2154,8 @@ async fn head_rewound_below_published_height_blocks_production() {
     let (mut sequencer, mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config).await;
 
-    let first = sequencer.produce_new_block().await.unwrap();
-    let published_tip = sequencer.produce_new_block().await.unwrap();
+    let first = sequencer.run_production_turn().await.unwrap();
+    let published_tip = sequencer.run_production_turn().await.unwrap();
     assert_eq!(
         sequencer.store.published_high_water().unwrap(),
         Some(published_tip),
@@ -2312,7 +2312,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
         .push((TransactionOrigin::User, tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
 
     // The channel redelivers our own block under the MsgId the mock publisher
@@ -2354,7 +2354,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
         .push((TransactionOrigin::User, tx.clone()))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
 
     apply_follow_update(
@@ -2410,7 +2410,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
         .push((TransactionOrigin::User, tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
 
     apply_follow_update(
@@ -2459,7 +2459,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
         .push((TransactionOrigin::User, tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
     let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
 
     apply_follow_update(
@@ -2503,7 +2503,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
         .add_pending_cross_zone_dispatches(vec![record])
         .unwrap();
 
-    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
     let delivery_block = sequencer.store.get_block_at_id(block_id).unwrap().unwrap();
     assert_eq!(dispatches_in(&delivery_block), vec![key]);
     assert_eq!(
@@ -2551,7 +2551,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
         .push((TransactionOrigin::User, tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     // A skip-ahead block carrying the same delivery: not in head and linking to
     // nothing we hold, so the final tier parks it instead of applying it.
@@ -2630,7 +2630,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
         .push((TransactionOrigin::User, tx))
         .await
         .unwrap();
-    sequencer.produce_new_block().await.unwrap();
+    sequencer.run_production_turn().await.unwrap();
 
     let deposit_op_id = HashType([21; 32]);
     let record = PendingDepositEventRecord {
@@ -2709,7 +2709,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
             .push((TransactionOrigin::User, tx.clone()))
             .await
             .unwrap();
-        sequencer.produce_new_block().await.unwrap();
+        sequencer.run_production_turn().await.unwrap();
         (tx, sequencer.store.get_block_at_id(2).unwrap().unwrap())
     };
 
@@ -2774,7 +2774,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
             .push((TransactionOrigin::User, tx))
             .await
             .unwrap();
-        sequencer.produce_new_block().await.unwrap();
+        sequencer.run_production_turn().await.unwrap();
         let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
         apply_follow_update(
             &sequencer.store.dbio(),
