@@ -78,7 +78,13 @@ async fn nodes_discover_each_other_via_bootstrap() {
     let secrets = [[10; 32], [11; 32], [12; 32]];
     let (node_a, _mempool_a) = start_node(secrets[0], vec![]).await;
     let a_addr = node_a.listen_addrs()[0].clone();
-    let (node_b, _mempool_b) = start_node(secrets[1], vec![a_addr.clone()]).await;
+    // B bootstraps with a `/p2p/`-suffixed address (the Kademlia-seeded
+    // branch operators configure), C with a plain one (the direct-dial
+    // branch), covering both paths in `GossipNetwork::start`.
+    let a_addr_with_peer_id = a_addr
+        .clone()
+        .with(libp2p::multiaddr::Protocol::P2p(node_a.local_peer_id()));
+    let (node_b, _mempool_b) = start_node(secrets[1], vec![a_addr_with_peer_id]).await;
     let (node_c, _mempool_c) = start_node(secrets[2], vec![a_addr]).await;
 
     assert!(
@@ -154,6 +160,23 @@ async fn invalid_transaction_is_not_propagated() {
         })
         .await,
         "A never connected to B"
+    );
+
+    // Publish a valid transaction first and wait for it to arrive: swarm
+    // connectivity alone does not mean the gossipsub mesh has grafted, and
+    // without proof the link is live the absence assertion below would pass
+    // vacuously.
+    let valid_tx = valid_transaction();
+    let valid_hash = valid_tx.hash();
+    node_a.tx_publisher().publish(valid_tx);
+    assert!(
+        wait_for(Duration::from_secs(30), || {
+            mempool_b
+                .pop()
+                .is_some_and(|(_, received)| received.hash() == valid_hash)
+        })
+        .await,
+        "B never received the valid transaction; gossip link not live"
     );
 
     node_a

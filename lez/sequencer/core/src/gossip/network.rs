@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     time::Duration,
 };
 
@@ -34,6 +34,12 @@ const TX_PUBLISH_CHANNEL_CAPACITY: usize = 1024;
 /// source, seqno, topic) so a maximum-size transaction still fits the transmit
 /// limit instead of being dropped at the transport before validation.
 const GOSSIP_FRAME_MARGIN: u64 = 4096;
+/// How often to re-dial bootstrap peers while the node has no connected
+/// peers, so a node that starts before its bootstrap peer still joins.
+const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+/// Local transactions whose publish failed (e.g. `InsufficientPeers` while
+/// the mesh is still forming), kept for republish once a peer subscribes.
+const PENDING_PUBLISH_CAPACITY: usize = 256;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
@@ -200,6 +206,8 @@ impl GossipNetwork {
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
             max_block_size,
             tx_rx,
+            bootstrap,
+            pending_publish: VecDeque::new(),
         }));
         spawn_driver_watchdog(driver, shutdown.clone());
 
@@ -266,6 +274,11 @@ struct DriveTask {
     seen: SeenCache,
     max_block_size: u64,
     tx_rx: mpsc::Receiver<LeeTransaction>,
+    /// Configured bootstrap peers, re-dialed while the node is isolated.
+    bootstrap: Vec<Multiaddr>,
+    /// Local transactions whose publish failed, retried when a peer
+    /// subscribes to the topic. Bounded; the oldest is dropped on overflow.
+    pending_publish: VecDeque<LeeTransaction>,
 }
 
 impl DriveTask {
@@ -304,6 +317,11 @@ impl DriveTask {
                 message,
             }) => {
                 self.on_gossip_message(propagation_source, &message_id, &message.data);
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.topic.hash() =>
+            {
+                self.flush_pending_publishes();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(ed25519_pubkey) = info.public_key.try_into_ed25519() {
@@ -393,19 +411,63 @@ impl DriveTask {
             .report_message_validation_result(message_id, &source, acceptance);
     }
 
-    /// Publishes a locally-submitted transaction to the mesh.
-    fn publish_transaction(&mut self, tx: &LeeTransaction) {
+    /// Publishes a locally-submitted transaction to the mesh. Marked seen
+    /// only once actually published; a failed publish (e.g.
+    /// `InsufficientPeers` while the mesh is still forming) is queued and
+    /// retried when a peer subscribes to the topic.
+    fn publish_transaction(&mut self, tx: LeeTransaction) {
         let hash = tx.hash();
-        self.seen.insert(hash);
-        let bytes = borsh::to_vec(tx).expect("tx borsh serialization should not fail");
-        if let Err(err) = self
+        let bytes = borsh::to_vec(&tx).expect("tx borsh serialization should not fail");
+        match self
             .swarm
             .behaviour_mut()
             .gossipsub
             .publish(self.topic.clone(), bytes)
         {
-            log::debug!("Skipping local tx publish {hash:?}: {err}");
+            // Duplicate means the mesh already carries this message.
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {
+                self.seen.insert(hash);
+            }
+            Err(err) => {
+                log::debug!("Queueing local tx publish {hash:?} for retry: {err}");
+                if self.pending_publish.len() >= PENDING_PUBLISH_CAPACITY
+                    && let Some(dropped) = self.pending_publish.pop_front()
+                {
+                    log::debug!(
+                        "Pending publish queue full; dropping oldest tx {:?}",
+                        dropped.hash()
+                    );
+                }
+                self.pending_publish.push_back(tx);
+            }
         }
+    }
+
+    /// Retries queued local publishes; still-failing ones are re-queued by
+    /// `publish_transaction`.
+    fn flush_pending_publishes(&mut self) {
+        for tx in std::mem::take(&mut self.pending_publish) {
+            self.publish_transaction(tx);
+        }
+    }
+
+    /// Re-dials bootstrap peers while the node is isolated. The startup
+    /// attempt runs once, so a node that starts before its bootstrap peer
+    /// would otherwise never join the mesh.
+    fn retry_bootstrap(&mut self) {
+        if !self.connected.is_empty() || self.bootstrap.is_empty() {
+            return;
+        }
+        log::debug!(
+            "No connected gossip peers; retrying {} bootstrap peer(s)",
+            self.bootstrap.len()
+        );
+        for addr in self.bootstrap.clone() {
+            if let Err(err) = self.swarm.dial(addr.clone()) {
+                log::debug!("Failed to dial gossip bootstrap peer {addr}: {err}");
+            }
+        }
+        _ = self.swarm.behaviour_mut().kademlia.bootstrap();
     }
 }
 
@@ -474,11 +536,20 @@ async fn wait_for_listen_addr(swarm: &mut Swarm<GossipBehaviour>) -> Result<Vec<
     reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
 )]
 async fn run_drive_task(mut task: DriveTask) {
+    // `interval_at`: startup already dialed the bootstrap peers, so the
+    // first tick waits a full interval instead of firing immediately.
+    let mut bootstrap_retry = tokio::time::interval_at(
+        tokio::time::Instant::now()
+            .checked_add(BOOTSTRAP_RETRY_INTERVAL)
+            .expect("bootstrap retry deadline within Instant range"),
+        BOOTSTRAP_RETRY_INTERVAL,
+    );
     loop {
         tokio::select! {
             () = task.shutdown.cancelled() => break,
             event = task.swarm.select_next_some() => task.on_swarm_event(event),
-            Some(tx) = task.tx_rx.recv() => task.publish_transaction(&tx),
+            Some(tx) = task.tx_rx.recv() => task.publish_transaction(tx),
+            _ = bootstrap_retry.tick() => task.retry_bootstrap(),
         }
     }
 }

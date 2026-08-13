@@ -165,9 +165,13 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         .as_ref()
         .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
 
-    let rpc_server =
-        RpcServerActor::new(executor_ref.clone(), listen_addr, max_block_size, tx_publisher)
-            .await?;
+    let rpc_server = RpcServerActor::new(
+        executor_ref.clone(),
+        listen_addr,
+        max_block_size,
+        tx_publisher,
+    )
+    .await?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");
