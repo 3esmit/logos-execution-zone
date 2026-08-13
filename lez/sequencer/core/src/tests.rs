@@ -23,7 +23,7 @@ use logos_blockchain_core::{
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
-use ping_core::{ReceiverInstruction, ping_record_pda};
+use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use storage::sequencer::sequencer_cells::{
     DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
 };
@@ -216,7 +216,10 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
             src_program_id: programs::ping_sender().id(),
         },
         receiver_id,
-        &[ping_record_pda(receiver_id).into_value()],
+        &[
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
     ))
 }

@@ -1523,16 +1523,24 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     );
 
     // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. The wrapped-token minter is
-    // initialized on every zone (wrapped_token is a builtin), since its InitConfig
-    // is user-callable and a config PDA left default would be claimable by anyone as
-    // the first initializer (a minter hijack). The inbox allowlist is initialized
-    // only on receiving zones; the inbox is sequencer-only, so its default config
-    // PDA is not user-claimable, merely unused until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|cross_zone| {
+    // reconstructs them by replaying the genesis block. The wrapped-token minter and
+    // both emitters' pins are initialized on every zone: all three are builtins with
+    // a user-callable InitConfig, so a config PDA left default is claimable by the
+    // first initializer, hijacking the minter or repointing an emitter's outbox. The
+    // inbox allowlist is initialized only on receiving zones; the inbox is
+    // sequencer-only, so its default config PDA is not user-claimable, merely unused
+    // until the zone receives.
+    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
+        config.cross_zone.as_ref(),
+    ));
+    let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
+    let ping_receiver_config_tx = std::iter::once(cross_zone::build_ping_receiver_init_config_tx(
+        config.cross_zone.as_ref(),
+    ));
+    let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
+    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
         let self_zone = *config.bedrock_config.channel_id.as_ref();
-        cross_zone::build_inbox_init_config_tx(self_zone, cross_zone)
+        cross_zone::build_inbox_init_config_tx(self_zone)
     });
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
@@ -1550,6 +1558,9 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     });
 
     let genesis_txs = wrapped_token_config_tx
+        .chain(ping_sender_config_tx)
+        .chain(ping_receiver_config_tx)
+        .chain(bridge_lock_config_tx)
         .chain(inbox_config_tx)
         .chain(supply_txs)
         .chain(std::iter::once(clock_invocation(0)))

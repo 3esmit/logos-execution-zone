@@ -1225,6 +1225,7 @@ name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 
@@ -2002,6 +2003,7 @@ dependencies = [
  "log",
  "ping_core",
  "programs",
+ "rand 0.8.6",
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde",
@@ -7746,7 +7748,9 @@ dependencies = [
 name = "ping_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 
@@ -7754,6 +7758,7 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
+ "cross_zone_inbox_core",
  "lee_core",
  "ping_core",
 ]
@@ -12340,6 +12345,7 @@ dependencies = [
 name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -12349,6 +12355,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
+ "cross_zone_inbox_core",
  "lee_core",
  "wrapped_token_core",
 ]
