@@ -32,10 +32,6 @@ pub struct SequencerHandle {
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
     /// `None` when gossip is unconfigured.
-    #[expect(
-        dead_code,
-        reason = "never read; kept alive so drop stops the gossip driver"
-    )]
     gossip: Option<sequencer_core::gossip::GossipNetwork>,
 }
 
@@ -120,6 +116,15 @@ impl SequencerHandle {
     #[must_use]
     pub const fn addr(&self) -> SocketAddr {
         self.addr
+    }
+
+    /// Multiaddrs (with the `/p2p/` peer id suffix) other nodes can use as
+    /// gossip `bootstrap_peers`. `None` when gossip is unconfigured.
+    #[must_use]
+    pub fn gossip_bootstrap_addrs(&self) -> Option<Vec<sequencer_core::gossip::Multiaddr>> {
+        self.gossip
+            .as_ref()
+            .map(sequencer_core::gossip::GossipNetwork::bootstrap_addrs)
     }
 }
 

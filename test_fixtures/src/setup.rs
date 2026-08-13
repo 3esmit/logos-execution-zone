@@ -36,6 +36,7 @@ pub struct SequencerSetup {
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
+    gossip: Option<sequencer_core::config::GossipConfig>,
 }
 
 impl SequencerSetup {
@@ -48,6 +49,7 @@ impl SequencerSetup {
             genesis_transactions: None,
             cross_zone: None,
             bedrock_signing_key: None,
+            gossip: None,
         }
     }
 
@@ -84,6 +86,14 @@ impl SequencerSetup {
         self
     }
 
+    /// Enable p2p gossip with the given configuration.
+    /// If not set, the sequencer runs without gossip.
+    #[must_use]
+    pub fn with_gossip(mut self, gossip: sequencer_core::config::GossipConfig) -> Self {
+        self.gossip = Some(gossip);
+        self
+    }
+
     /// Set up the sequencer in a fresh temporary home directory, returning the
     /// owning [`TempDir`] alongside the handle.
     pub async fn setup(self) -> Result<(SequencerHandle, TempDir)> {
@@ -106,6 +116,7 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
+            gossip,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
@@ -142,6 +153,7 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
+            gossip,
         )
         .context("Failed to create Sequencer config")?;
 

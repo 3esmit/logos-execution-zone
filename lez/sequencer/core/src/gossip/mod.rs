@@ -5,6 +5,7 @@
 //! down degrades to L1-only behavior, and a gossip failure after startup
 //! never halts the node.
 
+pub use libp2p::Multiaddr;
 pub use network::{GossipNetwork, GossipTxPublisher};
 
 pub mod accreditation;

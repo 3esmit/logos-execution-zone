@@ -230,6 +230,16 @@ impl GossipNetwork {
         self.listen_addrs.clone()
     }
 
+    /// Listen addresses with the `/p2p/` peer id appended — the form other
+    /// nodes put in `bootstrap_peers`.
+    #[must_use]
+    pub fn bootstrap_addrs(&self) -> Vec<Multiaddr> {
+        self.listen_addrs
+            .iter()
+            .map(|addr| addr.clone().with(Protocol::P2p(self.local_peer_id)))
+            .collect()
+    }
+
     #[must_use]
     pub const fn local_peer_id(&self) -> PeerId {
         self.local_peer_id
