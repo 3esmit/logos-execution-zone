@@ -86,6 +86,9 @@ impl GossipNetwork {
         // Reuse the node's L1 bedrock signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
         // and drop wipe.
+        //
+        // FIXME: get rid of `unsecure` here when we introduce accredited key
+        // handling, and a separete `Gossip node key -> Bedrock signing key` mapping.
         let mut secret = signing_key.into_unsecured().to_bytes();
         let keypair = Keypair::ed25519_from_bytes(&mut *secret)
             .map_err(|err| anyhow!("Invalid bedrock signing key for libp2p identity: {err}"))?;
