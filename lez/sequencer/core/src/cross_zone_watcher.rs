@@ -556,10 +556,8 @@ fn record_block_deliveries(
 ) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
-    // Collected and written once. The pending list is a single value, so a write
-    // per delivery would rewrite the whole list once per message, which is
-    // quadratic in a peer block that carries many of them, on a task holding the
-    // lock block production needs.
+    // Collected and written once, so recording a block is all-or-nothing; see
+    // RocksDBIO::add_pending_cross_zone_dispatches.
     let mut deliveries = Vec::new();
     for (index, tx) in block.body.transactions.iter().enumerate() {
         let LeeTransaction::Public(public_tx) = tx else {
@@ -666,7 +664,7 @@ mod tests {
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
     use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
-    use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, RocksDBIO};
+    use storage::sequencer::{DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY, RocksDBIO};
     use tempfile::TempDir;
 
     use super::*;
@@ -792,27 +790,36 @@ mod tests {
         peer_msg(b"not a block".to_vec(), slot)
     }
 
-    /// The message keys recorded so far, in insertion order.
+    /// The message keys recorded so far, sorted: the store keys each record by
+    /// its message key, so no insertion order survives.
     fn recorded_keys(dbio: &RocksDBIO) -> Vec<[u8; 32]> {
-        dbio.get_pending_cross_zone_dispatches()
-            .expect("pending dispatches readable")
-            .into_iter()
-            .map(|record| record.message_key)
-            .collect()
+        sorted(
+            dbio.get_pending_cross_zone_dispatches()
+                .expect("pending dispatches readable")
+                .into_iter()
+                .map(|record| record.message_key)
+                .collect(),
+        )
     }
 
-    /// Makes every later pending-dispatch read fail, standing in for any store
-    /// failure between reading a peer block and the delivery being durable.
-    /// Recording reads the list before it writes it, so a value that will not
-    /// decode is enough.
+    /// `keys` as [`recorded_keys`] reports them.
+    fn sorted(mut keys: Vec<[u8; 32]>) -> Vec<[u8; 32]> {
+        keys.sort_unstable();
+        keys
+    }
+
+    /// Makes every later pending-dispatch write fail, standing in for any
+    /// store failure before a delivery is durable: recording reads the count
+    /// first, so a count that will not decode is enough.
     fn break_the_dispatch_store(dbio: &RocksDBIO) {
         let cf = dbio
             .db
             .cf_handle(storage::CF_META_NAME)
             .expect("meta column family");
-        let key = borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY).expect("key encodes");
+        let key =
+            borsh::to_vec(&DB_META_PENDING_CROSS_ZONE_DISPATCH_COUNT_KEY).expect("key encodes");
         dbio.db
-            .put_cf(&cf, key, b"not a pending dispatch list")
+            .put_cf(&cf, key, b"not a pending dispatch count")
             .expect("write");
     }
 
@@ -1071,7 +1078,10 @@ mod tests {
         );
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
+            sorted(vec![
+                message_key(&PEER_ZONE, 1, 0),
+                message_key(&PEER_ZONE, 2, 0)
+            ])
         );
     }
 
@@ -1289,11 +1299,11 @@ mod tests {
 
         assert_eq!(
             recorded_keys(&dbio),
-            vec![
+            sorted(vec![
                 message_key(&PEER_ZONE, 1, 0),
                 message_key(&PEER_ZONE, 2, 0),
                 message_key(&PEER_ZONE, 3, 0)
-            ],
+            ]),
             "only the unread block is recorded on the second pass"
         );
         assert_eq!(
@@ -1429,11 +1439,11 @@ mod tests {
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
             recorded_keys(&dbio),
-            vec![
+            sorted(vec![
                 message_key(&PEER_ZONE, 1, 0),
                 message_key(&PEER_ZONE, 2, 0),
                 message_key(&PEER_ZONE, 3, 0)
-            ],
+            ]),
             "the key the peer aimed to burn is never recorded, and nothing else is held up"
         );
         assert_eq!(tip, Some(tip_at(3)));
@@ -1468,7 +1478,10 @@ mod tests {
         );
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            sorted(vec![
+                message_key(&PEER_ZONE, 1, 0),
+                message_key(&PEER_ZONE, 2, 0)
+            ]),
             "one delivery per id, whatever the peer publishes under it"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1499,7 +1512,10 @@ mod tests {
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)],
+            sorted(vec![
+                message_key(&PEER_ZONE, 1, 0),
+                message_key(&PEER_ZONE, 2, 0)
+            ]),
             "the fork is passed over and the peer's own chain continues"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1558,7 +1574,10 @@ mod tests {
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
             recorded_keys(&dbio),
-            vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
+            sorted(vec![
+                message_key(&PEER_ZONE, 1, 0),
+                message_key(&PEER_ZONE, 2, 0)
+            ])
         );
         assert_eq!(tip, Some(tip_at(2)));
     }
