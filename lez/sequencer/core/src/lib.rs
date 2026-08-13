@@ -21,7 +21,7 @@ use futures::StreamExt as _;
 use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
@@ -223,7 +223,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
-        info!(
+        log::info!(
             "Bedrock signing public key: {}",
             hex::encode(bedrock_signing_key.public_key().to_bytes())
         );
@@ -732,7 +732,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        info!("Validated transaction with hash {tx_hash}, including it in block");
+        log::info!("Validated transaction with hash {tx_hash}, including it in block");
         true
     }
 
@@ -1033,7 +1033,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     // TODO: Delete blocks instead of marking them as finalized. Current
     // approach is used because we still have `GetBlockDataRequest`.
     pub fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
-        info!("Clearing pending blocks up to id: {last_finalized_block_id}");
+        log::info!("Clearing pending blocks up to id: {last_finalized_block_id}");
         self.store
             .dbio()
             .clean_pending_blocks_up_to(last_finalized_block_id)?;
@@ -1461,7 +1461,7 @@ fn apply_follow_update(
     record_dead_letter_gauge(dbio);
 
     if outcome.accepted_deposits > 0 {
-        info!(
+        log::info!(
             "Recorded {} Bedrock Deposit event(s); their mints are drained from the store on our next turn",
             outcome.accepted_deposits
         );
@@ -1517,7 +1517,7 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     let mut state = build_initial_state(config);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
-    info!(
+    log::info!(
         "Genesis fingerprint: {}",
         hex::encode(state.genesis_fingerprint())
     );

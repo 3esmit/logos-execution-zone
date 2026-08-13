@@ -20,6 +20,7 @@ tokio-util.workspace = true
 log.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 lee.workspace = true

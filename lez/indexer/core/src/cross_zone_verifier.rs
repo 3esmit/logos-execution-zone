@@ -12,7 +12,7 @@ use cross_zone_inbox_core::{
 };
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -189,7 +189,7 @@ impl PeerBlocks {
                 );
                 return false;
             }
-            info!(
+            log::info!(
                 "Peer zone {} block {}: replacing held block {} with {}, which continues the verified run where the held one never could.",
                 hex::encode(zone),
                 block.header.block_id,
@@ -363,7 +363,7 @@ impl CrossZoneVerifier {
                 )));
             }
 
-            info!(
+            log::info!(
                 "Verified cross-zone dispatch from zone {} block {} tx {}",
                 hex::encode(msg.src_zone),
                 msg.src_block_id,
@@ -513,7 +513,7 @@ impl CrossZoneVerifier {
                 });
             }
             if !waited.is_zero() && waited.as_secs().is_multiple_of(LAG_LOG_INTERVAL.as_secs()) {
-                info!(
+                log::info!(
                     "Waiting for peer zone {} to finalize block {} ({}s); reader is behind",
                     hex::encode(zone),
                     block_id,
@@ -591,7 +591,7 @@ async fn read_peer(
     peers: PeerBlocks,
     poll_interval: Duration,
 ) {
-    info!(
+    log::info!(
         "Cross-zone peer reader started for {}",
         hex::encode(peer_zone)
     );

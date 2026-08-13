@@ -77,6 +77,26 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+/// Config for test context in multi-node case.
+pub struct MultiNodeTestContextConfig {
+    pub num_nodes: usize,
+    pub bedrock_channel: ChannelId,
+}
+
+impl Default for MultiNodeTestContextConfig {
+    fn default() -> Self {
+        Self {
+            num_nodes: 1,
+            bedrock_channel: bedrock_channel_id(),
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All fields are necessary and better to keep separate"
+)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
@@ -85,6 +105,7 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
+    signing_key: Option<[u8; 32]>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -101,7 +122,7 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: SEQUENCER_SIGNING_KEY,
+        signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -198,13 +219,19 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
-    Ok(WalletConfig {
-        sequencers: vec![SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
+pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
+    let mut sequencers = vec![];
+
+    for addr in sequencer_addrs {
+        sequencers.push(SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        }],
+        });
+    }
+
+    Ok(WalletConfig {
+        sequencers,
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
@@ -263,6 +290,31 @@ pub fn bedrock_channel_id() -> ChannelId {
 pub fn bedrock_channel_id_b() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 2]
         .repeat(16)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}
+
+/// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
+#[must_use]
+pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
+    seed.to_le_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
+}
+
+/// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.
+///
+/// Counting from the end of `u32` to guarantee, that it is different from
+/// `sequencer_signing_key_from_seed`.
+#[must_use]
+pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
+    let channel_id: [u8; 32] =
+    // Useless in this case, but will make clippy happy
+    u32::MAX.saturating_sub(seed)
+        .to_le_bytes()
+        .repeat(8)
         .try_into()
         .unwrap_or_else(|_| unreachable!());
     ChannelId::from(channel_id)

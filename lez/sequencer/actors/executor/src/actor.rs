@@ -13,8 +13,10 @@ use lee_core::{
 use log::{info, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
-    config::SequencerConfig, task_group::TaskGroup,
+    SequencerCore, TransactionOrigin,
+    block_publisher::{BlockPublisherTrait, Ed25519Key},
+    config::SequencerConfig,
+    task_group::TaskGroup,
 };
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -141,7 +143,13 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for Executo
             .await
             .map_err(Error::BlockProductionFailed)?;
 
-        info!("Block with id {id} created");
+        let author_identity = hex::encode(
+            Ed25519Key::from_bytes(&self.sequencer.sequencer_config().signing_key)
+                .public_key()
+                .as_bytes(),
+        );
+        log::info!("Block with id {id} created by {author_identity:?}");
+
         Ok(())
     }
 }

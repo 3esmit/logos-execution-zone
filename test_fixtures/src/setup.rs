@@ -28,6 +28,7 @@ use crate::{
     private_mention, public_mention,
 };
 
+#[derive(Debug)]
 pub struct SequencerSetup {
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
@@ -140,6 +141,7 @@ impl SequencerSetup {
             config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
+            bedrock_signing_key,
         )
         .context("Failed to create Sequencer config")?;
 
@@ -279,12 +281,13 @@ pub async fn setup_indexer(
 }
 
 pub async fn setup_wallet(
-    sequencer_addr: SocketAddr,
+    sequencer_addrs: &[SocketAddr],
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
-    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
+    let config =
+        config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 

@@ -5,7 +5,7 @@ use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission}
 use cross_zone_inbox_core::{CrossZoneRoute, message_key, routes_permit};
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -302,7 +302,7 @@ async fn watch_peer(
     dbio: Arc<RocksDBIO>,
 ) {
     let peer_zone = peer.peer_zone;
-    info!(
+    log::info!(
         "Cross-zone watcher started for peer {}",
         hex::encode(peer_zone)
     );
@@ -356,7 +356,7 @@ async fn watch_peer(
     }
     let mut cursor = resume.cursor;
     if let Some(slot) = cursor {
-        info!(
+        log::info!(
             "Resuming watcher for peer {} from slot {slot:?}",
             hex::encode(peer_zone)
         );
@@ -629,7 +629,7 @@ fn record_block_deliveries(
         // the slot stays stuck.
         Ok(accepted) => {
             if accepted > 0 {
-                info!(
+                log::info!(
                     "Watcher recorded {accepted} of {offered} cross-zone deliveries from peer {} block {}",
                     hex::encode(peer_zone),
                     block.header.block_id
