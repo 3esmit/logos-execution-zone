@@ -46,7 +46,7 @@ use storage::sequencer::{
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
-    task_group::{StoreRelease, TaskGroup},
+    task_group::TaskGroup,
 };
 
 pub mod block_publisher;
@@ -1151,13 +1151,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let retained = dbio.get_dead_letter_cross_zone_dispatches()?;
         let total = dbio.get_dead_letter_cross_zone_dispatch_count()?;
         Ok((total, retained))
-    }
-
-    /// A weak reference to this sequencer's store, for a shutdown path that
-    /// needs to observe the database actually closing rather than infer it.
-    #[must_use]
-    pub fn store_release(&self) -> StoreRelease {
-        StoreRelease::new(&self.store.dbio())
     }
 
     /// Every background task that holds this sequencer's store handle.
