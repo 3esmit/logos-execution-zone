@@ -37,7 +37,7 @@ pub enum GenesisAction {
 
 /// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
 /// entirely: no sockets, no background tasks.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GossipConfig {
     /// Multiaddr to listen on.
     #[serde(default = "default_gossip_listen_addr")]
@@ -48,7 +48,7 @@ pub struct GossipConfig {
 }
 
 // TODO: Provide default values
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
@@ -84,7 +84,7 @@ pub struct SequencerConfig {
     pub gossip: Option<GossipConfig>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
     /// Bedrock channel ID.
     pub channel_id: ChannelId,
@@ -107,6 +107,16 @@ impl SequencerConfig {
         let reader = BufReader::new(file);
 
         Ok(serde_json::from_reader(reader)?)
+    }
+
+    /// Where this sequencer's database lives, suffixed with the channel id like
+    /// the indexer's, so several sequencers can share a home directory. Only the
+    /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
+    /// sequencers sharing a home share one Bedrock identity.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.home
+            .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
     }
 }
 

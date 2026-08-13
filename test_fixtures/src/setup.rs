@@ -28,6 +28,7 @@ use crate::{
     private_mention, public_mention,
 };
 
+#[derive(Debug)]
 pub struct SequencerSetup {
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
@@ -118,8 +119,9 @@ impl SequencerSetup {
             genesis
         } else {
             let dump = load_prebuilt_dump()?;
-            // `SequencerCore::open_or_create_store` looks for `<home>/rocksdb`.
-            let dst = home.join("rocksdb");
+            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
+            // db under its home, so the restore has to land on the same name.
+            let dst = home.join(format!("rocksdb-{channel_id}"));
             let _store = SequencerStore::restore_db_from_dump(
                 &dst,
                 &dump,
@@ -139,6 +141,7 @@ impl SequencerSetup {
             config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
+            bedrock_signing_key,
         )
         .context("Failed to create Sequencer config")?;
 
@@ -278,12 +281,13 @@ pub async fn setup_indexer(
 }
 
 pub async fn setup_wallet(
-    sequencer_addr: SocketAddr,
+    sequencer_addrs: &[SocketAddr],
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
-    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
+    let config =
+        config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
