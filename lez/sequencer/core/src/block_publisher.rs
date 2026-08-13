@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
 use futures::Stream;
-use log::{info, warn};
+use log::warn;
 pub use logos_blockchain_core::mantle::{
     ledger::NoteId,
     ops::channel::{Ed25519PublicKey, MsgId},
@@ -122,11 +122,11 @@ pub trait BlockPublisherTrait: Sized {
     ///
     /// The checkpoint must be persisted with the block — restoring an older one
     /// drops the inscription from the pending set, and it is never resubmitted.
-    async fn publish_block(
-        &self,
-        block: &Block,
+    fn publish_block<'blk, 'pbl: 'blk>(
+        &'pbl self,
+        block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
-    ) -> Result<PublishOutcome>;
+    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'blk;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -251,10 +251,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 });
                                 match &msg_result {
                                     Ok(_) if withdraw_count == 0 => {
-                                        info!("Published block with the size of {data_byte_size} bytes");
+                                        log::info!("Published block with the size of {data_byte_size} bytes");
                                     }
                                     Ok(_) => {
-                                        info!(
+                                        log::info!(
                                             "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
                                         );
                                     }
@@ -317,7 +317,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 }
                                 Event::Ready => {}
                                 Event::TurnNotification { notification } => {
-                                    info!(
+                                    log::info!(
                                         "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
                                         notification.our_turn_to_write,
                                         notification.starting_slot,
@@ -350,9 +350,9 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(
-        &self,
-        block: &Block,
+    async fn publish_block<'blk, 'pbl: 'blk>(
+        &'pbl self,
+        block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
