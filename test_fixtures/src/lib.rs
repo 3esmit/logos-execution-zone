@@ -14,7 +14,9 @@ use sequencer_core::{
     block_publisher::{Ed25519Key, post_channel_config},
     config::GenesisAction,
 };
-use sequencer_service::{BedrockConfig, CrossZoneConfig, SequencerHandle, default_priority_fee};
+use sequencer_service::{
+    BedrockConfig, CrossZoneConfig, GossipConfig, SequencerHandle, default_priority_fee,
+};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
@@ -496,11 +498,17 @@ impl Drop for TestContext {
 }
 
 #[derive(Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "test-context builder toggles independent features; a state machine would obscure it"
+)]
 pub struct ZoneTestContextBuilder {
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
+    follower_sequencer_partial_config: Option<config::SequencerPartialConfig>,
     enable_indexer: bool,
     enable_wallet: bool,
+    enable_gossip: bool,
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
     mn_config: MultiNodeTestContextConfig,
@@ -513,8 +521,10 @@ impl ZoneTestContextBuilder {
         Self {
             genesis_transactions: None,
             sequencer_partial_config: None,
+            follower_sequencer_partial_config: None,
             enable_indexer: true,
             enable_wallet: true,
+            enable_gossip: false,
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
             mn_config,
@@ -555,6 +565,25 @@ impl ZoneTestContextBuilder {
         sequencer_partial_config: config::SequencerPartialConfig,
     ) -> Self {
         self.sequencer_partial_config = Some(sequencer_partial_config);
+        self
+    }
+
+    /// Override the sequencer partial config for the non-leader nodes only.
+    /// If not set, followers use the same config as the leader.
+    #[must_use]
+    pub const fn with_follower_sequencer_partial_config(
+        mut self,
+        follower_sequencer_partial_config: config::SequencerPartialConfig,
+    ) -> Self {
+        self.follower_sequencer_partial_config = Some(follower_sequencer_partial_config);
+        self
+    }
+
+    /// Enable p2p gossip between the sequencers: the leader listens on an
+    /// OS-assigned localhost port and every follower bootstraps from it.
+    #[must_use]
+    pub const fn with_gossip(mut self) -> Self {
+        self.enable_gossip = true;
         self
     }
 
@@ -600,8 +629,10 @@ impl ZoneTestContextBuilder {
         let Self {
             genesis_transactions,
             sequencer_partial_config,
+            follower_sequencer_partial_config,
             enable_indexer,
             enable_wallet,
+            enable_gossip,
             wallet_config_overrides,
             from_scratch,
             mn_config,
@@ -653,6 +684,12 @@ impl ZoneTestContextBuilder {
         }));
 
         // First, need to start a leader.
+        let leader_gossip = enable_gossip.then(|| GossipConfig {
+            listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1"
+                .parse()
+                .expect("hardcoded gossip listen multiaddr is valid"),
+            bootstrap_peers: vec![],
+        });
         let (leader_addr, leader_components) = build_sequencer_components(
             partial_config,
             bedrock_addr,
@@ -664,8 +701,21 @@ impl ZoneTestContextBuilder {
             config::SEQUENCER_SIGNING_KEY,
             mn_config.bedrock_channel,
             cross_zone_config.clone(),
+            leader_gossip,
         )
         .await?;
+
+        // The leader listened on an OS-assigned port, so followers can only
+        // learn its gossip address from the running handle.
+        let follower_gossip = leader_components
+            .sequencer_handle
+            .gossip_bootstrap_addrs()
+            .map(|bootstrap_peers| GossipConfig {
+                listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1"
+                    .parse()
+                    .expect("hardcoded gossip listen multiaddr is valid"),
+                bootstrap_peers,
+            });
 
         // Wait for genesis to be published
         wait_until_genesis(&leader_components.sequencer_client)
@@ -689,7 +739,7 @@ impl ZoneTestContextBuilder {
 
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
             let (sequencer_addr, sequencer_component) = build_sequencer_components(
-                partial_config,
+                follower_sequencer_partial_config.unwrap_or(partial_config),
                 bedrock_addr,
                 enable_wallet,
                 use_prebuilt,
@@ -699,6 +749,7 @@ impl ZoneTestContextBuilder {
                 sequencer_key,
                 mn_config.bedrock_channel,
                 cross_zone_config.clone(),
+                follower_gossip.clone(),
             )
             .await?;
 
@@ -1082,6 +1133,7 @@ async fn build_sequencer_components(
     sequencer_key: [u8; 32],
     bedrock_channel_id: ChannelId,
     cross_zone_config: Option<CrossZoneConfig>,
+    gossip: Option<GossipConfig>,
 ) -> Result<(SocketAddr, SequencerComponents)> {
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
 
@@ -1111,6 +1163,9 @@ async fn build_sequencer_components(
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
     if let Some(cross_zone_config) = cross_zone_config.clone() {
         sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
+    }
+    if let Some(gossip) = gossip {
+        sequencer_setup = sequencer_setup.with_gossip(gossip);
     }
 
     let (sequencer_handle, temp_sequencer_dir) = sequencer_setup

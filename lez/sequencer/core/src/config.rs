@@ -35,6 +35,18 @@ pub enum GenesisAction {
     },
 }
 
+/// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
+/// entirely: no sockets, no background tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GossipConfig {
+    /// Multiaddr to listen on.
+    #[serde(default = "default_gossip_listen_addr")]
+    pub listen_addr: libp2p::Multiaddr,
+    /// Peer multiaddrs to dial at startup, optionally with `/p2p/<peer_id>`.
+    #[serde(default)]
+    pub bootstrap_peers: Vec<libp2p::Multiaddr>,
+}
+
 // TODO: Provide default values
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
@@ -67,6 +79,9 @@ pub struct SequencerConfig {
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_address")]
     pub metrics_address: Option<SocketAddr>,
+    /// Sequencer p2p gossip configuration. `None` disables gossip.
+    #[serde(default)]
+    pub gossip: Option<GossipConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,6 +122,12 @@ impl SequencerConfig {
 
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
+}
+
+fn default_gossip_listen_addr() -> libp2p::Multiaddr {
+    "/ip4/0.0.0.0/udp/0/quic-v1"
+        .parse()
+        .expect("hardcoded default gossip listen addr is a valid multiaddr")
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

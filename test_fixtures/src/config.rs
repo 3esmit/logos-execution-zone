@@ -8,7 +8,9 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use num_bigint::BigUint;
-use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
+use sequencer_core::config::{
+    BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+};
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
@@ -106,6 +108,7 @@ pub fn sequencer_config(
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
     signing_key: Option<[u8; 32]>,
+    gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -133,6 +136,7 @@ pub fn sequencer_config(
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        gossip,
     })
 }
 

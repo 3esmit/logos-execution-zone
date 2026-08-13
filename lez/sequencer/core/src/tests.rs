@@ -92,6 +92,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         genesis: vec![],
         cross_zone: None,
         metrics_address: None,
+        gossip: None,
     }
 }
 
