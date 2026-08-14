@@ -1107,11 +1107,13 @@ async fn build_sequencer_components(
         genesis_transactions.unwrap_or_default()
     };
 
+    // The prebuilt dump carries a genesis stake for the key the fixture generator
+    // ran with, so a node restoring it has to sign Bedrock with that same key.
     if !use_prebuilt {
-        sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+        sequencer_setup = sequencer_setup
+            .with_genesis(genesis_actions)
+            .with_bedrock_signing_key(sequencer_key);
     }
-
-    sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
     if let Some(cross_zone_config) = cross_zone_config.clone() {
         sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
