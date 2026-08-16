@@ -793,17 +793,12 @@ mod tests {
     /// The message keys recorded so far, sorted: the store keys each record by
     /// its message key, so no insertion order survives.
     fn recorded_keys(dbio: &RocksDBIO) -> Vec<[u8; 32]> {
-        sorted(
-            dbio.get_pending_cross_zone_dispatches()
-                .expect("pending dispatches readable")
-                .into_iter()
-                .map(|record| record.message_key)
-                .collect(),
-        )
-    }
-
-    /// `keys` as [`recorded_keys`] reports them.
-    fn sorted(mut keys: Vec<[u8; 32]>) -> Vec<[u8; 32]> {
+        let mut keys: Vec<[u8; 32]> = dbio
+            .get_pending_cross_zone_dispatches()
+            .expect("pending dispatches readable")
+            .into_iter()
+            .map(|record| record.message_key)
+            .collect();
         keys.sort_unstable();
         keys
     }
@@ -1076,13 +1071,9 @@ mod tests {
             Some(Slot::from(1)),
             "the cursor must be durable, not just in memory"
         );
-        assert_eq!(
-            recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0)
-            ])
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&dbio), expected);
     }
 
     #[tokio::test]
@@ -1297,13 +1288,15 @@ mod tests {
         )
         .await;
 
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ]),
+            expected,
             "only the unread block is recorded on the second pass"
         );
         assert_eq!(
@@ -1437,13 +1430,15 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 2, 0),
+            message_key(&PEER_ZONE, 3, 0),
+        ];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0),
-                message_key(&PEER_ZONE, 3, 0)
-            ]),
+            expected,
             "the key the peer aimed to burn is never recorded, and nothing else is held up"
         );
         assert_eq!(tip, Some(tip_at(3)));
@@ -1476,12 +1471,11 @@ mod tests {
             PassOutcome::Drained,
             "a peer equivocating about its own chain is not this node's failure"
         );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0)
-            ]),
+            expected,
             "one delivery per id, whatever the peer publishes under it"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1510,12 +1504,11 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
         assert_eq!(
             recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0)
-            ]),
+            expected,
             "the fork is passed over and the peer's own chain continues"
         );
         assert_eq!(tip, Some(tip_at(2)));
@@ -1572,13 +1565,9 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        assert_eq!(
-            recorded_keys(&dbio),
-            sorted(vec![
-                message_key(&PEER_ZONE, 1, 0),
-                message_key(&PEER_ZONE, 2, 0)
-            ])
-        );
+        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        expected.sort_unstable();
+        assert_eq!(recorded_keys(&dbio), expected);
         assert_eq!(tip, Some(tip_at(2)));
     }
 
