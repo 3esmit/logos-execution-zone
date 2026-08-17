@@ -390,7 +390,7 @@ impl ExecutionState {
                             pre_is_authorized,
                         )
                     {
-                        // authorize_public_first_sight is only true for PDAs
+                        // authorize_first_sight_without_pda_witness is only true for PDAs
                         // which will be recorded in output journal.
                         //
                         // Since we are in a privacy circuit, the verifier cannot
