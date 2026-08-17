@@ -1461,7 +1461,7 @@ mod tests {
 
         let validation_error = anyhow::anyhow!("simulated note validation failure");
         let error = checkpoint
-            .finish_sync_attempt(Err(validation_error.into()), || {
+            .finish_sync_attempt(Err(validation_error), || {
                 storage.save_to_path(&storage_path)
             })
             .unwrap_err();

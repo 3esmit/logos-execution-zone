@@ -313,6 +313,10 @@ fn development_fixture_public_accounts() -> HashMap<AccountId, Account> {
                 }),
         )
         .chain(std::iter::once(wrapped_token_config_account()))
+        .chain(std::iter::once((
+            system_accounts::sequencer_stake_config_account_id(),
+            system_accounts::sequencer_stake_config_account(),
+        )))
         .collect()
 }
 
