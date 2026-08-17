@@ -986,7 +986,7 @@ impl WalletCore {
     fn validate_then_apply_privacy_messages(
         transactions: &[LeeTransaction],
         mut apply_message: impl FnMut(&Message),
-    ) -> Result<()> {
+    ) {
         // Each private action carries its nullifier, commitment, and ciphertext together;
         // the current message representation cannot contain mismatched note vectors.
         for transaction in transactions {
@@ -996,7 +996,6 @@ impl WalletCore {
             apply_message(&transaction.message);
         }
 
-        Ok(())
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
@@ -1030,25 +1029,21 @@ impl WalletCore {
         let mut index = self.storage.key_chain().build_latest_nullifier_index();
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         let mut checkpoint = SyncPersistenceCheckpoint::default();
-        let sync_result = 'sync: loop {
+        let sync_result = loop {
             let block = match blocks.try_next().await {
                 Ok(Some(block)) => block,
                 Ok(None) => break Ok(()),
                 Err(error) => break Err(error),
             };
 
-            if let Err(error) =
-                Self::validate_then_apply_privacy_messages(&block.body.transactions, |message| {
-                    // Eagerly decrypt note updates using expected nullifiers.
-                    let handled = self
-                        .storage
-                        .key_chain_mut()
-                        .sync_updates_via_nullifiers(message, &mut index);
-                    self.sync_private_accounts_with_message(message, &mut index, &handled);
-                })
-            {
-                break 'sync Err(error);
-            }
+            Self::validate_then_apply_privacy_messages(&block.body.transactions, |message| {
+                // Eagerly decrypt note updates using expected nullifiers.
+                let handled = self
+                    .storage
+                    .key_chain_mut()
+                    .sync_updates_via_nullifiers(message, &mut index);
+                self.sync_private_accounts_with_message(message, &mut index, &handled);
+            });
 
             self.storage.set_last_synced_block(block.header.block_id);
             if checkpoint.record_block() {
@@ -1518,8 +1513,7 @@ mod tests {
 
         WalletCore::validate_then_apply_privacy_messages(&transactions, |_| {
             applied_messages = applied_messages.saturating_add(1);
-        })
-        .unwrap();
+        });
 
         assert_eq!(applied_messages, 2);
     }
