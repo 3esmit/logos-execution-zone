@@ -297,6 +297,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
 
+        // Testnet v0.2 predates the development-only `sequencer_stake` program and
+        // intentionally has no stake config account in its attested genesis state.
+        #[cfg(not(feature = "testnet"))]
         assert!(
             committee_discovery::config_is_readable(&state),
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
