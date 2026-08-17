@@ -444,6 +444,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(feature = "testnet"))]
     const LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID: [u32; 8] = [
         935_822_905,
         2_171_623_149,
@@ -454,6 +455,7 @@ mod tests {
         486_932_678,
         2_054_999_670,
     ];
+    #[cfg(not(feature = "testnet"))]
     const LEGACY_DEVELOPMENT_PINATA_ACCOUNT_ID: &str =
         "EfQhKQAkX2FJiwNii2WFQsGndjvF1Mzd7RuVe7QdPLw7";
     const VSK_D_PRIV_ACC_A: [u8; 32] = [
@@ -498,6 +500,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "testnet"))]
     #[test]
     fn development_fixture_profile_contains_development_pinata_state() {
         let state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
