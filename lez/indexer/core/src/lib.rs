@@ -15,7 +15,7 @@ use retry::ApplyRetryGate;
 
 use crate::{
     block_store::IndexerStore,
-    config::{IndexerConfig, InitialStateProfile},
+    config::IndexerConfig,
     cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError},
     status::{IndexerStatus, IndexerSyncStatus},
 };
@@ -487,7 +487,7 @@ mod tests {
     use logos_blockchain_zone_sdk::Slot;
 
     use super::*;
-    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
+    use crate::config::{ChannelId, ClientConfig, IndexerConfig, InitialStateProfile};
 
     /// The cursor must not move while more of the same slot may still arrive.
     ///
