@@ -324,7 +324,7 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProgramIds> for Execut
         GetProgramIds: GetProgramIds,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer.with_state(lee::state::V03State::program_ids)
+        self.sequencer.with_state(lee::V03State::program_ids)
     }
 }
 
