@@ -15,7 +15,7 @@ use retry::ApplyRetryGate;
 
 use crate::{
     block_store::IndexerStore,
-    config::IndexerConfig,
+    config::{IndexerConfig, InitialStateProfile},
     cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError},
     status::{IndexerStatus, IndexerSyncStatus},
 };
@@ -545,6 +545,7 @@ mod tests {
             allow_chain_reset: false,
             cross_zone: None,
             bridge_lock_holdings: Vec::new(),
+            initial_state_profile: InitialStateProfile::default(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }
