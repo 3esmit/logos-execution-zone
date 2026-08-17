@@ -311,62 +311,6 @@ pub fn bedrock_channel_id_b() -> ChannelId {
     ChannelId::from(channel_id)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fixture_service_configs_persist_development_fixture_profile() -> Result<()> {
-        let bedrock_addr = SocketAddr::from(([127, 0, 0, 1], 18_080));
-        let sequencer_config = sequencer_config(
-            SequencerPartialConfig::default(),
-            PathBuf::from("fixture-profile-test"),
-            bedrock_addr,
-            bedrock_channel_id(),
-            bedrock_funding_key(),
-            Vec::new(),
-            None,
-            None,
-            None,
-        )?;
-        let indexer_config = indexer_config(bedrock_addr, bedrock_channel_id(), None)?;
-
-        assert_eq!(
-            serde_json::to_value(&sequencer_config)?["initial_state_profile"],
-            "development_fixture",
-        );
-        assert_eq!(
-            serde_json::to_value(&indexer_config)?["initial_state_profile"],
-            "development_fixture",
-        );
-
-        let mut legacy_sequencer_json = serde_json::to_value(&sequencer_config)?;
-        let Some(legacy_sequencer_object) = legacy_sequencer_json.as_object_mut() else {
-            anyhow::bail!("sequencer config must serialize as an object");
-        };
-        legacy_sequencer_object.remove("initial_state_profile");
-        let legacy_sequencer_config: SequencerConfig =
-            serde_json::from_value(legacy_sequencer_json)?;
-        assert_eq!(
-            legacy_sequencer_config.initial_state_profile,
-            InitialStateProfile::Default,
-        );
-
-        let mut legacy_indexer_json = serde_json::to_value(&indexer_config)?;
-        let Some(legacy_indexer_object) = legacy_indexer_json.as_object_mut() else {
-            anyhow::bail!("indexer config must serialize as an object");
-        };
-        legacy_indexer_object.remove("initial_state_profile");
-        let legacy_indexer_config: IndexerConfig = serde_json::from_value(legacy_indexer_json)?;
-        assert_eq!(
-            legacy_indexer_config.initial_state_profile,
-            InitialStateProfile::Default,
-        );
-
-        Ok(())
-    }
-}
-
 /// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
 #[must_use]
 pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
@@ -430,4 +374,60 @@ pub fn bedrock_funding_key() -> ZkPublicKey {
 
     let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
     ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_service_configs_persist_development_fixture_profile() -> Result<()> {
+        let bedrock_addr = SocketAddr::from(([127, 0, 0, 1], 18_080));
+        let sequencer_config = sequencer_config(
+            SequencerPartialConfig::default(),
+            PathBuf::from("fixture-profile-test"),
+            bedrock_addr,
+            bedrock_channel_id(),
+            bedrock_funding_key(),
+            Vec::new(),
+            None,
+            None,
+            None,
+        )?;
+        let indexer_config = indexer_config(bedrock_addr, bedrock_channel_id(), None)?;
+
+        assert_eq!(
+            serde_json::to_value(&sequencer_config)?["initial_state_profile"],
+            "development_fixture",
+        );
+        assert_eq!(
+            serde_json::to_value(&indexer_config)?["initial_state_profile"],
+            "development_fixture",
+        );
+
+        let mut legacy_sequencer_json = serde_json::to_value(&sequencer_config)?;
+        let Some(legacy_sequencer_object) = legacy_sequencer_json.as_object_mut() else {
+            anyhow::bail!("sequencer config must serialize as an object");
+        };
+        legacy_sequencer_object.remove("initial_state_profile");
+        let legacy_sequencer_config: SequencerConfig =
+            serde_json::from_value(legacy_sequencer_json)?;
+        assert_eq!(
+            legacy_sequencer_config.initial_state_profile,
+            InitialStateProfile::Default,
+        );
+
+        let mut legacy_indexer_json = serde_json::to_value(&indexer_config)?;
+        let Some(legacy_indexer_object) = legacy_indexer_json.as_object_mut() else {
+            anyhow::bail!("indexer config must serialize as an object");
+        };
+        legacy_indexer_object.remove("initial_state_profile");
+        let legacy_indexer_config: IndexerConfig = serde_json::from_value(legacy_indexer_json)?;
+        assert_eq!(
+            legacy_indexer_config.initial_state_profile,
+            InitialStateProfile::Default,
+        );
+
+        Ok(())
+    }
 }
