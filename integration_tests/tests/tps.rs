@@ -113,8 +113,7 @@ impl TpsTestManager {
                     .get_transaction(*tx_hash)
                     .await
                     .ok()
-                    .map(|response| response.0)
-                    .flatten()
+                    .and_then(|response| response.0)
                     .is_some();
                 if found {
                     break;
