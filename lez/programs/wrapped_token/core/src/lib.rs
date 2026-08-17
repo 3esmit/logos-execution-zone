@@ -34,9 +34,10 @@ pub enum Instruction {
     /// Required accounts (3): the source marker, the wrapped-token config PDA,
     /// then the recipient's holding PDA.
     Mint { recipient: [u8; 32], amount: u128 },
-    /// Pins the minter and the peer sources it may mint for, written once into a
-    /// default config PDA at genesis. A re-run holding anything different is
-    /// refused; an identical one is a no-op, which is what genesis replay does.
+    /// Pins the minter and the peer sources it may mint for at genesis. A
+    /// minter-only placeholder seeded by the initial-state loader may be
+    /// completed with the peer sources; after that, a re-run holding anything
+    /// different is refused and an identical one is a no-op.
     ///
     /// Required accounts (1): the wrapped-token config PDA.
     InitConfig(WrappedTokenConfig),
