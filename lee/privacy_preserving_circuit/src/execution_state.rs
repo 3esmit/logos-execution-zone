@@ -492,11 +492,9 @@ impl ExecutionState {
             post_states_entry.insert_entry(post.into_account());
         }
 
-        caller
-            .authorized_accounts
-            .into_iter()
-            .chain(authorized_output_accounts)
-            .collect()
+        let mut authorized_accounts = caller.authorized_accounts;
+        authorized_accounts.extend(authorized_output_accounts);
+        authorized_accounts
     }
 
     /// Consume self and yield the validity windows, the per-position PDA seed/program map
