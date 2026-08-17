@@ -182,14 +182,14 @@ schemars = "1.2"
 async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-codec = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-core = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-chain-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-zone-sdk = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
-logos-blockchain-http-api-common = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "06fe876ff29dc4a1fd63b8e46ad0f34286b8e1f2" }
+logos-blockchain-common-http-client = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-codec = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-core = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-chain-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-zone-sdk = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
+logos-blockchain-http-api-common = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "ad69d053e6a2dee8e5bfea80e932a32f136f37ab" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
