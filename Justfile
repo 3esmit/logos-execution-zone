@@ -15,20 +15,28 @@ RISC0_DOCKER_CONTAINER_TAG := "r0.1.94.1"
 # Linux/CI, which is unaffected.
 DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
 
-# Build risc0 program artifacts.
+# Build risc0 program artifacts and test fixture.
 build-artifacts:
     @echo "🔨 Building artifacts"
     @rm -rf {{ARTIFACTS}}
     @RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} just build-artifact lee/privacy_preserving_circuit
     @RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} just build-artifact lez/programs programs
 
+    @if [ "${GITHUB_ACTIONS:-}" = "true" ]; then \
+        echo "Skipping test fixture regeneration because CI doesn't need it"; \
+    else \
+        just regenerate-test-fixture; \
+    fi
+
+RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
+
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
     @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
     @if [ "{{features}}" = "" ]; then \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
     else \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
     @mkdir -p {{ARTIFACTS}}/{{methods_path}}
     @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}
@@ -46,8 +54,15 @@ test:
 
 # Regenerate the prebuilt sequencer db dump for fast TestContext::new() (needs Docker; commit the dump).
 regenerate-test-fixture:
-    @echo "🧪 Regenerating test fixtures"
+    @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
+
+# Regenerate the committed Grafana dashboards from the Rust generator
+# (tools/dashboard_gen) and commit the result. CI checks these are up to date.
+regenerate-dashboards:
+    @echo "📊 Regenerating Grafana dashboards"
+    @cargo build -q -p dashboard_gen
+    @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
@@ -61,17 +76,24 @@ run-bedrock:
     @echo "⛓️ Running bedrock"
     docker compose up
 
-# Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
+# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
+# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+[working-directory: 'monitoring']
+run-monitoring:
+    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
+    docker compose up
+
+# Run Sequencer. Extra args are forwarded to the binary. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/sequencer/service']
-run-sequencer standalone="":
+run-sequencer *args:
     @echo "🧠 Running sequencer"
-    @if [ "{{standalone}}" = "standalone" ]; then \
-        echo "🧪 Running in standalone mode"; \
-        RUST_LOG=info cargo run --features standalone --release -p sequencer_service configs/debug/sequencer_config.json; \
-    else \
-        echo "🚀 Running in normal mode"; \
-        RUST_LOG=info cargo run --release -p sequencer_service configs/debug/sequencer_config.json; \
-    fi
+    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+
+# Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
+[working-directory: 'lez/sequencer/service']
+run-sequencer-standalone *args:
+    @echo "🧪 Running sequencer in standalone mode"
+    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
@@ -96,6 +118,11 @@ run-explorer:
 run-wallet +args:
     @echo "🔑 Running wallet"
     LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
+
+# Query sequencer metrics in raw format. Useful for quick debugging. For a more detailed view, use `just run-monitoring`.
+get-sequencer-metrics:
+    @echo "📊 Querying sequencer's metrics"
+    curl http://localhost:9000/metrics
 
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
@@ -132,9 +159,10 @@ cross-zone-chat:
 clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf lez/sequencer/service/bedrock_signing_key
-    rm -rf lez/sequencer/service/rocksdb
+    rm -rf lez/sequencer/service/rocksdb*
     rm -rf lez/indexer/service/rocksdb*
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
-    cd bedrock && docker compose down -v
+    cd bedrock && docker compose down -v && cd ..
+    cd monitoring && docker compose down -v && cd ..

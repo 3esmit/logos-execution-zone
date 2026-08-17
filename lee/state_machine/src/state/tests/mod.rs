@@ -7,8 +7,9 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, Timestamp,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity,
+    Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -48,6 +49,7 @@ impl V03State {
         self.insert_program(crate::test_methods::nonce_changer());
         self.insert_program(crate::test_methods::extra_output());
         self.insert_program(crate::test_methods::missing_output());
+        self.insert_program(crate::test_methods::dropped_account());
         self.insert_program(crate::test_methods::program_owner_changer());
         self.insert_program(crate::test_methods::data_changer());
         self.insert_program(crate::test_methods::minter());
@@ -136,14 +138,18 @@ impl TestPublicKeys {
 }
 
 pub struct TestPrivateKeys {
-    pub nsk: NullifierSecretKey,
+    pub ask: AuthorizationSecretKey,
     pub d: [u8; 32],
     pub z: [u8; 32],
 }
 
 impl TestPrivateKeys {
+    pub fn nsk(&self) -> NullifierSecretKey {
+        (&self.ask).into()
+    }
+
     pub fn npk(&self) -> NullifierPublicKey {
-        NullifierPublicKey::from(&self.nsk)
+        NullifierPublicKey::from(&self.nsk())
     }
 
     pub fn vpk(&self) -> ViewingPublicKey {
@@ -239,7 +245,7 @@ fn test_public_account_keys_2() -> TestPublicKeys {
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [13; 32],
+        ask: AuthorizationSecretKey([13; 32]),
         d: [31; 32],
         z: [32; 32],
     }
@@ -247,7 +253,7 @@ pub fn test_private_account_keys_1() -> TestPrivateKeys {
 
 pub fn test_private_account_keys_2() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [38; 32],
+        ask: AuthorizationSecretKey([38; 32]),
         d: [83; 32],
         z: [84; 32],
     }
@@ -269,7 +275,7 @@ fn shielded_balance_transfer_for_tests(
 
     let recipient = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -278,24 +284,24 @@ fn shielded_balance_transfer_for_tests(
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &crate::test_methods::simple_balance_transfer().into(),
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(
-        vec![sender_keys.account_id()],
-        vec![sender_nonce],
-        output,
-    )
-    .unwrap();
+    let message = Message::from_circuit_output(vec![sender_nonce], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
     PrivacyPreservingTransaction::new(message, witness_set)
@@ -319,7 +325,7 @@ fn private_balance_transfer_for_tests(
     );
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -327,28 +333,39 @@ fn private_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateUnauthorized {
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk(),
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
 
@@ -381,23 +398,28 @@ fn deshielded_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk(),
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program.into(),
     )
     .unwrap();
 
-    let message =
-        Message::try_from_circuit_output(vec![*recipient_account_id], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
 

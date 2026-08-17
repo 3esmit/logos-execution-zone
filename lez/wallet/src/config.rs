@@ -11,6 +11,7 @@ use url::Url;
 // Keep the default small enough for interactive module hosts; callers that need
 // a deeper sample can still set `calibration_limit` explicitly.
 const DEFAULT_CALLIBRATION_LIMIT: usize = 3;
+const DEFAULT_DISTRIBUTION_LIMIT: usize = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConnectionData {
@@ -39,6 +40,24 @@ pub struct GasConfig {
     pub gas_limit_runtime: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiSequencerClientConfig {
+    /// Maximum numbers of sequencers to send requests. Client can have AT MOST
+    /// `distribution_limit` active clients.
+    pub distribution_limit: usize,
+    /// Limit number of sequencer polls during callibration, should not be zero.
+    pub calibration_limit: usize,
+}
+
+impl Default for MultiSequencerClientConfig {
+    fn default() -> Self {
+        Self {
+            distribution_limit: DEFAULT_DISTRIBUTION_LIMIT,
+            calibration_limit: DEFAULT_CALLIBRATION_LIMIT,
+        }
+    }
+}
+
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize)]
 pub struct WalletConfig {
@@ -53,9 +72,8 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Limit number of sequencer polls during calibration, should not be zero
-    #[serde(default = "default_calibration_limit")]
-    pub calibration_limit: usize,
+    #[serde(default = "MultiSequencerClientConfig::default")]
+    pub multi_sequencer_client_config: MultiSequencerClientConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,7 +149,10 @@ impl TryFrom<WalletConfigFile> for WalletConfig {
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            calibration_limit,
+            multi_sequencer_client_config: MultiSequencerClientConfig {
+                distribution_limit: DEFAULT_DISTRIBUTION_LIMIT,
+                calibration_limit,
+            },
         })
     }
 }
@@ -140,14 +161,14 @@ impl Default for WalletConfig {
     fn default() -> Self {
         Self {
             sequencers: vec![SequencerConnectionData {
-                sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
+                sequencer_addr: "https://testnet.lez.logos.co".parse().unwrap(),
                 basic_auth: None,
             }],
             seq_poll_timeout: Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
-            calibration_limit: DEFAULT_CALLIBRATION_LIMIT,
+            multi_sequencer_client_config: MultiSequencerClientConfig::default(),
         }
     }
 }
@@ -197,7 +218,7 @@ impl WalletConfig {
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            calibration_limit,
+            multi_sequencer_client_config,
         } = self;
 
         let WalletConfigOverrides {
@@ -206,7 +227,7 @@ impl WalletConfig {
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            calibration_limit: o_calibration_limit,
+            multi_sequencer_client_config: o_multi_sequencer_client_config,
         } = overrides;
 
         if let Some(v) = o_sequencers {
@@ -229,13 +250,12 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
-        if let Some(v) = o_calibration_limit {
-            warn!("Overriding wallet config 'calibration_limit' to {v}");
-            *calibration_limit = v;
+        if let Some(v) = o_multi_sequencer_client_config {
+            warn!("Overriding wallet config 'multi_sequencer_client_config' to {v:?}");
+            *multi_sequencer_client_config = v;
         }
     }
 }
-
 const fn default_calibration_limit() -> usize {
     DEFAULT_CALLIBRATION_LIMIT
 }
@@ -282,7 +302,10 @@ mod tests {
         assert_eq!(config.seq_tx_poll_max_blocks, 11);
         assert_eq!(config.seq_poll_max_retries, 13);
         assert_eq!(config.seq_block_poll_max_amount, 17);
-        assert_eq!(config.calibration_limit, DEFAULT_CALLIBRATION_LIMIT);
+        assert_eq!(
+            config.multi_sequencer_client_config.calibration_limit,
+            DEFAULT_CALLIBRATION_LIMIT
+        );
     }
 
     #[test]
@@ -293,7 +316,7 @@ mod tests {
         let config: WalletConfig =
             serde_json::from_value(value).expect("configuration should load");
 
-        assert_eq!(config.calibration_limit, 3);
+        assert_eq!(config.multi_sequencer_client_config.calibration_limit, 3);
     }
 
     #[test]
@@ -326,7 +349,7 @@ mod tests {
             .expect("basic authentication should be preserved");
         assert_eq!(auth.username, "operator");
         assert_eq!(auth.password.as_deref(), Some("test-only"));
-        assert_eq!(config.calibration_limit, 19);
+        assert_eq!(config.multi_sequencer_client_config.calibration_limit, 19);
     }
 
     #[test]
@@ -350,7 +373,7 @@ mod tests {
             config.sequencers[1].sequencer_addr.as_str(),
             "https://second.example.test/"
         );
-        assert_eq!(config.calibration_limit, 23);
+        assert_eq!(config.multi_sequencer_client_config.calibration_limit, 23);
 
         let serialized =
             serde_json::to_value(config).expect("migrated configuration should serialize");
@@ -358,7 +381,10 @@ mod tests {
         assert!(serialized.get("sequencer_addr").is_none());
         assert!(serialized.get("callibration_limit").is_none());
         assert!(serialized.get("sequencers").is_some());
-        assert_eq!(serialized["calibration_limit"], 23);
+        assert_eq!(
+            serialized["multi_sequencer_client_config"]["calibration_limit"],
+            23
+        );
     }
 
     #[test]

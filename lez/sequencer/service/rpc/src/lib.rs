@@ -9,9 +9,10 @@ pub use jsonrpsee::{
     http_client::HttpClientBuilder as SequencerClientBuilder,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LeeTransaction, LocalPublicBlockHistoryPageV1, LocalPublicBlockHistoryRequestV1,
-    LocalPublicTransactionReceiptV1, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetterReport, HashType, LeeTransaction, LocalPublicBlockHistoryPageV1,
+    LocalPublicBlockHistoryRequestV1, LocalPublicTransactionReceiptV1, MembershipProof, Nonce,
+    ProgramId,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
@@ -214,7 +215,14 @@ pub trait Rpc {
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
 
-    // =============================================================================================
+    /// The cross-zone deliveries this sequencer has given up on.
+    ///
+    /// Its own method rather than folded into `checkHealth`: one undeliverable
+    /// peer message must not read as an unhealthy node.
+    #[method(name = "getCrossZoneDeadLetters")]
+    async fn get_cross_zone_dead_letters(
+        &self,
+    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned>;
 }
 
 #[cfg(test)]

@@ -13,13 +13,23 @@ pub struct BlockMeta {
     pub hash: BlockHash,
 }
 
+impl From<&Block> for BlockMeta {
+    fn from(block: &Block) -> Self {
+        Self {
+            id: block.header.block_id,
+            hash: block.header.hash,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Our own hasher.
 /// Currently it is SHA256 hasher wrapper. May change in a future.
 pub struct OwnHasher;
 
 impl OwnHasher {
-    fn hash(data: &[u8]) -> HashType {
+    #[must_use]
+    pub fn hash(data: &[u8]) -> HashType {
         let mut hasher = Sha256::new();
 
         hasher.update(data);

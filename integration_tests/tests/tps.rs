@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TestContext, config::SequencerPartialConfig};
+use integration_tests::config::SequencerPartialConfig;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
@@ -22,13 +22,16 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
-use log::info;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -110,7 +113,8 @@ impl TpsTestManager {
                     .get_transaction(*tx_hash)
                     .await
                     .ok()
-                    .and_then(|response| response.0)
+                    .map(|response| response.0)
+                    .flatten()
                     .is_some();
                 if found {
                     break;
@@ -177,9 +181,13 @@ pub async fn tps_test() -> Result<()> {
     let target_tps = 8;
 
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
-    let ctx = TestContext::builder()
-        .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
-        .with_genesis(tps_test.generate_genesis())
+
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
+                .with_genesis(tps_test.generate_genesis()),
+        )
         .build()
         .await?;
 
@@ -190,7 +198,7 @@ pub async fn tps_test() -> Result<()> {
         .context("Failed to claim vault funds for TPS accounts")?;
 
     let target_time = tps_test.target_time();
-    info!(
+    log::info!(
         "TPS test begin. Target time is {target_time:?} for {num_transactions} transactions ({target_tps} TPS)"
     );
 
@@ -204,7 +212,7 @@ pub async fn tps_test() -> Result<()> {
             .send_transaction(LeeTransaction::Public(tx))
             .await
             .unwrap();
-        info!("Sent tx {i}");
+        log::info!("Sent tx {i}");
         tx_hashes.push(tx_hash);
     }
 
@@ -224,7 +232,7 @@ pub async fn tps_test() -> Result<()> {
                 });
 
             if tx_obj.is_ok_and(|response| response.0.is_some()) {
-                info!("Found tx {i} with hash {tx_hash}");
+                log::info!("Found tx {i} with hash {tx_hash}");
                 break;
             }
         }
@@ -233,7 +241,7 @@ pub async fn tps_test() -> Result<()> {
 
     let tx_processed = tx_hashes.len();
     let actual_tps = tx_processed as u64 / time_elapsed;
-    info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)",);
+    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)",);
 
     assert_eq!(tx_processed, num_transactions);
 
@@ -242,7 +250,7 @@ pub async fn tps_test() -> Result<()> {
         "Elapsed time {time_elapsed:?} exceeded target time {target_time:?}"
     );
 
-    info!("TPS test finished successfully");
+    log::info!("TPS test finished successfully");
 
     Ok(())
 }
@@ -254,7 +262,8 @@ pub async fn tps_test() -> Result<()> {
 #[expect(dead_code, reason = "No idea if we need this, should we remove it?")]
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let program = programs::authenticated_transfer();
-    let sender_nsk = [1; 32];
+    let sender_ask = AuthorizationSecretKey([1; 32]);
+    let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
     let sender_pre = AccountWithMetadata::new(
@@ -267,12 +276,13 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         true,
         AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
     );
-    let recipient_nsk = [2; 32];
+    let recipient_ask = AuthorizationSecretKey([2; 32]);
+    let recipient_nsk = NullifierSecretKey::from(&recipient_ask);
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
     );
 
@@ -291,25 +301,36 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         })
         .unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
-                nsk: sender_nsk,
-                membership_proof: proof,
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateUnauthorized {
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_nsk,
+                    membership_proof: proof,
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
-                npk: recipient_npk,
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_ask),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )
     .unwrap();
-    let message = pptx::message::Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = pptx::message::Message::from_circuit_output(vec![], output);
     let witness_set = pptx::witness_set::WitnessSet::for_message(&message, proof, &[]);
     pptx::PrivacyPreservingTransaction::new(message, witness_set)
 }

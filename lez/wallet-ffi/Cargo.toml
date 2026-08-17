@@ -15,6 +15,7 @@ wallet.workspace = true
 sequencer_service_protocol.workspace = true
 lee.workspace = true
 lee_core.workspace = true
+common.workspace = true
 programs.workspace = true
 
 tokio.workspace = true

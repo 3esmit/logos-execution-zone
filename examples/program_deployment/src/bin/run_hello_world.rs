@@ -59,7 +59,7 @@ async fn main() {
 
     // Submit the transaction
     let _response = wallet_core
-        .leader_owned()
+        .helm_owned()
         .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();

@@ -20,12 +20,14 @@ use crate::{
         config::ConfigSubcommand,
         group::GroupSubcommand,
         keycard::KeycardSubcommand,
+        network::NetworkAlias,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand, bridge::BridgeSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
             token::TokenProgramAgnosticSubcommand, vault::VaultSubcommand,
         },
     },
+    config::SequencerConnectionData,
     storage::Storage,
 };
 
@@ -34,6 +36,7 @@ pub mod chain;
 pub mod config;
 pub mod group;
 pub mod keycard;
+pub mod network;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
@@ -81,6 +84,11 @@ pub enum Command {
     /// Command to setup config, get and set config fields.
     #[command(subcommand)]
     Config(ConfigSubcommand),
+    /// Change the network the wallet points to.
+    ChangeNetwork {
+        /// `testnet`, `local`, or a custom sequencer URL.
+        network: NetworkAlias,
+    },
     /// Restoring keys from given password at given `depth`.
     ///
     /// !!!WARNING!!! will rewrite current storage.
@@ -170,14 +178,22 @@ impl CliAccountMention {
         }
     }
 
+    /// Convert to an [`crate::AccountIdentity`] for use in a public transaction.
+    ///
+    /// The `sign` flag indicates whether to sign or not with the account keys.
     #[must_use]
-    pub fn into_public_identity(self, account_id: lee::AccountId) -> crate::AccountIdentity {
+    pub fn into_public_identity(
+        self,
+        account_id: lee::AccountId,
+        sign: bool,
+    ) -> crate::AccountIdentity {
         match self {
             Self::KeyPath(key_path) => crate::AccountIdentity::PublicKeycard {
                 account_id,
                 key_path,
             },
-            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) if sign => crate::AccountIdentity::Public(account_id),
+            Self::Id(_) | Self::Label(_) => crate::AccountIdentity::PublicNoSign(account_id),
         }
     }
 }
@@ -268,6 +284,20 @@ pub async fn execute_subcommand_with_options(
         }
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
+        }
+        Command::ChangeNetwork { network } => {
+            let sequencer_addr: url::Url = network.try_into().context("Invalid sequencer URL")?;
+
+            let mut config = wallet_core.config().clone();
+            config.sequencers = vec![SequencerConnectionData {
+                sequencer_addr,
+                basic_auth: None,
+            }];
+
+            wallet_core.set_config(config);
+            wallet_core.store_config_changes().await?;
+
+            SubcommandReturnValue::Empty
         }
         Command::RestoreKeys { depth } => {
             let mnemonic = read_mnemonic_from_stdin()?;
@@ -405,7 +435,7 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
 
     wallet_core.sync_to_latest_block().await?;
 
-    let leader_client = wallet_core.leader_owned();
+    let leader_client = wallet_core.helm_owned();
 
     wallet_core
         .storage

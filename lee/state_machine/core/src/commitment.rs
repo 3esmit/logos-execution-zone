@@ -2,7 +2,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::account::{Account, AccountId};
+use crate::{
+    Nullifier,
+    account::{Account, AccountId},
+};
 
 /// A commitment to all zero data.
 /// ```python
@@ -29,10 +32,10 @@ pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
     129, 241, 118, 39, 41, 253, 141, 171, 184, 71, 8, 41,
 ];
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Copy, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
-    derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
+    derive(Default, PartialEq, Eq, Hash, PartialOrd, Ord)
 )]
 pub struct Commitment(pub(super) [u8; 32]);
 
@@ -78,6 +81,15 @@ impl Commitment {
         bytes.extend_from_slice(&account_bytes_with_hashed_data);
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
+
+    #[must_use]
+    pub fn for_dummy(nullifier: &Nullifier, commitment_seed: &[u8; 32]) -> Self {
+        const DUMMY_PREFIX: &[u8; 32] = b"/LEE/v0.3/Commitment/Dummy/\x00\x00\x00\x00\x00";
+        let mut bytes = DUMMY_PREFIX.to_vec();
+        bytes.extend_from_slice(&nullifier.0);
+        bytes.extend_from_slice(commitment_seed);
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
 }
 
 pub type CommitmentSetDigest = [u8; 32];
@@ -117,7 +129,7 @@ mod tests {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
-        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,
+        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, Nullifier,
         account::{Account, AccountId},
     };
 
@@ -137,5 +149,19 @@ mod tests {
                 .try_into()
                 .unwrap();
         assert_eq!(DUMMY_COMMITMENT_HASH, expected_dummy_commitment_hash);
+    }
+
+    #[test]
+    fn for_dummy_matches_pinned_value() {
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let commitment_seed = [1; 32];
+        let expected_commitment = Commitment([
+            106, 88, 233, 248, 28, 251, 254, 48, 62, 53, 61, 248, 25, 148, 223, 133, 108, 213, 184,
+            83, 73, 145, 122, 104, 89, 220, 111, 132, 40, 87, 12, 105,
+        ]);
+        assert_eq!(
+            Commitment::for_dummy(&nullifier, &commitment_seed),
+            expected_commitment
+        );
     }
 }

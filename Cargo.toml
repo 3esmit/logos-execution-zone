@@ -16,10 +16,15 @@ members = [
 
   "lez",
   "lez/system_accounts",
+  "lez/chain_state",
   "lez/sequencer/core",
+  "lez/sequencer/core/metrics",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
+  "lez/sequencer/actors/executor",
+  "lez/sequencer/actors/rpc_server",
+  "lez/sequencer/actors/rpc_server/metrics",
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -49,6 +54,7 @@ members = [
   "lez/programs/wrapped_token",
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
+  "lez/programs/sequencer_stake",
   "lez/cross_zone",
 
   "test_programs",
@@ -66,18 +72,24 @@ members = [
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
   "tools/cross_zone_chat",
+  "tools/dashboard_gen",
 ]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
+chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
+sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
+sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
+sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
+sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
 sequencer_service = { path = "lez/sequencer/service" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
@@ -107,6 +119,7 @@ cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
+sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_programs = { path = "test_programs" }
@@ -123,6 +136,8 @@ tokio = { version = "1.50", features = [
 tokio-util = "0.7.18"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
+kameo = "0.22.2"
+kameo_actors = "0.8.1"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
 num_cpus = "1.13.1"
@@ -130,6 +145,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }
 serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
+serde_yaml = "0.9.34"
 serde_with = "3.16.1"
 actix = "0.13.0"
 actix-cors = "0.7.1"
@@ -139,15 +155,28 @@ actix-rt = "*"
 lazy_static = "1.5.0"
 env_logger = "0.11"
 log = "0.4.28"
+metrics = "0.24.6"
+metrics-exporter-prometheus = "0.18.3"
 lru = "0.16.3"
 thiserror = "2.0"
 sha2 = "0.10.8"
+ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"
 bytemuck = "1.24.0"
 bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
+libp2p = { version = "0.56", features = [
+  "ed25519",
+  "gossipsub",
+  "identify",
+  "kad",
+  "macros",
+  "mdns",
+  "quic",
+  "tokio",
+] }
 aes-gcm = "0.10.3"
 toml = "0.9.8"
 bincode = "1.3.3"
@@ -160,6 +189,7 @@ base64 = "0.22.1"
 bip39 = "2.2.0"
 hmac-sha512 = "1.1.7"
 chrono = "0.4.41"
+time = "0.3"
 borsh = "1.5.7"
 zstd = "0.13"
 base58 = "0.2.0"
@@ -169,20 +199,25 @@ url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
+strum = { version = "0.28.0", features = ["derive"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",
   "arithmetic",
@@ -199,7 +234,6 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 
@@ -328,6 +362,8 @@ clippy.let-underscore-untyped = "allow"
 # Reason: this lint is actually bad as it forces to use wildcard `..` instead of
 # field-by-field `_` which may lead to subtle bugs when new fields are added to the struct.
 clippy.unneeded-field-pattern = "allow"
+# Reason: this lint makes no sense for us.
+clippy.error_impl_error = "allow"
 
 # Nursery
 clippy.nursery = { level = "deny", priority = -1 }

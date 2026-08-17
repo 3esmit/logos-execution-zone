@@ -17,8 +17,6 @@ wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
 serde_json.workspace = true
-token_core.workspace = true
-associated_token_account_core.workspace = true
 vault_core.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
@@ -34,21 +32,18 @@ wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 indexer_service_protocol.workspace = true
 system_accounts.workspace = true
+sequencer_stake_core.workspace = true
 programs.workspace = true
 test_programs.workspace = true
+testnet_initial_state.workspace = true
 
-logos-blockchain-http-api-common.workspace = true
 logos-blockchain-core.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 anyhow.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-futures.workspace = true
+jsonrpsee = { workspace = true, features = ["server"] }
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
-reqwest.workspace = true
-borsh.workspace = true
-num-bigint.workspace = true
-jsonrpsee = { workspace = true, features = ["server"] }

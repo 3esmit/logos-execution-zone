@@ -16,6 +16,7 @@ lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 sequencer_core.workspace = true
 sequencer_service.workspace = true
+sequencer_stake_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 testnet_initial_state.workspace = true
 wallet.workspace = true
@@ -26,8 +27,10 @@ bip39.workspace = true
 bytesize.workspace = true
 env_logger.workspace = true
 futures.workspace = true
+hex.workspace = true
 jsonrpsee = { workspace = true, features = ["ws-client"] }
 log.workspace = true
+num-bigint.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
@@ -35,3 +38,6 @@ testcontainers = { version = "0.27.3", features = ["docker-compose"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tokio-util.workspace = true
 url.workspace = true
+time.workspace = true
+
+logos-blockchain-key-management-system-service.workspace = true
