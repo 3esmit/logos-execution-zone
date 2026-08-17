@@ -180,12 +180,18 @@ mod tests {
             produce_dummy_empty_transaction, sequencer_sign_key_for_testing,
         },
     };
-    use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
+    use testnet_initial_state::{
+        InitialStateProfile, initial_pub_accounts_private_keys, initial_state_for_profile,
+    };
 
     use super::*;
 
     fn tip_of(block: &Block) -> Tip {
         Tip::from(block)
+    }
+
+    fn initial_state() -> lee::V03State {
+        initial_state_for_profile(InitialStateProfile::Default)
     }
 
     #[test]

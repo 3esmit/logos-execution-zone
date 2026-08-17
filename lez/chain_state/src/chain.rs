@@ -323,7 +323,9 @@ mod tests {
         HashType,
         test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
     };
-    use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
+    use testnet_initial_state::{
+        InitialStateProfile, initial_pub_accounts_private_keys, initial_state_for_profile,
+    };
 
     use super::*;
 
@@ -333,6 +335,10 @@ mod tests {
 
     fn slot(n: u64) -> Slot {
         Slot::from(n)
+    }
+
+    fn initial_state() -> V03State {
+        initial_state_for_profile(InitialStateProfile::Default)
     }
 
     /// `head_state` equals `final_state` replayed through `head_blocks`.
