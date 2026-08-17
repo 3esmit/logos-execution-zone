@@ -995,7 +995,6 @@ impl WalletCore {
             };
             apply_message(&transaction.message);
         }
-
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
