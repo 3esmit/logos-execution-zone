@@ -319,12 +319,13 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccount> for ExecutorA
 impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProgramIds> for ExecutorActor<BP> {
     type Reply = Vec<lee_core::program::ProgramId>;
 
+    #[allow(clippy::redundant_closure_for_method_calls)]
     async fn handle(
         &mut self,
         GetProgramIds: GetProgramIds,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer.with_state(lee::state::V03State::program_ids)
+        self.sequencer.with_state(|state| state.program_ids())
     }
 }
 
