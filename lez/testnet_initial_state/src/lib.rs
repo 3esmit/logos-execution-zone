@@ -444,20 +444,6 @@ mod tests {
 
     use super::*;
 
-    #[cfg(not(feature = "testnet"))]
-    const LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID: [u32; 8] = [
-        935_822_905,
-        2_171_623_149,
-        744_937_015,
-        1_506_430_310,
-        1_901_389_662,
-        3_451_554_932,
-        486_932_678,
-        2_054_999_670,
-    ];
-    #[cfg(not(feature = "testnet"))]
-    const LEGACY_DEVELOPMENT_PINATA_ACCOUNT_ID: &str =
-        "EfQhKQAkX2FJiwNii2WFQsGndjvF1Mzd7RuVe7QdPLw7";
     const VSK_D_PRIV_ACC_A: [u8; 32] = [
         4, 118, 187, 42, 14, 254, 144, 150, 125, 176, 205, 240, 109, 81, 234, 177, 244, 236, 108,
         71, 107, 10, 107, 169, 95, 134, 75, 193, 213, 57, 81, 218,
@@ -504,20 +490,12 @@ mod tests {
     #[test]
     fn development_fixture_profile_contains_development_pinata_state() {
         let state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
-        let expected_pinata_account_id =
-            AccountId::from_str(LEGACY_DEVELOPMENT_PINATA_ACCOUNT_ID).unwrap();
-        let expected_pinata_account = Account {
-            program_owner: LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID,
-            balance: 1_500_000,
-            data: vec![3; 33]
-                .try_into()
-                .expect("Pinata account data should fit"),
-            ..Account::default()
-        };
+        let expected_pinata_account_id = system_accounts::pinata_account_id();
+        let expected_pinata_account = system_accounts::pinata_account();
 
         assert_eq!(
             programs::pinata().id(),
-            LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID,
+            expected_pinata_account.program_owner,
         );
         assert_eq!(
             system_accounts::pinata_account_id(),
@@ -526,7 +504,7 @@ mod tests {
         assert!(
             state
                 .program_ids()
-                .contains(&LEGACY_DEVELOPMENT_PINATA_PROGRAM_ID)
+                .contains(&expected_pinata_account.program_owner)
         );
         assert_eq!(
             state.get_account_by_id(expected_pinata_account_id),
