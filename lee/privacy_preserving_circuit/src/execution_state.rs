@@ -51,8 +51,8 @@ pub struct ExecutionState {
     /// `AccountId::for_private_pda(program_id, seed, npk, vpk, identifier) ==
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
-    /// The set containing regular accounts authorized at the root of the call-tree, remaining
-    /// authorized throughout all calls.
+    /// The set containing non-PDA accounts authorized at their first sight, anywhere in the
+    /// call tree, remaining authorized throughout all calls.
     globally_authorized: HashSet<AccountId>,
 }
 
@@ -642,8 +642,7 @@ fn authorize_first_sight_without_pda_witness(
         assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
         true
     } else {
-        // If an authorized account is a non-PDA one, it is a regular account and hence globally
-        // authorized.
+        // If an authorized account is a non-PDA one, it is globally authorized.
         if pre_is_authorized {
             globally_authorized.insert(pre_account_id);
         }
