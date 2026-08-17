@@ -1422,6 +1422,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Shared handle to the two-tier follow state, for tests to drive the
     /// follow path directly.
     #[cfg(all(test, feature = "mock"))]
+    #[cfg(not(feature = "testnet"))]
     fn chain(&self) -> Arc<Mutex<ChainState>> {
         Arc::clone(&self.chain)
     }
@@ -1733,6 +1734,9 @@ fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
+    #[cfg(feature = "testnet")]
+    let _ = bootstrap_sequencer_key;
+
     let mut state = build_initial_state(config);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
@@ -1741,26 +1745,33 @@ fn build_genesis_state(
         hex::encode(state.genesis_fingerprint())
     );
 
-    // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. The wrapped-token minter and
-    // both emitters' pins are initialized on every zone: all three are builtins with
-    // a user-callable InitConfig, so a config PDA left default is claimable by the
-    // first initializer, hijacking the minter or repointing an emitter's outbox. The
-    // inbox allowlist is initialized only on receiving zones; the inbox is
-    // sequencer-only, so its default config PDA is not user-claimable, merely unused
-    // until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
-    let ping_receiver_config_tx = std::iter::once(cross_zone::build_ping_receiver_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
-        let self_zone = *config.bedrock_config.channel_id.as_ref();
-        cross_zone::build_inbox_init_config_tx(self_zone)
-    });
+    let mut genesis_txs = Vec::new();
+
+    // These programs are not part of the deployed Testnet v0.2 state. Keep their
+    // development-network config transactions out of a testnet genesis block so
+    // replay still uses only the attested program set.
+    #[cfg(not(feature = "testnet"))]
+    {
+        // Config txs seed the config accounts by transaction, so every node
+        // reconstructs them by replaying the genesis block. The wrapped-token minter and
+        // both emitters' pins are initialized on every zone: all three are builtins with
+        // a user-callable InitConfig, so a config PDA left default is claimable by the
+        // first initializer, hijacking the minter or repointing an emitter's outbox. The
+        // inbox allowlist is initialized only on receiving zones; the inbox is
+        // sequencer-only, so its default config PDA is not user-claimable, merely unused
+        // until the zone receives.
+        genesis_txs.extend([
+            cross_zone::build_wrapped_token_init_config_tx(config.cross_zone.as_ref()),
+            cross_zone::build_ping_sender_init_config_tx(),
+            cross_zone::build_ping_receiver_init_config_tx(config.cross_zone.as_ref()),
+            cross_zone::build_bridge_lock_init_config_tx(),
+        ]);
+        if config.cross_zone.is_some() {
+            let self_zone = *config.bedrock_config.channel_id.as_ref();
+            genesis_txs.push(cross_zone::build_inbox_init_config_tx(self_zone));
+        }
+    }
+
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
             account_id,
@@ -1778,26 +1789,28 @@ fn build_genesis_state(
         }
     });
 
-    // The creator falls back to staking itself, signing with the key it owns.
-    let mut staked = founding_stakes(config);
-    if staked.is_empty() {
-        staked.extend(bootstrap_sequencer_key.map(|key| {
-            let key_path = config.home.join("sequencer_stake_signing_key");
-            let owner = load_or_create_stake_signing_key(&key_path)
-                .expect("Failed to load or create the stake signing key");
-            let signature = sign_genesis_stake(0, key, &owner);
-            (key, lee::PublicKey::new_from_private_key(&owner), signature)
-        }));
-    }
-    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
+    genesis_txs.extend(supply_txs);
 
-    let genesis_txs = wrapped_token_config_tx
-        .chain(ping_sender_config_tx)
-        .chain(ping_receiver_config_tx)
-        .chain(bridge_lock_config_tx)
-        .chain(inbox_config_tx)
-        .chain(supply_txs)
-        .chain(bootstrap_stake_txs)
+    // Sequencer staking is a development-network feature; Testnet v0.2 predates
+    // that program and must keep its legacy genesis transaction set.
+    #[cfg(not(feature = "testnet"))]
+    {
+        // The creator falls back to staking itself, signing with the key it owns.
+        let mut staked = founding_stakes(config);
+        if staked.is_empty() {
+            staked.extend(bootstrap_sequencer_key.map(|key| {
+                let key_path = config.home.join("sequencer_stake_signing_key");
+                let owner = load_or_create_stake_signing_key(&key_path)
+                    .expect("Failed to load or create the stake signing key");
+                let signature = sign_genesis_stake(0, key, &owner);
+                (key, lee::PublicKey::new_from_private_key(&owner), signature)
+            }));
+        }
+        genesis_txs.extend(build_stake_genesis_transactions(&staked));
+    }
+
+    let genesis_txs = genesis_txs
+        .into_iter()
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -1920,6 +1933,7 @@ pub fn sign_genesis_stake(
 
 /// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
 /// not raw state, so followers replay them instead of missing them.
+#[cfg(not(feature = "testnet"))]
 fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
     if staked.is_empty() {
         return Vec::new();

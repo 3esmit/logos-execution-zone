@@ -1,7 +1,10 @@
-#![expect(
-    clippy::arithmetic_side_effects,
-    clippy::as_conversions,
-    reason = "We don't care about it in tests"
+#![cfg_attr(
+    not(feature = "testnet"),
+    expect(
+        clippy::arithmetic_side_effects,
+        clippy::as_conversions,
+        reason = "We don't care about it in tests"
+    )
 )]
 
 use std::sync::Mutex;
@@ -13,9 +16,9 @@ use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
 use storage::sequencer::sequencer_cells::ZoneAnchorRecord;
 
 use super::*;
-use crate::{
-    SequencerCore, block_store::SequencerStore, config::GenesisAction, mock::MockBlockPublisher,
-};
+#[cfg(not(feature = "testnet"))]
+use crate::config::GenesisAction;
+use crate::{SequencerCore, block_store::SequencerStore, mock::MockBlockPublisher};
 
 /// Fresh `(store, chain)` pair for a reconstruction target, as
 /// `start_from_config` would build them before the publisher starts.
@@ -40,6 +43,7 @@ fn block_to_channel_message(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
 
 /// Collects a sequencer's whole chain (genesis..=tip) into a canned channel,
 /// one block per slot at `slot_step` spacing.
+#[cfg(not(feature = "testnet"))]
 fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessage, Slot)> {
     let genesis_id = store.genesis_id();
     let tip_id = store.latest_block_meta().expect("tip").expect("present").id;
@@ -52,6 +56,7 @@ fn channel_from_store(store: &SequencerStore, slot_step: u64) -> Vec<(ZoneMessag
         .collect()
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn reconstructs_missing_channel_blocks_into_fresh_store() {
     // Sequencer A produces a few blocks; treat its chain as the channel.
@@ -191,6 +196,7 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     // A sequencer that committed blocks past genesis but never recorded an anchor.
@@ -285,6 +291,7 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
 /// The channel carries two inscriptions for one block id — competing sequencers
 /// around a turn change — and the final tier already settled that height.
 /// Finality is irreversible, so the loser is ignored rather than fatal.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
     // Sequencer A's chain is what the channel finalized.
@@ -368,6 +375,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
 
 /// A block the head tier holds is reorg-able by construction, so finalized
 /// channel history at that height wins and the head rebases onto it.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history() {
     // Sequencer A's chain is what the channel finalized.
@@ -425,6 +433,7 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
 
 /// A sequencer config whose genesis funds the bridge account, so replayed bridge
 /// deposit transactions have a source balance to mint from.
+#[cfg(not(feature = "testnet"))]
 fn bridge_funded_config() -> SequencerConfig {
     let mut config = setup_sequencer_config();
     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
@@ -433,6 +442,7 @@ fn bridge_funded_config() -> SequencerConfig {
 
 /// Builds an unfulfilled pending deposit event for `recipient`, matching the
 /// encoding `build_bridge_deposit_tx_from_event` expects.
+#[cfg(not(feature = "testnet"))]
 fn deposit_event_record(
     op_id: [u8; 32],
     amount: u64,
@@ -679,6 +689,7 @@ fn deposit_event_record(
 /// Reconstruction must reconcile the pending record against that block — marking
 /// it submitted so the startup replay does not re-inject it — and apply the mint
 /// exactly once.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn reconstruction_reconciles_already_finished_deposit() {
     let recipient = initial_public_user_accounts()[0].account_id;
@@ -753,6 +764,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
 /// record on the way through: the delivery is permanently reflected in the
 /// reconstructed state (the inbox seen shard), so the next production neither
 /// re-delivers it nor leaves a record nothing will ever drop.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn reconstructed_delivery_settles_its_pending_record() {
     let payload = b"reconstructed".to_vec();
@@ -835,6 +847,7 @@ async fn reconstructed_delivery_settles_its_pending_record() {
 /// reached on every restart. It must still settle the delivery's record: the
 /// channel serving the block is what makes it irreversible, and nothing later
 /// will ever put that key in a block again.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_verified_own_block_settles_its_delivery_records() {
     let record = dispatch_record(37, ping_payload(b"verified"));
@@ -888,6 +901,7 @@ async fn a_verified_own_block_settles_its_delivery_records() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn committed_local_against_missing_channel_fails_without_anchor() {
     // A sequencer that has committed blocks — a non-genesis tip plus a persisted

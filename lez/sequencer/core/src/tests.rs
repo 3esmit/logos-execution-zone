@@ -1,10 +1,17 @@
-#![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+#![cfg_attr(
+    not(feature = "testnet"),
+    expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")
+)]
 
-use std::{pin::pin, time::Duration};
+#[cfg(not(feature = "testnet"))]
+use std::pin::pin;
+use std::time::Duration;
 
+#[cfg(not(feature = "testnet"))]
+use common::block::{BedrockStatus, Block};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, HashableBlockData},
+    block::HashableBlockData,
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation},
 };
@@ -12,38 +19,50 @@ use lee::{
     Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
 use lee_core::{account::Nonce, program::PdaSeed};
+use logos_blockchain_core::mantle::ops::channel::ChannelId;
+#[cfg(not(feature = "testnet"))]
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
         TxHash,
         ledger::Inputs,
-        ops::channel::{ChannelId, MsgId, deposit::Metadata},
+        ops::channel::{MsgId, deposit::Metadata},
     },
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
-use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
+use logos_blockchain_zone_sdk::Slot;
+#[cfg(not(feature = "testnet"))]
+use logos_blockchain_zone_sdk::sequencer::DepositInfo;
+#[cfg(not(feature = "testnet"))]
 use mempool::MemPoolHandle;
+#[cfg(not(feature = "testnet"))]
 use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
-use storage::sequencer::sequencer_cells::{
-    DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-};
+use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
+#[cfg(not(feature = "testnet"))]
+use storage::sequencer::sequencer_cells::{DispatchOrigin, PendingCrossZoneDispatchRecord};
 use tempfile::tempdir;
-use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
+#[cfg(not(feature = "testnet"))]
+use testnet_initial_state::initial_pub_accounts_private_keys;
+use testnet_initial_state::initial_public_user_accounts;
 
+#[cfg(not(feature = "testnet"))]
+use crate::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+#[cfg(not(feature = "testnet"))]
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
-    apply_follow_update,
-    block_publisher::FollowUpdate,
+    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, classify_settled_deliveries,
+    dispatch_already_delivered, extract_cross_zone_dispatch, extract_cross_zone_dispatch_key,
+};
+#[cfg(not(feature = "testnet"))]
+use crate::{
+    TransactionOrigin, apply_follow_update, block_publisher::FollowUpdate, config::GenesisAction,
+    deposit_already_minted, mock::mock_checkpoint,
+};
+use crate::{
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, build_genesis_state,
-    classify_settled_deliveries,
-    config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
-        InitialStateProfile, SequencerConfig,
-    },
-    deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, finalize_unstake_is_includable, is_sequencer_only_program,
-    mock::{SequencerCoreWithMockClients, mock_checkpoint},
+    config::{self, BedrockConfig, InitialStateProfile, SequencerConfig},
+    finalize_unstake_is_includable, is_sequencer_only_program,
+    mock::SequencerCoreWithMockClients,
     resubmittable_txs,
 };
 
@@ -51,6 +70,7 @@ mod reconstruction;
 
 /// The peer zone a cross-zone test receives from. Distinct from the test
 /// channel id (`[0; 32]`), which the inbox guest rejects as a source.
+#[cfg(not(feature = "testnet"))]
 const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 #[derive(borsh::BorshSerialize)]
@@ -81,6 +101,7 @@ fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
 
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_follow_update()`.
+#[cfg(not(feature = "testnet"))]
 fn empty_follow_update() -> FollowUpdate {
     FollowUpdate {
         checkpoint: mock_checkpoint(),
@@ -94,11 +115,13 @@ fn empty_follow_update() -> FollowUpdate {
 
 /// Key of the account holding a solo channel creator's genesis stake. Read
 /// from the same file genesis uses, which creates it on first read.
+#[cfg(not(feature = "testnet"))]
 fn bootstrap_stake_key(config: &SequencerConfig) -> PrivateKey {
     crate::load_or_create_stake_signing_key(&config.home.join("sequencer_stake_signing_key"))
         .expect("Failed to load or create the stake signing key")
 }
 
+#[cfg(not(feature = "testnet"))]
 fn bootstrap_stake_account_id(config: &SequencerConfig) -> AccountId {
     AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key(
         config,
@@ -161,14 +184,17 @@ fn committee_cooldown_needs_the_channel_to_advance() {
     ));
 }
 
+#[cfg(not(feature = "testnet"))]
 fn create_signing_key_for_account1() -> lee::PrivateKey {
     initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
 }
 
+#[cfg(not(feature = "testnet"))]
 fn create_signing_key_for_account2() -> lee::PrivateKey {
     initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
 }
 
+#[cfg(not(feature = "testnet"))]
 async fn common_setup() -> (
     SequencerCoreWithMockClients,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
@@ -177,6 +203,7 @@ async fn common_setup() -> (
     common_setup_with_config(config).await
 }
 
+#[cfg(not(feature = "testnet"))]
 async fn common_setup_with_config(
     config: SequencerConfig,
 ) -> (
@@ -197,6 +224,7 @@ async fn common_setup_with_config(
     (sequencer, mempool_handle)
 }
 
+#[cfg(not(feature = "testnet"))]
 fn tx_is_bridge_deposit(
     tx: &LeeTransaction,
     deposit_op_id: [u8; 32],
@@ -229,6 +257,7 @@ fn tx_is_bridge_deposit(
 /// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
 /// `build_genesis_state` seeds the inbox config PDA and a delivery has an
 /// allowlist to pass.
+#[cfg(not(feature = "testnet"))]
 fn cross_zone_test_config() -> SequencerConfig {
     SequencerConfig {
         cross_zone: Some(CrossZoneConfig {
@@ -247,6 +276,7 @@ fn cross_zone_test_config() -> SequencerConfig {
 
 /// A `ping_receiver::Record` instruction as risc0 words, little-endian: the wire
 /// form an emitter on the peer zone puts in the message payload.
+#[cfg(not(feature = "testnet"))]
 fn ping_payload(payload: &[u8]) -> Vec<u8> {
     risc0_zkvm::serde::to_vec(&ReceiverInstruction::Record {
         payload: payload.to_vec(),
@@ -260,6 +290,7 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// The dispatch transaction for a message at index 0 of [`PEER_ZONE`] block
 /// `src_block_id`. Built through the same builder the watcher uses, so a change
 /// to the encoding shows up here rather than passing silently.
+#[cfg(not(feature = "testnet"))]
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver().id();
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
@@ -281,6 +312,7 @@ fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
 
 /// A stand-in for the peer block's recomputed hash, distinct per block id. These
 /// records are seeded into the store, so no real block exists to hash.
+#[cfg(not(feature = "testnet"))]
 fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
     let mut hash = [0_u8; 32];
     hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
@@ -288,6 +320,7 @@ fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
 }
 
 /// The pending record the watcher would leave behind for that dispatch.
+#[cfg(not(feature = "testnet"))]
 fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispatchRecord {
     let tx = dispatch_tx(src_block_id, payload);
     PendingCrossZoneDispatchRecord::recorded(
@@ -297,6 +330,7 @@ fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispa
 }
 
 /// The message keys of the deliveries a block carries.
+#[cfg(not(feature = "testnet"))]
 fn dispatches_in(block: &Block) -> Vec<[u8; 32]> {
     block
         .body
@@ -307,6 +341,7 @@ fn dispatches_in(block: &Block) -> Vec<[u8; 32]> {
 }
 
 /// The pending dispatch records a sequencer still holds.
+#[cfg(not(feature = "testnet"))]
 fn pending_dispatches(
     sequencer: &SequencerCoreWithMockClients,
 ) -> Vec<PendingCrossZoneDispatchRecord> {
@@ -317,6 +352,7 @@ fn pending_dispatches(
         .expect("pending dispatches readable")
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn start_from_config() {
     let config = setup_sequencer_config();
@@ -336,6 +372,7 @@ async fn start_from_config() {
     assert_eq!(20000, balance_acc_2);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn start_from_config_opens_existing_db_if_it_exists() {
     let config = setup_sequencer_config();
@@ -431,6 +468,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
     let _ = SequencerCoreWithMockClients::start_from_config(config).await;
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
     let mut config = setup_sequencer_config();
@@ -505,6 +543,7 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_drained_deposit_is_not_minted_twice_across_turns() {
     let mut config = setup_sequencer_config();
@@ -549,6 +588,7 @@ async fn a_drained_deposit_is_not_minted_twice_across_turns() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     // Manifestation 2 from #639: a deposit-carrying block is orphaned. Recovery
@@ -625,6 +665,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     // Runs the bridge guest directly with a pre-existing receipt — the replay
@@ -680,6 +721,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn recorded_dispatches_are_drained_from_the_store_on_production() {
     let payload = b"hello-cross-zone".to_vec();
@@ -736,6 +778,7 @@ async fn recorded_dispatches_are_drained_from_the_store_on_production() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
     // The seen-set is what replaces the submitted mark: the drain asks the state
@@ -778,6 +821,7 @@ async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures() {
     // A payload that is not `u32`-aligned: the inbox guest rejects it outright,
@@ -860,6 +904,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
     assert!(pending_dispatches(&sequencer).is_empty());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     // The watcher persists its floor only at slot boundaries, so a crash inside
@@ -913,6 +958,7 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_delivery_still_reversible_keeps_its_record() {
     // The counterpart to the test above, and the reason the drain checks two
@@ -943,6 +989,7 @@ async fn a_delivery_still_reversible_keeps_its_record() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[test]
 fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
     // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
@@ -980,6 +1027,7 @@ fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
     assert!(mismatched.is_empty());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     // A store-drained transaction is at the head of the queue every turn, so one
@@ -1029,6 +1077,7 @@ async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_delivery_backlog_is_spread_across_blocks() {
     // Each delivery costs a guest execution and peers decide how many queue up,
@@ -1075,6 +1124,7 @@ fn transaction_pre_check_pass() {
     assert!(result.is_ok());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn transaction_pre_check_native_transfer_valid() {
     let (_sequencer, _mempool_handle) = common_setup().await;
@@ -1091,6 +1141,7 @@ async fn transaction_pre_check_native_transfer_valid() {
     assert!(result.is_ok());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn transaction_pre_check_native_transfer_other_signature() {
     let (sequencer, _mempool_handle) = common_setup().await;
@@ -1123,6 +1174,7 @@ async fn transaction_pre_check_native_transfer_other_signature() {
     ));
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn transaction_pre_check_native_transfer_sent_too_much() {
     let (sequencer, _mempool_handle) = common_setup().await;
@@ -1158,6 +1210,7 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
     assert!(is_failed_at_balance_mismatch);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn transaction_execute_native_transfer() {
     let (sequencer, _mempool_handle) = common_setup().await;
@@ -1189,6 +1242,7 @@ async fn transaction_execute_native_transfer() {
     assert_eq!(bal_to, 20100);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
     let config = SequencerConfig {
@@ -1217,6 +1271,7 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
     assert!(push_fut.await.is_ok());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn build_block_from_mempool() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -1268,6 +1323,7 @@ fn a_missing_committee_snapshot_holds_back_nothing_else() {
     assert!(finalize_unstake_is_includable(&state, &ordinary_tx, None));
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn replay_transactions_are_rejected_in_the_same_block() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -1311,6 +1367,7 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn replay_transactions_are_rejected_in_different_blocks() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -1363,6 +1420,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn restart_from_storage() {
     let config = setup_sequencer_config();
@@ -1423,6 +1481,7 @@ async fn restart_from_storage() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn get_pending_blocks() {
     let config = setup_sequencer_config();
@@ -1434,6 +1493,7 @@ async fn get_pending_blocks() {
     assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 4);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn delete_blocks() {
     let config = setup_sequencer_config();
@@ -1451,6 +1511,7 @@ async fn delete_blocks() {
     assert_eq!(sequencer.get_pending_blocks().unwrap().len(), 1);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn produce_block_with_correct_prev_meta_after_restart() {
     let config = setup_sequencer_config();
@@ -1526,6 +1587,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn transactions_touching_clock_account_are_dropped_from_block() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -1573,6 +1635,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn user_tx_that_chain_calls_clock_is_dropped() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -1628,6 +1691,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn block_production_aborts_when_clock_account_data_is_corrupted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
@@ -2162,6 +2226,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     assert!(resubmittable_txs(&clock_only).is_empty());
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_update_persists_the_checkpoint_with_its_effects() {
     let config = setup_sequencer_config();
@@ -2196,6 +2261,7 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
 /// prunes them from the store, so nothing in the chain state remembers we ever
 /// produced them. Producing again there would put a second, different block at
 /// a height the channel already carries — the fork that has to be prevented.
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn head_rewound_below_published_height_blocks_production() {
     let config = setup_sequencer_config();
@@ -2265,6 +2331,7 @@ async fn head_rewound_below_published_height_blocks_production() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();
@@ -2297,6 +2364,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_adopted_peer_block_applies_and_persists() {
     let config = setup_sequencer_config();
@@ -2341,6 +2409,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_redelivery_of_own_block_is_deduped() {
     let config = setup_sequencer_config();
@@ -2383,6 +2452,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     let config = setup_sequencer_config();
@@ -2434,6 +2504,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     // The zone-sdk reports a block as orphaned once LIB pruning drops its
@@ -2496,6 +2567,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     let config = setup_sequencer_config();
@@ -2534,6 +2606,7 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_finalized_delivery_drops_its_pending_record() {
     // The record exists to bridge the gap between the watcher's durable read
@@ -2576,6 +2649,7 @@ async fn follow_finalized_delivery_drops_its_pending_record() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
     // Keyed by message key, not by height: a finalized block the final tier
@@ -2626,6 +2700,7 @@ async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let config = setup_sequencer_config();
@@ -2666,6 +2741,7 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_record() {
     let config = setup_sequencer_config();
@@ -2736,6 +2812,7 @@ async fn parked_finalized_block_neither_sweeps_the_store_nor_drops_its_deposit_r
     );
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn restart_restores_head_tier_and_recovers_from_orphan() {
     let config = setup_sequencer_config();
@@ -2808,6 +2885,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     assert_eq!(requeued, tx);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn restart_reanchors_on_the_persisted_final_snapshot() {
     let config = setup_sequencer_config();
@@ -2847,6 +2925,7 @@ async fn restart_reanchors_on_the_persisted_final_snapshot() {
     assert_eq!(chain.head_tip().expect("head tip set").block_id, 2);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn record_produced_block_skips_persistence_on_lost_race() {
     let config = setup_sequencer_config();
@@ -2897,6 +2976,7 @@ async fn record_produced_block_skips_persistence_on_lost_race() {
     assert_eq!(head_tip.hash, peer_block.header.hash);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
     let config = setup_sequencer_config();
@@ -2918,6 +2998,7 @@ async fn record_produced_block_skips_persistence_when_block_no_longer_chains() {
     assert_eq!(sequencer.chain_height(), 1, "head is unchanged");
 }
 
+#[cfg(not(feature = "testnet"))]
 #[tokio::test]
 async fn follow_update_persists_blocks_meta_and_state_atomically() {
     let config = setup_sequencer_config();
@@ -3440,6 +3521,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     assert_eq!(state.get_account_by_id(ownership_id).balance, amount);
 }
 
+#[cfg(not(feature = "testnet"))]
 #[test]
 fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
     let config = setup_sequencer_config();
@@ -3471,6 +3553,7 @@ fn genesis_stakes_the_bootstrap_sequencer_at_the_configured_account() {
 
 /// The genesis stake account must be one the operator can sign for, so the
 /// bootstrap sequencer can top up and exit like any self-joined staker.
+#[cfg(not(feature = "testnet"))]
 #[test]
 fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let config = setup_sequencer_config();
