@@ -519,8 +519,8 @@ mod tests {
         // gate, from this exact development state plus Pinata. Keep the explicit
         // fixture profile byte-for-byte compatible without depending on active
         // Testnet feature selection.
-        let mut legacy_public_accounts = initial_public_accounts();
-        legacy_public_accounts.insert(
+        let mut legacy_public_accounts_map = initial_public_accounts();
+        legacy_public_accounts_map.insert(
             system_accounts::pinata_account_id(),
             system_accounts::pinata_account(),
         );
@@ -528,12 +528,14 @@ mod tests {
         legacy_programs.push(programs::pinata());
 
         let legacy_state = V03State::new()
-            .with_public_accounts(legacy_public_accounts.clone())
+            .with_public_accounts(legacy_public_accounts_map.clone())
             .with_private_accounts(initial_private_accounts())
             .with_programs(legacy_programs);
         let fixture_state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
 
         assert_eq!(fixture_state.program_ids(), legacy_state.program_ids());
+        let mut legacy_public_accounts: Vec<_> = legacy_public_accounts_map.into_iter().collect();
+        legacy_public_accounts.sort_by_key(|(account_id, _)| *account_id);
         for (account_id, account) in legacy_public_accounts {
             assert_eq!(fixture_state.get_account_by_id(account_id), account);
         }

@@ -9610,6 +9610,7 @@ dependencies = [
  "sequencer_core",
  "sequencer_executor_actor",
  "sequencer_rpc_server_actor",
+ "sequencer_service_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
@@ -9618,6 +9619,13 @@ dependencies = [
  "tokio",
  "tokio-util",
  "wallet",
+]
+
+[[package]]
+name = "sequencer_service_metrics"
+version = "0.1.0"
+dependencies = [
+ "metrics",
 ]
 
 [[package]]
