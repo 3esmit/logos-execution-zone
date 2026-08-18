@@ -52,12 +52,13 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
             .with_genesis(genesis)
+            .with_bedrock_signing_key(config::SEQUENCER_BEDROCK_SIGNING_KEY)
             .setup()
             .await
             .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
-        sequencer_handle.addr(),
+        &[sequencer_handle.addr()],
         &initial_public_accounts,
         &initial_private_accounts,
         WalletConfigOverrides::default(),
