@@ -7,7 +7,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas,
         validate_execution,
     },
 };
@@ -264,17 +264,14 @@ impl ValidatedStateDiff {
             // Union with the caller's authorized set so that authorization is monotonically
             // growing: once an account is authorized at any point in the chain it remains
             // authorized for all subsequent calls.
-            let authorized_accounts: HashSet<_> = caller_data
-                .authorized_accounts
-                .into_iter()
-                .chain(
-                    program_output
-                        .pre_states
-                        .iter()
-                        .filter(|pre| pre.is_authorized)
-                        .map(|pre| pre.account_id),
-                )
-                .collect();
+            let mut authorized_accounts = caller_data.authorized_accounts;
+            authorized_accounts.extend(
+                program_output
+                    .pre_states
+                    .iter()
+                    .filter(|pre| pre.is_authorized)
+                    .map(|pre| pre.account_id),
+            );
             for new_call in program_output.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
                     new_call,
@@ -468,12 +465,6 @@ impl ValidatedStateDiff {
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
-}
-
-#[derive(Debug)]
-struct CallerData {
-    program_id: Option<ProgramId>,
-    authorized_accounts: HashSet<AccountId>,
 }
 
 fn authenticate_public_transaction_signers(
