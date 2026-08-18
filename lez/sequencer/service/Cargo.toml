@@ -12,7 +12,6 @@ workspace = true
 sequencer_core.workspace = true
 sequencer_executor_actor.workspace = true
 sequencer_rpc_server_actor.workspace = true
-sequencer_service_metrics = { workspace = true, features = ["record"] }
 lee = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }
