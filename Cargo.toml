@@ -76,6 +76,12 @@ members = [
   "tools/dashboard_gen",
 ]
 
+# Keep the transitive Overwatch dependency on the fork without changing the
+# legacy API required by the Bedrock image used by the integration fixtures.
+[patch."https://github.com/logos-co/Overwatch"]
+overwatch = { git = "https://github.com/3esmit/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
+overwatch-derive = { git = "https://github.com/3esmit/Overwatch", rev = "ae887f41f5a626c341179026ad7f03953ff2072e" }
+
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
@@ -203,14 +209,16 @@ schemars = "1.2"
 async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-codec = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-core = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-chain-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-zone-sdk = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
-logos-blockchain-http-api-common = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "449aaedd99b30a5eedb45edef54d5c5dfee8fe02" }
+# Keep this revision aligned with the legacy funding API exposed by the
+# Bedrock image used by the integration fixtures.
+logos-blockchain-common-http-client = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-codec = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-core = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-chain-service = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-zone-sdk = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
+logos-blockchain-http-api-common = { git = "https://github.com/3esmit/logos-blockchain.git", rev = "97d5e104fc20ce6e2fb404f8a9364afcb181a3e5" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 

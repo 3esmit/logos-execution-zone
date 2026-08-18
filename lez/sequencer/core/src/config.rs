@@ -108,7 +108,6 @@ pub struct BedrockConfig {
     /// Bedrock auth.
     pub auth: Option<BasicAuth>,
     pub funding_key: ZkPublicKey,
-    /// Percentage of the final mandatory fee reserved as a priority reserve.
     #[serde(default = "default_priority_fee")]
     pub priority_fee: u64,
 }
@@ -160,8 +159,9 @@ const fn default_metrics_address() -> Option<SocketAddr> {
     Some(SequencerConfig::DEFAULT_METRICS_ADDRESS)
 }
 
-/// Default priority-fee reserve percentage for funded Bedrock transactions.
+/// Extra fee added to every funded Bedrock transaction, covering a gas price
+/// rise before it is mined.
 #[must_use]
 pub const fn default_priority_fee() -> u64 {
-    logos_blockchain_zone_sdk::sequencer::FundingConfig::DEFAULT_PRIORITY_FEE_PERCENT
+    10_000
 }
