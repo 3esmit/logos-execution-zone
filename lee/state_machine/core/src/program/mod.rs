@@ -14,6 +14,19 @@ pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
+
+/// FIXME: This is a temporary conversion; will be removed once `Program` to `Account`
+/// migration is complete.
+impl From<ProgramId> for AccountId {
+    fn from(program_id: ProgramId) -> Self {
+        let bytes: Vec<u8> = program_id
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        Self::new(bytes.try_into().expect("8 u32 words are exactly 32 bytes"))
+    }
+}
+
 pub type InstructionData = Vec<u32>;
 pub struct ProgramInput<T> {
     pub self_program_id: ProgramId,
