@@ -625,6 +625,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
 /// logged and skipped.
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block)> {
+    if inscription.payload.is_empty() {
+        // ChannelConfig entries are represented by the zone SDK as synthetic
+        // empty-payload inscriptions. They advance channel configuration, not
+        // the execution-zone block chain.
+        return None;
+    }
+
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");

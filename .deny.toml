@@ -63,6 +63,7 @@ allow-git = [
   "https://github.com/logos-blockchain/sponges",
   "https://github.com/arkworks-rs/spongefish.git",
   "https://github.com/keycard-tech/keycard-rs",
+  "https://github.com/3esmit/Overwatch",
 ]
 unknown-git = "deny"
 unknown-registry = "deny"

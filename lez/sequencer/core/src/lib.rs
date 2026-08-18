@@ -727,8 +727,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         &self,
     ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
         match self.block_publisher.accredited_keys().await {
-            Ok(keys) => Some(
-                keys.iter()
+            Ok(keys) if keys.is_empty() => {
+                // A newly-created channel can briefly report no accredited keys
+                // while its creation transaction is still propagating. Treat
+                // that as unavailable; submitting a committee config from this
+                // snapshot would reset the channel tip and orphan the block just
+                // published by the creator.
+                warn!("Live committee snapshot is empty; skipping committee update");
+                None
+            }
+            Ok(keys) => {
+                let converted = keys
+                    .iter()
                     .filter_map(|key| {
                         sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
                             warn!(
@@ -738,8 +748,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                             None
                         })
                     })
-                    .collect(),
-            ),
+                    .collect::<Vec<_>>();
+
+                if converted.is_empty() {
+                    warn!(
+                        "Live committee snapshot contains no usable Ed25519 keys; skipping committee update"
+                    );
+                    None
+                } else {
+                    Some(converted)
+                }
+            }
             Err(err) => {
                 warn!(
                     "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
