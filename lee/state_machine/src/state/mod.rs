@@ -5,6 +5,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
+    program::{PROGRAM_STORAGE_OWNER, ProgramId},
 };
 
 use crate::{
@@ -113,7 +114,6 @@ impl BorshDeserialize for NullifierSet {
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
-    programs: HashMap<AccountId, Account>,
 }
 
 impl Default for V03State {
@@ -126,7 +126,6 @@ impl Default for V03State {
         Self {
             public_state: HashMap::default(),
             private_state,
-            programs: HashMap::default(),
         }
     }
 }
@@ -197,11 +196,12 @@ impl V03State {
     pub(crate) fn insert_program(&mut self, program: &Program) {
         let account_id = AccountId::from(program.id());
         let account = Account {
+            program_owner: PROGRAM_STORAGE_OWNER,
             data: Data::try_from(program.elf().to_vec())
                 .expect("elf must fit under DATA_MAX_LENGTH"),
             ..Account::default()
         };
-        self.programs.insert(account_id, account);
+        self.public_state.insert(account_id, account);
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -281,13 +281,21 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
+    /// Looks up a deployed program's storage account by its `ProgramId`, verifying it is
+    /// actually owned by [`PROGRAM_STORAGE_OWNER`].
+    ///
+    /// An account at `AccountId::from(program_id)` that lacks this ownership isn't a deployed
+    /// program, whatever its contents — this is the single place that distinction is enforced,
+    /// so callers never have to remember to re-check it themselves.
+    #[must_use]
+    pub fn get_program(&self, program_id: ProgramId) -> Option<&Account> {
+        let account = self.get_account_by_id_ref(AccountId::from(program_id))?;
+        (account.program_owner == PROGRAM_STORAGE_OWNER).then_some(account)
+    }
+
     #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
-    }
-
-    pub(crate) const fn programs(&self) -> &HashMap<AccountId, Account> {
-        &self.programs
     }
 
     #[must_use]
@@ -295,8 +303,8 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Order-independent fingerprint of the genesis-relevant state: the public
-    /// account set, the deployed program set, and the commitment-set digest.
+    /// Order-independent fingerprint of the genesis-relevant state: the public account set
+    /// (which includes deployed programs' storage accounts) and the commitment-set digest.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -313,18 +321,11 @@ impl V03State {
         let Self {
             public_state,
             private_state,
-            programs,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
-
-        let mut program_accounts: Vec<(&AccountId, &Account)> = programs.iter().collect();
-        program_accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
-
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
-        let program_count =
-            u64::try_from(program_accounts.len()).expect("program count fits in u64");
 
         let mut hasher = Sha256::new();
         hasher.update(account_count.to_le_bytes());
@@ -332,14 +333,6 @@ impl V03State {
             hasher.update(id.as_ref());
             let bytes = borsh::to_vec(account).expect("Account is BorshSerialize");
             let len = u64::try_from(bytes.len()).expect("account encoding fits in u64");
-            hasher.update(len.to_le_bytes());
-            hasher.update(&bytes);
-        }
-        hasher.update(program_count.to_le_bytes());
-        for (id, account) in program_accounts {
-            hasher.update(id.as_ref());
-            let bytes = borsh::to_vec(account).expect("Account is BorshSerialize");
-            let len = u64::try_from(bytes.len()).expect("program account encoding fits in u64");
             hasher.update(len.to_le_bytes());
             hasher.update(&bytes);
         }

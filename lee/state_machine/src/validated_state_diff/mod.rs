@@ -112,10 +112,7 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let Some(program_account) = state
-                .programs()
-                .get(&AccountId::from(chained_call.program_id))
-            else {
+            let Some(program_account) = state.get_program(chained_call.program_id) else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
             let program = Program::new_unchecked(
@@ -448,10 +445,7 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state
-            .programs()
-            .contains_key(&AccountId::from(program.id()))
-        {
+        if state.get_program(program.id()).is_some() {
             return Err(LeeError::ProgramAlreadyExists);
         }
         Ok(Self(StateDiff {
