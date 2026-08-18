@@ -10,8 +10,9 @@ RUN cp cargo-binstall /usr/local/cargo/bin
 RUN apt-get update -y \
   && apt-get install -y --no-install-recommends clang
 
-# Install cargo-leptos
-RUN cargo binstall cargo-leptos -y
+# Keep the explorer build compatible with the repository Rust toolchain.
+# cargo-leptos 0.3.7 resolves kstring 2.0.4, which requires Rust 1.96.
+RUN cargo binstall cargo-leptos@0.3.6 -y
 
 # Add the WASM target
 RUN rustup target add wasm32-unknown-unknown

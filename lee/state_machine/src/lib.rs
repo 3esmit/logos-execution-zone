@@ -5,7 +5,7 @@
 
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{Account, AccountId, Data},
+    account::{Account, AccountId, Balance, Data},
     encryption::EphemeralPublicKey,
     program::ProgramId,
 };
@@ -30,6 +30,8 @@ pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
 mod validated_state_diff;
 
 mod privacy_preserving_circuit {
@@ -74,6 +76,14 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::MISSING_OUTPUT_ID,
             Cow::Borrowed(test_methods::MISSING_OUTPUT_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn dropped_account() -> Program {
+        Program::new_unchecked(
+            test_methods::DROPPED_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::DROPPED_ACCOUNT_ELF),
         )
     }
 

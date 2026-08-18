@@ -13,7 +13,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use integration_tests::TIME_TO_WAIT_FOR_BLOCK_SECONDS;
 use jsonrpsee::{
     RpcModule,
     server::ServerBuilder,
@@ -21,7 +21,11 @@ use jsonrpsee::{
 };
 use lee::{AccountId, program::Program};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{config::default_public_accounts_for_wallet, setup::setup_wallet};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder,
+    config::{MultiNodeTestContextConfig, default_public_accounts_for_wallet},
+    setup::setup_wallet,
+};
 use wallet::{AccountIdentity, config::WalletConfigOverrides};
 
 const TRANSACTION_APPEAR_TIMEOUT: Duration =
@@ -86,12 +90,17 @@ async fn start_legacy_compatible_proxy(
 
 #[tokio::test]
 async fn public_transaction_reaches_send_transaction_without_bulk_proofs() -> Result<()> {
-    let context = TestContext::builder().disable_indexer().build().await?;
+    let context = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()).disable_indexer(),
+        )
+        .build()
+        .await?;
     let (proxy, proxy_address, send_transaction_calls) =
         start_legacy_compatible_proxy(context.sequencer_client().clone()).await?;
     let initial_public_accounts = default_public_accounts_for_wallet();
     let (wallet, _wallet_home, _password) = setup_wallet(
-        proxy_address,
+        &[proxy_address],
         &initial_public_accounts,
         &[],
         WalletConfigOverrides::default(),

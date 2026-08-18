@@ -137,7 +137,7 @@ jobs:
           image: ${{ needs.ci-image.outputs.image }}
           run: |
             rustup target add wasm32-unknown-unknown
-            cargo binstall --no-confirm cargo-leptos@0.3.7
+            cargo binstall --no-confirm cargo-leptos@0.3.6
             bash scripts/build-native-release.sh \
               "${{ needs.validate.outputs.version }}" \
               linux-amd64 \
@@ -167,7 +167,7 @@ jobs:
       - name: Install cargo-leptos
         uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
-          tool: cargo-leptos@0.3.7
+          tool: cargo-leptos@0.3.6
           fallback: none
 
       - name: Install macOS Metal Toolchain

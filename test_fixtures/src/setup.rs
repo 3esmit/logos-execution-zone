@@ -1,11 +1,18 @@
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::block_store::{DbDump, SequencerStore};
+use sequencer_core::{
+    block_publisher::ED25519_SECRET_KEY_SIZE,
+    block_store::{DbDump, SequencerStore},
+};
 use sequencer_service::{GenesisAction, SequencerHandle};
+use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{
@@ -17,15 +24,162 @@ use wallet::{
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
     config::{self, InitialPrivateAccountForWallet},
+    indexer_client::IndexerClient,
     private_mention, public_mention,
 };
 
-/// How to initialize the sequencer's database.
-pub enum SequencerInit<'dump> {
-    /// Apply these genesis actions from scratch.
-    Genesis(Vec<GenesisAction>),
-    /// Restore an existing chain from a prebuilt dump (genesis actions are then irrelevant).
-    Prebuilt(&'dump DbDump),
+#[derive(Debug)]
+pub struct SequencerSetup {
+    partial: config::SequencerPartialConfig,
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    genesis_transactions: Option<Vec<GenesisAction>>,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
+    gossip: Option<sequencer_core::config::GossipConfig>,
+}
+
+impl SequencerSetup {
+    #[must_use]
+    pub fn new(partial: config::SequencerPartialConfig, bedrock_addr: SocketAddr) -> Self {
+        Self {
+            partial,
+            bedrock_addr,
+            channel_id: config::bedrock_channel_id(),
+            genesis_transactions: None,
+            cross_zone: None,
+            bedrock_signing_key: None,
+            gossip: None,
+        }
+    }
+
+    /// Set the Bedrock channel ID to use for the sequencer.
+    /// If not set, the default channel ID from the Bedrock config will be used.
+    #[must_use]
+    pub const fn with_channel_id(mut self, channel_id: ChannelId) -> Self {
+        self.channel_id = channel_id;
+        self
+    }
+
+    /// Set the cross-zone configuration to use for the sequencer.
+    /// If not set, the sequencer will be configured to run in single-zone mode.
+    #[must_use]
+    pub fn with_cross_zone(mut self, cross_zone: sequencer_core::config::CrossZoneConfig) -> Self {
+        self.cross_zone = Some(cross_zone);
+        self
+    }
+
+    /// Set the genesis transactions to apply when initializing the sequencer.
+    /// If not set, the sequencer will be initialized from a prebuilt database dump.
+    #[must_use]
+    pub fn with_genesis(mut self, genesis_transactions: Vec<GenesisAction>) -> Self {
+        self.genesis_transactions = Some(genesis_transactions);
+        self
+    }
+
+    /// Build a sequencer that joins a channel another node already created,
+    /// replaying its genesis from the channel instead of the prebuilt dump.
+    #[must_use]
+    pub fn joining_existing_channel(mut self) -> Self {
+        self.genesis_transactions = Some(Vec::new());
+        self
+    }
+
+    /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
+    /// before boot, so tests know the sequencer's public key in advance (e.g.
+    /// to accredit a committee member that has not started yet).
+    #[must_use]
+    pub const fn with_bedrock_signing_key(mut self, key: [u8; ED25519_SECRET_KEY_SIZE]) -> Self {
+        self.bedrock_signing_key = Some(key);
+        self
+    }
+
+    /// Enable p2p gossip with the given configuration.
+    /// If not set, the sequencer runs without gossip.
+    #[must_use]
+    pub fn with_gossip(mut self, gossip: sequencer_core::config::GossipConfig) -> Self {
+        self.gossip = Some(gossip);
+        self
+    }
+
+    /// Set up the sequencer in a fresh temporary home directory, returning the
+    /// owning [`TempDir`] alongside the handle.
+    pub async fn setup(self) -> Result<(SequencerHandle, TempDir)> {
+        let temp_sequencer_dir =
+            tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
+
+        let sequencer_handle = self.setup_at(temp_sequencer_dir.path()).await?;
+
+        Ok((sequencer_handle, temp_sequencer_dir))
+    }
+
+    /// Set up the sequencer in an explicit `home` directory owned by the caller.
+    ///
+    /// Useful for tests that restart the sequencer against the same on-disk store.
+    pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
+        let Self {
+            partial,
+            bedrock_addr,
+            channel_id,
+            genesis_transactions,
+            cross_zone,
+            bedrock_signing_key,
+            gossip,
+        } = self;
+
+        debug!("Using sequencer home at {}", home.display());
+
+        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+            genesis_transactions
+                .is_none()
+                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+        });
+        if let Some(key_bytes) = bedrock_signing_key {
+            std::fs::write(home.join("bedrock_signing_key"), key_bytes)
+                .context("Failed to write pre-generated bedrock signing key")?;
+        }
+        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        std::fs::write(
+            home.join("sequencer_stake_signing_key"),
+            config::SEQUENCER_STAKE_KEY,
+        )
+        .context("Failed to write pre-generated stake signing key")?;
+
+        let genesis_transactions = if let Some(genesis) = genesis_transactions {
+            genesis
+        } else {
+            let dump = load_prebuilt_dump()?;
+            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
+            // db under its home, so the restore has to land on the same name.
+            let dst = home.join(format!("rocksdb-{channel_id}"));
+            let _store = SequencerStore::restore_db_from_dump(
+                &dst,
+                &dump,
+                lee::PrivateKey::try_new(config::SEQUENCER_SIGNING_KEY)?,
+            )
+            .context("Failed to restore prebuilt sequencer database from dump")?;
+            // TODO: Technically not correct, we should reconstruct the genesis transactions
+            // from the dump, but this crutch doesn't affect anything for now
+            Vec::new()
+        };
+
+        let config = config::sequencer_config(
+            partial,
+            home.to_owned(),
+            bedrock_addr,
+            channel_id,
+            config::bedrock_funding_key(),
+            genesis_transactions,
+            cross_zone,
+            bedrock_signing_key,
+            gossip,
+        )
+        .context("Failed to create Sequencer config")?;
+
+        sequencer_service::run(config, SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .context("Failed to run Sequencer Service")
+    }
 }
 
 /// Committed single-file dump of the prebuilt sequencer database (`just regenerate-test-fixture`).
@@ -40,6 +194,24 @@ fn load_prebuilt_dump() -> Result<DbDump> {
     let bytes = std::fs::read(&path)
         .with_context(|| format!("Failed to read prebuilt db dump at {}", path.display()))?;
     DbDump::from_bytes(&bytes).context("Failed to deserialize prebuilt db dump")
+}
+
+/// Builds an HTTP RPC client for the sequencer at `addr`.
+pub fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
+    let url = config::addr_to_url(config::UrlProtocol::Http, addr)
+        .context("Failed to build sequencer URL")?;
+    SequencerClientBuilder::default()
+        .build(url)
+        .context("Failed to build sequencer client")
+}
+
+/// Builds a WebSocket RPC client for the indexer at `addr`.
+pub async fn indexer_client(addr: SocketAddr) -> Result<IndexerClient> {
+    let url = config::addr_to_url(config::UrlProtocol::Ws, addr)
+        .context("Failed to build indexer URL")?;
+    IndexerClient::new(&url)
+        .await
+        .context("Failed to build indexer client")
 }
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
@@ -139,88 +311,14 @@ pub async fn setup_indexer(
     .map(|handle| (handle, temp_indexer_dir))
 }
 
-pub async fn setup_sequencer(
-    partial: config::SequencerPartialConfig,
-    bedrock_addr: SocketAddr,
-    genesis_transactions: Vec<GenesisAction>,
-    channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-) -> Result<(SequencerHandle, TempDir)> {
-    setup_sequencer_inner(
-        partial,
-        bedrock_addr,
-        SequencerInit::Genesis(genesis_transactions),
-        channel_id,
-        cross_zone,
-    )
-    .await
-}
-
-/// Like [`setup_sequencer`], but rebuilds the sequencer database from the committed prebuilt dump
-/// so it starts from an existing chain instead of applying genesis from scratch.
-pub async fn setup_sequencer_from_prebuilt(
-    partial: config::SequencerPartialConfig,
-    bedrock_addr: SocketAddr,
-) -> Result<(SequencerHandle, TempDir)> {
-    let dump = load_prebuilt_dump()?;
-    setup_sequencer_inner(
-        partial,
-        bedrock_addr,
-        SequencerInit::Prebuilt(&dump),
-        config::bedrock_channel_id(),
-        None,
-    )
-    .await
-}
-
-async fn setup_sequencer_inner(
-    partial: config::SequencerPartialConfig,
-    bedrock_addr: SocketAddr,
-    init: SequencerInit<'_>,
-    channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-) -> Result<(SequencerHandle, TempDir)> {
-    let temp_sequencer_dir =
-        tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
-
-    debug!(
-        "Using temp sequencer home at {}",
-        temp_sequencer_dir.path().display()
-    );
-
-    let genesis_transactions = match init {
-        SequencerInit::Genesis(genesis) => genesis,
-        SequencerInit::Prebuilt(dump) => {
-            // `SequencerCore::open_or_create_store` looks for `<home>/rocksdb`.
-            let dst = temp_sequencer_dir.path().join("rocksdb");
-            SequencerStore::restore_db_from_dump(&dst, dump)
-                .context("Failed to restore prebuilt sequencer database from dump")?;
-            Vec::new()
-        }
-    };
-
-    let config = config::sequencer_config(
-        partial,
-        temp_sequencer_dir.path().to_owned(),
-        bedrock_addr,
-        genesis_transactions,
-        channel_id,
-        cross_zone,
-    )
-    .context("Failed to create Sequencer config")?;
-
-    let sequencer_handle = sequencer_service::run(config, 0).await?;
-
-    Ok((sequencer_handle, temp_sequencer_dir))
-}
-
 pub async fn setup_wallet(
-    sequencer_addr: SocketAddr,
+    sequencer_addrs: &[SocketAddr],
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
-    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
+    let config =
+        config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 

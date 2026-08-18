@@ -11,9 +11,9 @@ use sequencer_core::block_store::SequencerStore;
 use test_fixtures::{
     config,
     setup::{
-        prebuilt_sequencer_db_dump_path, setup_bedrock_node,
+        SequencerSetup, prebuilt_sequencer_db_dump_path, setup_bedrock_node,
         setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_sequencer, setup_wallet,
+        setup_wallet,
     },
 };
 use wallet::config::WalletConfigOverrides;
@@ -49,18 +49,16 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let genesis =
         config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
 
-    let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-        config::SequencerPartialConfig::default(),
-        bedrock_addr,
-        genesis,
-        config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup Sequencer for fixture generation")?;
+    let (sequencer_handle, temp_sequencer_dir) =
+        SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
+            .with_genesis(genesis)
+            .with_bedrock_signing_key(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+            .setup()
+            .await
+            .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
-        sequencer_handle.addr(),
+        &[sequencer_handle.addr()],
         &initial_public_accounts,
         &initial_private_accounts,
         WalletConfigOverrides::default(),
@@ -79,7 +77,9 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     drop(wallet);
     drop(sequencer_handle);
 
-    let db_path = temp_sequencer_dir.path().join("rocksdb");
+    let db_path = temp_sequencer_dir
+        .path()
+        .join(format!("rocksdb-{}", config::bedrock_channel_id()));
     let store = open_store_with_retry(&db_path)
         .await
         .context("Failed to reopen sequencer store after shutdown")?;

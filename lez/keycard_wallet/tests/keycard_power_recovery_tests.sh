@@ -4,14 +4,13 @@
 # Forces a card power cycle before each keycard-backed wallet command to verify
 # commands survive mid-session power loss.
 
-source venv/bin/activate
-
 export KEYCARD_PIN=111111
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 unpower() {
-    python "$SCRIPT_DIR/force_unpower.py"
+    cargo run -q --manifest-path "$SCRIPT_DIR/../Cargo.toml" --bin force_unpower
 }
 
 echo "Test: wallet keycard available"

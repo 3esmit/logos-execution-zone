@@ -8,10 +8,10 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 pub use test_fixtures::*;
 use wallet::{
+    AccountIdentity,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
@@ -19,6 +19,7 @@ use wallet::{
             native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
         },
     },
+    program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},
     storage::key_chain::FoundPrivateAccount,
 };
 
@@ -68,6 +69,34 @@ pub async fn send(
     Ok(())
 }
 
+/// Like [`send`], but for a `to` that is still a fresh, unclaimed account.
+///
+/// The wallet CLI's `AuthTransfer::Send` never signs with the recipient's key (by design: the
+/// sender's wallet must not sign on behalf of an account it doesn't own). But claiming a fresh
+/// account is only possible if that account's own key signs the transaction, so this bypasses
+/// the CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for
+/// the recipient, using the key the test wallet holds for the account it just created.
+///
+/// Unlike `send`, this doesn't go through the CLI's own poll-until-included step, so it waits
+/// for block creation itself before returning.
+pub async fn send_claiming_new_account(
+    ctx: &mut TestContext,
+    from: AccountId,
+    to: AccountId,
+    amount: u128,
+) -> Result<()> {
+    NativeTokenTransfer(ctx.wallet())
+        .send_public_transfer(
+            AccountIdentity::Public(from),
+            AccountIdentity::Public(to),
+            amount,
+        )
+        .await?;
+    log::info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    Ok(())
+}
+
 /// Create a token (New) and wait for the block to be included.
 pub async fn create_token(
     ctx: &mut TestContext,
@@ -83,7 +112,7 @@ pub async fn create_token(
         total_supply,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -105,7 +134,27 @@ pub async fn token_send(
         amount,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    Ok(())
+}
+
+/// Like [`token_send`], but for a `to` that is still a fresh, unclaimed holding account. See
+/// [`send_claiming_new_account`] for why the CLI can't be used here.
+pub async fn token_send_claiming_new_account(
+    ctx: &mut TestContext,
+    from: AccountId,
+    to: AccountId,
+    amount: u128,
+) -> Result<()> {
+    Token(ctx.wallet())
+        .send_transfer_transaction(
+            AccountIdentity::Public(from),
+            AccountIdentity::Public(to),
+            amount,
+        )
+        .await?;
+    log::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
@@ -148,6 +197,7 @@ pub async fn sync_private(ctx: &mut TestContext) -> Result<()> {
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.
+#[must_use]
 pub fn restored_private_account<'ctx>(
     ctx: &'ctx TestContext,
     account_id: AccountId,
@@ -190,7 +240,7 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> Result<u64> {
                 let last_seq =
                     sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
                         .await?;
-                info!(
+                log::info!(
                     "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
                 );
                 return Ok(ind);

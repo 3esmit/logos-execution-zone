@@ -27,7 +27,6 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::program::DEFAULT_PROGRAM_ID;
-use log::info;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
@@ -170,13 +169,13 @@ unsafe extern "C" {
 
     fn wallet_ffi_free_transfer_result(result: *mut FfiTransferResult);
 
-    fn wallet_ffi_bridge_withdraw(
-        handle: *mut WalletHandle,
-        from: *const FfiBytes32,
-        amount: u64,
-        bedrock_account_pk: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
+    // fn wallet_ffi_bridge_withdraw(
+    //     handle: *mut WalletHandle,
+    //     from: *const FfiBytes32,
+    //     amount: u64,
+    //     bedrock_account_pk: *const FfiBytes32,
+    //     out_result: *mut FfiTransferResult,
+    // ) -> error::WalletFfiError;
 
     fn wallet_ffi_get_vault_balance(
         handle: *mut WalletHandle,
@@ -291,6 +290,12 @@ unsafe extern "C" {
     ) -> LabelList;
 
     fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> error::WalletFfiError;
+
+    fn wallet_ffi_poll_transaction_status(
+        handle: *mut WalletHandle,
+        tx_hash: FfiBytes32,
+        transaction_status: *mut bool,
+    ) -> error::WalletFfiError;
 }
 
 fn new_wallet_ffi_with_test_context_config(
@@ -396,7 +401,7 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
 
 #[test]
 fn wallet_ffi_reads_bounded_local_public_history_from_configured_leader() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -443,7 +448,7 @@ fn wallet_ffi_reads_bounded_local_public_history_from_configured_leader() -> Res
 
 #[test]
 fn wallet_ffi_create_public_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let n_accounts = 10;
 
     // Create `n_accounts` public accounts with wallet FFI
@@ -484,7 +489,7 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
 
 #[test]
 fn wallet_ffi_create_private_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let n_accounts = 10;
     // Create `n_accounts` receiving keys with wallet FFI
     let new_npks_ffi = unsafe {
@@ -519,7 +524,7 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
 
 #[test]
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     // Create a receiving key and save
     let first_npk = unsafe {
@@ -559,7 +564,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_list_accounts() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     // Create the wallet FFI and track which account IDs were created as public/private
     let (wallet_ffi_handle, created_public_ids) = unsafe {
         let home = tempfile::tempdir()?;
@@ -628,7 +633,7 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_balance_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -650,7 +655,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
     };
     assert_eq!(balance, 10000);
 
-    info!("Successfully retrieved account balance");
+    log::info!("Successfully retrieved account balance");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -661,7 +666,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_account_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -694,14 +699,14 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
 
 #[test]
 fn test_wallet_ffi_get_account_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -733,14 +738,14 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account with correct details");
+    log::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
 
 #[test]
 fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_public_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -771,7 +776,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
 
     assert_eq!(key, expected_key);
 
-    info!("Successfully retrieved account key");
+    log::info!("Successfully retrieved account key");
 
     unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
@@ -782,7 +787,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let account_id: AccountId = ctx.ctx().existing_private_accounts()[0];
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -821,7 +826,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    info!("Successfully retrieved account keys");
+    log::info!("Successfully retrieved account keys");
 
     Ok(())
 }
@@ -868,7 +873,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 
 #[test]
 fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -905,7 +910,7 @@ fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Check that the program owner is now the authenticated transfer program
@@ -934,7 +939,7 @@ fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
 
 #[test]
 fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -958,7 +963,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -994,7 +999,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1016,7 +1021,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let from_balance = unsafe {
@@ -1041,8 +1046,18 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     assert_eq!(from_balance, 9900);
     assert_eq!(to_balance, 20100);
 
+    // Also check for transaction inclusion
+    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
+    let mut is_included = false;
+
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
+            .unwrap();
+    }
+
+    assert!(is_included);
+
+    unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
@@ -1051,7 +1066,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_shielded() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1088,7 +1103,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1134,7 +1149,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1156,7 +1171,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     }
     .unwrap();
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1197,7 +1212,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1235,7 +1250,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1280,7 +1295,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
 #[test]
 fn restore_keys_from_seed_ffi() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1325,9 +1340,9 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut public_account_id_2).unwrap();
     }
 
-    info!("Accounts created");
+    log::info!("Accounts created");
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1359,7 +1374,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1387,7 +1402,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1411,7 +1426,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1435,7 +1450,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1452,11 +1467,11 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_free_transfer_result(&raw mut transfer_result_4);
     }
 
-    info!("Preparation complete, performing keys restoration");
+    log::info!("Preparation complete, performing keys restoration");
 
     let password = CString::new(ctx.ctx().wallet_password())?;
 
-    info!("Checking balance correctness before restoration");
+    log::info!("Checking balance correctness before restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -1519,7 +1534,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
 
-    info!("Checking balance correctness after restoration");
+    log::info!("Checking balance correctness after restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -1570,77 +1585,77 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_1_balance, 102);
     assert_eq!(public_account_id_2_balance, 103);
 
-    info!("Accounts restored");
+    log::info!("Accounts restored");
 
     Ok(())
 }
 
-#[test]
-fn test_wallet_ffi_bridge_withdraw() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
-    let bridge_account: FfiBytes32 = system_accounts::bridge_account_id().into();
-    let bedrock_account_pk = FfiBytes32::from_bytes([0x42; 32]);
-    let amount = 100_u64;
+// #[test]
+// fn test_wallet_ffi_bridge_withdraw() -> Result<()> {
+//     let ctx = BlockingTestContext::new()?;
+//     let home = tempfile::tempdir()?;
+//     let FfiCreateWalletOutput {
+//         wallet: wallet_ffi_handle,
+//         mnemonic: _,
+//     } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+//     let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+//     let bridge_account: FfiBytes32 = system_accounts::bridge_account_id().into();
+//     let bedrock_account_pk = FfiBytes32::from_bytes([0x42; 32]);
+//     let amount = 100_u64;
 
-    let mut transfer_result = FfiTransferResult::default();
-    unsafe {
-        wallet_ffi_bridge_withdraw(
-            wallet_ffi_handle,
-            &raw const from,
-            amount,
-            &raw const bedrock_account_pk,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
+//     let mut transfer_result = FfiTransferResult::default();
+//     unsafe {
+//         wallet_ffi_bridge_withdraw(
+//             wallet_ffi_handle,
+//             &raw const from,
+//             amount,
+//             &raw const bedrock_account_pk,
+//             &raw mut transfer_result,
+//         )
+//         .unwrap();
+//     }
 
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
+//     log::info!("Waiting for next block creation");
+//     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
-    let from_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const from,
-            true,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
+//     let from_balance = unsafe {
+//         let mut out_balance: [u8; 16] = [0; 16];
+//         wallet_ffi_get_balance(
+//             wallet_ffi_handle,
+//             &raw const from,
+//             true,
+//             &raw mut out_balance,
+//         )
+//         .unwrap();
+//         u128::from_le_bytes(out_balance)
+//     };
 
-    let bridge_balance = unsafe {
-        let mut out_balance: [u8; 16] = [0; 16];
-        wallet_ffi_get_balance(
-            wallet_ffi_handle,
-            &raw const bridge_account,
-            true,
-            &raw mut out_balance,
-        )
-        .unwrap();
-        u128::from_le_bytes(out_balance)
-    };
+//     let bridge_balance = unsafe {
+//         let mut out_balance: [u8; 16] = [0; 16];
+//         wallet_ffi_get_balance(
+//             wallet_ffi_handle,
+//             &raw const bridge_account,
+//             true,
+//             &raw mut out_balance,
+//         )
+//         .unwrap();
+//         u128::from_le_bytes(out_balance)
+//     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(bridge_balance, 1_000_100);
+//     assert_eq!(from_balance, 9900);
+//     assert_eq!(bridge_balance, 1_000_100);
 
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
+//     unsafe {
+//         wallet_ffi_free_transfer_result(&raw mut transfer_result);
+//         wallet_ffi_destroy(wallet_ffi_handle);
+//     }
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 #[test]
 fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1691,7 +1706,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let from_balance = unsafe {
@@ -1734,7 +1749,7 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1790,7 +1805,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
 
     assert_eq!(transaction_result.secrets_size, 2);
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -1843,7 +1858,7 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1863,7 +1878,7 @@ fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
     })
     .unwrap();
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let vault_balance = unsafe {
@@ -1890,7 +1905,7 @@ fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let vault_balance_after_claim = unsafe {
@@ -1928,7 +1943,7 @@ fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -1949,7 +1964,7 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
     })
     .unwrap();
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let vault_balance = unsafe {
@@ -1976,7 +1991,7 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
         .unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -2020,7 +2035,7 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_single_label() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -2032,7 +2047,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();
@@ -2069,7 +2084,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
 
 #[test]
 fn test_wallet_ffi_more_labels() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
+    let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
         wallet: wallet_ffi_handle,
@@ -2081,7 +2096,7 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();

@@ -94,7 +94,7 @@ impl AtaSubcommand {
         match owner_resolved {
             AccountIdWithPrivacy::Public(owner_id) => {
                 let tx_hash = Ata(wallet_core)
-                    .send_create(owner.into_public_identity(owner_id), definition_id)
+                    .send_create(owner.into_public_identity(owner_id, true), definition_id)
                     .await?;
                 wallet_core
                     .poll_and_finalize_public_transaction(tx_hash)
@@ -127,7 +127,7 @@ impl AtaSubcommand {
             AccountIdWithPrivacy::Public(from_id) => {
                 let tx_hash = Ata(wallet_core)
                     .send_transfer(
-                        from.into_public_identity(from_id),
+                        from.into_public_identity(from_id, true),
                         definition_id,
                         to_id,
                         amount,
@@ -162,7 +162,7 @@ impl AtaSubcommand {
             AccountIdWithPrivacy::Public(holder_id) => {
                 let tx_hash = Ata(wallet_core)
                     .send_burn(
-                        holder.into_public_identity(holder_id),
+                        holder.into_public_identity(holder_id, true),
                         definition_id,
                         amount,
                     )

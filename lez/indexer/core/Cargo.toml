@@ -12,6 +12,7 @@ default = []
 testnet = ["common/testnet", "storage/testnet", "testnet_initial_state/testnet"]
 
 [dependencies]
+chain_state.workspace = true
 common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
@@ -32,11 +33,11 @@ futures.workspace = true
 url.workspace = true
 logos-blockchain-core.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 async-stream.workspace = true
 tokio.workspace = true
 risc0-zkvm.workspace = true
 hex.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

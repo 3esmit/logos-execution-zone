@@ -61,7 +61,7 @@ impl AuthTransferSubcommand {
         match resolved {
             AccountIdWithPrivacy::Public(pub_account_id) => {
                 let tx_hash = NativeTokenTransfer(wallet_core)
-                    .register_account(account_id.into_public_identity(pub_account_id))
+                    .register_account(account_id.into_public_identity(pub_account_id, true))
                     .await?;
 
                 wallet_core
@@ -136,8 +136,8 @@ impl AuthTransferSubcommand {
                     let to_mention = to_account.expect("matched Some branch");
                     if submit_only {
                         return NativeTokenTransferProgramSubcommand::handle_public(
-                            Some(from_account.into_public_identity(from)),
-                            Some(to_mention.into_public_identity(to)),
+                            Some(from_account.into_public_identity(from, true)),
+                            Some(to_mention.into_public_identity(to, false)),
                             amount,
                             true,
                             wallet_core,
@@ -145,8 +145,8 @@ impl AuthTransferSubcommand {
                         .await;
                     }
                     NativeTokenTransferProgramSubcommand::Public {
-                        from: Some(from_account.into_public_identity(from)),
-                        to: Some(to_mention.into_public_identity(to)),
+                        from: Some(from_account.into_public_identity(from, true)),
+                        to: Some(to_mention.into_public_identity(to, false)),
                         amount,
                     }
                 }
@@ -165,7 +165,7 @@ impl AuthTransferSubcommand {
                 (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
                     NativeTokenTransferProgramSubcommand::Shielded(
                         NativeTokenTransferProgramSubcommandShielded::ShieldedOwned {
-                            from: Some(from_account.into_public_identity(from)),
+                            from: Some(from_account.into_public_identity(from, true)),
                             to,
                             amount,
                         },
@@ -187,7 +187,7 @@ impl AuthTransferSubcommand {
                 AccountIdWithPrivacy::Public(from) => {
                     NativeTokenTransferProgramSubcommand::Shielded(
                         NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
-                            from: Some(from_account.into_public_identity(from)),
+                            from: Some(from_account.into_public_identity(from, true)),
                             to_npk,
                             to_vpk,
                             to_identifier,

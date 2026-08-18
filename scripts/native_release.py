@@ -26,10 +26,6 @@ TARGETS = {
         "libraries": ("lib/libwallet_ffi.dylib", "lib/libindexer_ffi.dylib"),
     },
 }
-PYTHON_RUNTIME_PATTERNS = {
-    "linux-amd64": re.compile(r"^libpython[0-9]+(?:\.[0-9]+)*\.so(?:\.[0-9]+)*$"),
-    "darwin-arm64": re.compile(r"^Python$"),
-}
 COMMON_REQUIRED_FILES = (
     "bin/wallet",
     "bin/sequencer_service",
@@ -46,7 +42,6 @@ COMMON_REQUIRED_FILES = (
     "share/config-examples/indexer_config.json",
     "share/completions/bash/wallet",
     "share/completions/zsh/_wallet",
-    "share/licenses/Python-PSF-2.0.txt",
     "README.md",
     "LICENSE",
 )
@@ -139,15 +134,6 @@ def required_files(target: str) -> tuple[str, ...]:
     return tuple(sorted((*COMMON_REQUIRED_FILES, *libraries)))
 
 
-def bundled_python_runtimes(stage: Path, target: str) -> list[Path]:
-    validate_target(target)
-    pattern = PYTHON_RUNTIME_PATTERNS[target]
-    runtime_dir = stage / "lib"
-    if not runtime_dir.is_dir():
-        return []
-    return [path for path in runtime_dir.iterdir() if path.is_file() and pattern.fullmatch(path.name)]
-
-
 def regular_files(root: Path, *, include_manifest: bool = False) -> list[Path]:
     result: list[Path] = []
     for path in sorted(root.rglob("*")):
@@ -175,15 +161,6 @@ def validate_stage(stage: Path, target: str) -> None:
     missing = sorted(set(required_files(target)) - present)
     if missing:
         raise ReleaseError(f"bundle is missing required files: {', '.join(missing)}")
-
-    python_runtimes = bundled_python_runtimes(stage, target)
-    if len(python_runtimes) != 1:
-        expected = PYTHON_RUNTIME_PATTERNS[target].pattern
-        actual = ", ".join(path.name for path in python_runtimes) or "none"
-        raise ReleaseError(
-            "bundle must contain exactly one Python runtime "
-            f"matching {expected}: {actual}"
-        )
 
     site_files = [path for path in present if path.startswith("share/explorer/site/")]
     if not site_files:
