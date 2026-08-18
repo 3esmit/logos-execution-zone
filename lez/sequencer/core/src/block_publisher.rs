@@ -257,7 +257,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             ..ZoneSdkSequencerConfig::new(FundingConfig {
                 funding_pk: config.funding_key,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee: config.priority_fee,
+                priority_fee_percent: config.priority_fee,
             })
         };
 
@@ -672,7 +672,7 @@ async fn fund_ops(
         change_public_key: funding_key,
         funding_public_keys: vec![funding_key],
         max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-        priority_fee,
+        priority_fee_percent: priority_fee,
     })
     .await
     .context("Failed to fund channel transaction")
