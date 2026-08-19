@@ -4,8 +4,8 @@ use anyhow::Result;
 use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    AuthorizationSecretKey, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, DummyInput,
-    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
+    InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
@@ -201,7 +201,6 @@ impl AccountManager {
         wallet: &WalletCore,
         accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
-        let requires_private_proof_refresh = requires_private_proof_refresh(&accounts);
         let mut states = Vec::with_capacity(accounts.len());
         let mut pin = None;
 
@@ -315,13 +314,7 @@ impl AccountManager {
             states.push(state);
         }
 
-        let dummy_commitment_root = if requires_private_proof_refresh {
-            fetch_private_proofs_and_root(wallet, &mut states).await?
-        } else {
-            // Pure public transactions never consume a commitment root, so they remain
-            // compatible with sequencers that do not expose the bulk proof RPC.
-            DUMMY_COMMITMENT_HASH
-        };
+        let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
         Ok(Self {
             states,
@@ -534,20 +527,20 @@ fn private_key_tree_acc_preparation(
 
     let from_identifier = from_acc.kind.identifier();
     let from_keys = &from_acc.key_chain;
-    let ask = from_keys.private_key_holder.authorization_secret_key;
+    // A PDA is program-authorized and carries no credential of its own.
+    let ask = (!is_pda).then_some(from_keys.private_key_holder.authorization_secret_key);
     let nsk = from_keys.private_key_holder.nullifier_secret_key();
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
+    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), ask.is_some(), account_id);
 
     let random_seed = random_bytes();
 
     Ok(AccountPreparedData {
-        // A PDA is program-authorized and carries no credential of its own.
-        ask: (!is_pda).then_some(ask),
+        ask,
         nsk: Some(nsk),
         npk: from_npk,
         identifier: from_identifier,
@@ -600,7 +593,7 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let pre_state = AccountWithMetadata::new(acc, true, account_id);
+    let pre_state = AccountWithMetadata::new(acc, ask.is_some(), account_id);
 
     let random_seed = random_bytes();
 
@@ -644,10 +637,6 @@ async fn fetch_private_proofs_and_root(
     }
 
     Ok(root)
-}
-
-fn requires_private_proof_refresh(accounts: &[AccountIdentity]) -> bool {
-    accounts.iter().any(AccountIdentity::is_private)
 }
 
 fn validate_proofs_against_root(
@@ -724,26 +713,6 @@ mod tests {
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
-    }
-
-    #[test]
-    fn public_accounts_skip_private_proof_refresh() {
-        let accounts = [
-            AccountIdentity::Public(AccountId::new([1; 32])),
-            AccountIdentity::PublicNoSign(AccountId::new([2; 32])),
-        ];
-
-        assert!(!requires_private_proof_refresh(&accounts));
-    }
-
-    #[test]
-    fn private_accounts_require_private_proof_refresh() {
-        let accounts = [
-            AccountIdentity::Public(AccountId::new([1; 32])),
-            AccountIdentity::PrivateOwned(AccountId::new([2; 32])),
-        ];
-
-        assert!(requires_private_proof_refresh(&accounts));
     }
 
     fn private_state() -> State {

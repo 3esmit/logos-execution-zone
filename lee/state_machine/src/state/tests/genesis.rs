@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use super::*;
 
 #[test]
@@ -26,13 +24,10 @@ fn new_works() {
         );
         this
     };
-    let expected_builtin_programs = HashMap::new();
-
     let state =
         V03State::new().with_public_account_balances([(addr1, 100_u128), (addr2, 151_u128)]);
 
     assert_eq!(state.public_state, expected_public_state);
-    assert_eq!(state.programs, expected_builtin_programs);
 }
 
 #[test]
@@ -69,11 +64,12 @@ fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
     let program_id = program_to_insert.id();
-    assert!(!state.programs.contains_key(&program_id));
+    let account_id = lee_core::account::AccountId::from(program_id);
+    assert!(!state.public_state.contains_key(&account_id));
 
-    state.insert_program(program_to_insert);
+    state.insert_program(&program_to_insert);
 
-    assert!(state.programs.contains_key(&program_id));
+    assert!(state.public_state.contains_key(&account_id));
 }
 
 #[test]
@@ -83,7 +79,7 @@ fn get_account_by_account_id_non_default_account() {
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -105,29 +101,6 @@ fn get_account_by_account_id_default_account() {
     let account = state.get_account_by_id(addr2);
 
     assert_eq!(account, expected_account);
-}
-
-#[test]
-fn builtin_programs_getter() {
-    let state = V03State::new();
-
-    let builtin_programs = state.programs();
-
-    assert_eq!(builtin_programs, &state.programs);
-}
-
-#[test]
-fn program_ids_are_sorted() {
-    assert!(V03State::new().program_ids().is_empty());
-
-    let first_program = crate::program::Program::new_unchecked([2; 8], Cow::Borrowed(&[]));
-    let second_program = crate::program::Program::new_unchecked([1; 8], Cow::Borrowed(&[]));
-    let mut expected_program_ids = vec![first_program.id(), second_program.id()];
-    expected_program_ids.sort_unstable();
-
-    let state = V03State::new().with_programs([first_program, second_program]);
-
-    assert_eq!(state.program_ids(), expected_program_ids);
 }
 
 #[test]

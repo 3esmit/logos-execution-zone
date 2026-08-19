@@ -27,7 +27,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 account.account_id,
                 Account {
-                    program_owner: authenticated_transfer_id,
+                    program_owner: authenticated_transfer_id.into(),
                     balance: account.balance,
                     ..Account::default()
                 },
@@ -65,7 +65,7 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
             let account_id = AccountId::from_str(account_id)
                 .expect("Testnet private account ID should be a valid account ID");
             let mut account = initial_data.account;
-            account.program_owner = authenticated_transfer_id;
+            account.program_owner = authenticated_transfer_id.into();
             (
                 lee_core::Commitment::new(&account_id, &account),
                 lee_core::Nullifier::for_account_initialization(&account_id),
@@ -100,7 +100,7 @@ mod tests {
         for account_id in system_accounts::clock_account_ids() {
             assert_eq!(
                 state.get_account_by_id(account_id).program_owner,
-                clock_program_id
+                clock_program_id.into()
             );
         }
 
@@ -139,7 +139,7 @@ mod tests {
                         (
                             account_id,
                             Account {
-                                program_owner: clock_program_id,
+                                program_owner: clock_program_id.into(),
                                 data: data
                                     .to_vec()
                                     .try_into()
@@ -182,7 +182,7 @@ mod tests {
             let account_id = AccountId::from_str(account_id)
                 .expect("Testnet private account ID should be a valid account ID");
             let commitment_account = Account {
-                program_owner: authenticated_transfer_id,
+                program_owner: authenticated_transfer_id.into(),
                 ..initial_data.account
             };
             let commitment = lee_core::Commitment::new(&account_id, &commitment_account);
