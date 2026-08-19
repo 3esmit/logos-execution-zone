@@ -8,7 +8,7 @@ use lee::{
 };
 use num_bigint::BigUint;
 use sequencer_core::{
-    config::{BedrockConfig, InitialStateProfile, SequencerConfig},
+    config::{BedrockConfig, SequencerConfig},
     mock::MockBlockPublisher,
 };
 use tokio::test;
@@ -34,10 +34,10 @@ fn sequencer_config() -> (SequencerConfig, tempfile::TempDir) {
             priority_fee: sequencer_core::config::default_priority_fee(),
         },
         genesis: Vec::new(),
+        initial_state_profile: Default::default(),
         cross_zone: None,
         metrics_address: None,
         gossip: None,
-        initial_state_profile: InitialStateProfile::default(),
     };
 
     (config, home)

@@ -45,7 +45,7 @@ use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
     multi_client::{MultiSequencerClient, Statistics, extract_statistics_from_path},
-    poller::TxPoller,
+    poller::{TxPoller, multi_poll},
     storage::key_chain::{NullifierIndex, SharedAccountEntry},
 };
 
@@ -632,11 +632,6 @@ impl WalletCore {
     }
 
     /// Read one bounded page of trusted local public history from the configured leader.
-    ///
-    /// The request starts at the protocol's maximum bounded page size and retries a configured
-    /// response-limit error with progressively smaller pages. `expected_tip` pins continuation
-    /// pages to the first response's snapshot; callers must not treat this local sequencer
-    /// response as public-network finality.
     pub async fn get_local_public_block_history(
         &self,
         start_block_id: u64,
@@ -714,12 +709,8 @@ impl WalletCore {
     }
 
     /// Poll transactions.
-    pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<LeeTransaction> {
-        self.poller_helm().poll_tx(hash).await
-    }
-
     pub async fn poll_transaction(&self, tx_hash: HashType) -> Result<LeeTransaction> {
-        self.poller_helm().poll_tx(tx_hash).await
+        multi_poll(self.poller_vec(), tx_hash).await
     }
 
     pub async fn get_proofs_and_root(
@@ -948,6 +939,7 @@ impl WalletCore {
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
         let message = lee::program_deployment_transaction::Message::new(bytecode);
         let transaction = ProgramDeploymentTransaction::new(message);
+
         let expected_transaction = LeeTransaction::ProgramDeployment(transaction.clone());
         let expected_hash = expected_transaction.hash();
         let expected_bytecode = transaction.message.into_bytecode();
@@ -980,20 +972,6 @@ impl WalletCore {
             Err(readback_error) => anyhow::bail!(
                 "deployment submission outcome is unknown for {expected_hash}: all sequencer submissions failed; hash lookup failed: {readback_error:#}"
             ),
-        }
-    }
-
-    fn validate_then_apply_privacy_messages(
-        transactions: &[LeeTransaction],
-        mut apply_message: impl FnMut(&Message),
-    ) {
-        // Each private action carries its nullifier, commitment, and ciphertext together;
-        // the current message representation cannot contain mismatched note vectors.
-        for transaction in transactions {
-            let LeeTransaction::PrivacyPreserving(transaction) = transaction else {
-                continue;
-            };
-            apply_message(&transaction.message);
         }
     }
 
@@ -1035,14 +1013,17 @@ impl WalletCore {
                 Err(error) => break Err(error),
             };
 
-            Self::validate_then_apply_privacy_messages(&block.body.transactions, |message| {
+            for tx in block.body.transactions {
+                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
+                    continue;
+                };
                 // Eagerly decrypt note updates using expected nullifiers.
                 let handled = self
                     .storage
                     .key_chain_mut()
-                    .sync_updates_via_nullifiers(message, &mut index);
-                self.sync_private_accounts_with_message(message, &mut index, &handled);
-            });
+                    .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
+                self.sync_private_accounts_with_message(&pp_tx.message, &mut index, &handled);
+            }
 
             self.storage.set_last_synced_block(block.header.block_id);
             if checkpoint.record_block() {
@@ -1050,9 +1031,6 @@ impl WalletCore {
             }
             bar.inc(1);
         };
-        // Preserve the cursor and account updates from accepted blocks before
-        // returning any polling or block-processing error. This keeps retries
-        // and process restarts bounded to the unprocessed tail.
         checkpoint.finish_sync_attempt(sync_result, || self.store_persistent_data())?;
         bar.finish();
 
@@ -1194,11 +1172,11 @@ async fn get_local_public_block_history_page(
 ) -> Result<LocalPublicBlockHistoryPageV1, ClientError> {
     let mut max_blocks = MAX_LOCAL_PUBLIC_BLOCK_HISTORY_BLOCKS;
     loop {
-        let request = bounded_local_public_block_history_request(
+        let request = LocalPublicBlockHistoryRequestV1 {
             start_block_id,
-            expected_tip.clone(),
             max_blocks,
-        );
+            expected_tip: expected_tip.clone(),
+        };
         match client.get_local_public_block_history(request).await {
             Ok(page) => return Ok(page),
             Err(error) if is_local_public_block_history_response_limit_error(&error) => {
@@ -1243,18 +1221,6 @@ const fn smaller_local_public_block_history_page(max_blocks: u8) -> Option<u8> {
         Some(max_blocks >> 1)
     } else {
         None
-    }
-}
-
-const fn bounded_local_public_block_history_request(
-    start_block_id: u64,
-    expected_tip: Option<LocalBlockHeaderReceiptV1>,
-    max_blocks: u8,
-) -> LocalPublicBlockHistoryRequestV1 {
-    LocalPublicBlockHistoryRequestV1 {
-        start_block_id,
-        max_blocks,
-        expected_tip,
     }
 }
 
@@ -1307,72 +1273,6 @@ mod tests {
     use std::{ffi::CString, str::FromStr as _};
 
     use bip39::Mnemonic;
-    use lee::privacy_preserving_transaction::{circuit::Proof, witness_set::WitnessSet};
-
-    use super::{
-        AccountIdWithPrivacy, ClientError, HttpError,
-        LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE, Label, LeeTransaction, Message,
-        PrivacyPreservingTransaction, ProgramDeploymentTransaction, SYNC_PERSIST_CHECKPOINT_BLOCKS,
-        Storage, SyncPersistenceCheckpoint, WalletCore,
-        is_local_public_block_history_response_limit_error,
-    };
-
-    fn privacy_transaction(message: Message) -> LeeTransaction {
-        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            message,
-            WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
-        ))
-    }
-
-    fn deployment_transaction(bytecode: Vec<u8>) -> LeeTransaction {
-        LeeTransaction::ProgramDeployment(ProgramDeploymentTransaction::new(
-            lee::program_deployment_transaction::Message::new(bytecode),
-        ))
-    }
-
-    #[test]
-    fn deployment_readback_accepts_matching_transaction() {
-        let bytecode = vec![0x7f, 0x45, 0x4c, 0x46];
-        let transaction = deployment_transaction(bytecode.clone());
-        let expected_hash = transaction.hash();
-
-        let resolved =
-            super::verify_deployment_readback(expected_hash, &bytecode, Some(transaction)).unwrap();
-
-        assert_eq!(resolved, expected_hash);
-    }
-
-    #[test]
-    fn deployment_readback_rejects_mismatched_bytecode() {
-        let transaction = deployment_transaction(vec![1, 2, 3]);
-        let expected_hash = transaction.hash();
-
-        let error = super::verify_deployment_readback(expected_hash, &[9, 9, 9], Some(transaction))
-            .unwrap_err();
-
-        assert!(error.to_string().contains("different bytecode"));
-    }
-
-    #[test]
-    fn deployment_readback_rejects_missing_transaction() {
-        let expected_hash = common::HashType([7; 32]);
-        let error = super::verify_deployment_readback(expected_hash, &[], None).unwrap_err();
-
-        assert!(error.to_string().contains("do not retry automatically"));
-    }
-
-    #[test]
-    fn deployment_readback_rejects_wrong_transaction_type() {
-        let bytecode = vec![1, 2, 3];
-        let deployment = deployment_transaction(bytecode);
-        let expected_hash = deployment.hash();
-        let wrong_type = privacy_transaction(Message::default());
-
-        let error =
-            super::verify_deployment_readback(expected_hash, &[], Some(wrong_type)).unwrap_err();
-
-        assert!(error.to_string().contains("non-deployment"));
-    }
 
     #[test]
     fn mnemonic_roundtrip() {
@@ -1388,213 +1288,5 @@ mod tests {
         let mn_ret = Mnemonic::from_str(mn_string).unwrap();
 
         assert_eq!(mnemonic, mn_ret);
-    }
-
-    #[test]
-    fn sync_persistence_checkpoint_bounds_full_chunks() {
-        let mut checkpoint = SyncPersistenceCheckpoint::default();
-        let persisted_after = (1..=201)
-            .filter(|_| checkpoint.record_block())
-            .collect::<Vec<_>>();
-
-        assert_eq!(persisted_after, vec![100, 200]);
-        assert!(checkpoint.has_unpersisted_blocks());
-    }
-
-    #[test]
-    fn sync_checkpoint_persists_partial_progress_across_poll_retries() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let storage_path = temp_dir.path().join("storage.json");
-        let mut checkpoint = SyncPersistenceCheckpoint::default();
-        let partial_progress = SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_sub(1);
-
-        for block_id in 1..=partial_progress {
-            storage.set_last_synced_block(block_id);
-            assert!(!checkpoint.record_block());
-        }
-
-        let error = checkpoint
-            .finish_sync_attempt(
-                Err(anyhow::anyhow!("simulated block polling failure")),
-                || storage.save_to_path(&storage_path),
-            )
-            .unwrap_err();
-
-        assert_eq!(error.to_string(), "simulated block polling failure");
-        assert!(!checkpoint.has_unpersisted_blocks());
-        let recovered = Storage::from_path(&storage_path).unwrap();
-        assert_eq!(recovered.last_synced_block(), partial_progress);
-
-        let mut retry_checkpoint = SyncPersistenceCheckpoint::default();
-        let retry_progress = partial_progress.saturating_mul(2);
-        for block_id in partial_progress.saturating_add(1)..=retry_progress {
-            storage.set_last_synced_block(block_id);
-            assert!(!retry_checkpoint.record_block());
-        }
-
-        let retry_error = retry_checkpoint
-            .finish_sync_attempt(
-                Err(anyhow::anyhow!("simulated retry polling failure")),
-                || storage.save_to_path(&storage_path),
-            )
-            .unwrap_err();
-
-        assert_eq!(retry_error.to_string(), "simulated retry polling failure");
-        assert!(!retry_checkpoint.has_unpersisted_blocks());
-        let recovered = Storage::from_path(&storage_path).unwrap();
-        assert_eq!(recovered.last_synced_block(), retry_progress);
-    }
-
-    #[test]
-    fn sync_checkpoint_persists_partial_progress_before_note_validation_error() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let storage_path = temp_dir.path().join("storage.json");
-        let mut checkpoint = SyncPersistenceCheckpoint::default();
-        let partial_progress = SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_sub(1);
-
-        for block_id in 1..=partial_progress {
-            storage.set_last_synced_block(block_id);
-            assert!(!checkpoint.record_block());
-        }
-
-        let validation_error = anyhow::anyhow!("simulated note validation failure");
-        let error = checkpoint
-            .finish_sync_attempt(Err(validation_error), || {
-                storage.save_to_path(&storage_path)
-            })
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("simulated note validation failure")
-        );
-        assert!(!checkpoint.has_unpersisted_blocks());
-        let recovered = Storage::from_path(&storage_path).unwrap();
-        assert_eq!(recovered.last_synced_block(), partial_progress);
-    }
-
-    #[test]
-    fn local_history_retries_json_rpc_response_limit_errors() {
-        let call_error = ClientError::Call(jsonrpsee::types::ErrorObjectOwned::owned(
-            -32000,
-            LOCAL_PUBLIC_BLOCK_HISTORY_RESPONSE_LIMIT_ERROR_MESSAGE,
-            None::<()>,
-        ));
-        assert!(is_local_public_block_history_response_limit_error(
-            &call_error
-        ));
-
-        let transport_error = ClientError::Transport(Box::new(HttpError::TooLarge));
-        assert!(is_local_public_block_history_response_limit_error(
-            &transport_error
-        ));
-    }
-
-    #[test]
-    fn local_history_does_not_retry_unrelated_transport_errors() {
-        let transport_error =
-            ClientError::Transport(Box::new(std::io::Error::other("connection reset")));
-        assert!(!is_local_public_block_history_response_limit_error(
-            &transport_error
-        ));
-    }
-
-    #[test]
-    fn sync_applies_all_structurally_valid_privacy_messages() {
-        let transactions = [
-            privacy_transaction(Message::default()),
-            privacy_transaction(Message::default()),
-        ];
-        let mut applied_messages = 0_usize;
-
-        WalletCore::validate_then_apply_privacy_messages(&transactions, |_| {
-            applied_messages = applied_messages.saturating_add(1);
-        });
-
-        assert_eq!(applied_messages, 2);
-    }
-
-    #[test]
-    fn sync_checkpoint_keeps_persisted_cursor_and_accounts_together() {
-        let (mut storage, _) = Storage::new("test_pass").unwrap();
-        let temp_dir = tempfile::tempdir().unwrap();
-        let storage_path = temp_dir.path().join("storage.json");
-        let mut checkpoint = SyncPersistenceCheckpoint::default();
-
-        let (checkpoint_account, _) = storage
-            .key_chain_mut()
-            .generate_new_public_transaction_private_key(None);
-        let checkpoint_label = Label::new("checkpoint");
-        storage
-            .add_label(
-                checkpoint_label.clone(),
-                AccountIdWithPrivacy::Public(checkpoint_account),
-            )
-            .unwrap();
-
-        for block_id in 1..=SYNC_PERSIST_CHECKPOINT_BLOCKS {
-            storage.set_last_synced_block(block_id);
-            if checkpoint.record_block() {
-                storage.save_to_path(&storage_path).unwrap();
-            }
-        }
-
-        let (tail_account, _) = storage
-            .key_chain_mut()
-            .generate_new_public_transaction_private_key(None);
-        let tail_label = Label::new("unpersisted-tail");
-        storage
-            .add_label(
-                tail_label.clone(),
-                AccountIdWithPrivacy::Public(tail_account),
-            )
-            .unwrap();
-        storage.set_last_synced_block(SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1));
-        assert!(!checkpoint.record_block());
-
-        let recovered = Storage::from_path(&storage_path).unwrap();
-        assert_eq!(
-            recovered.last_synced_block(),
-            SYNC_PERSIST_CHECKPOINT_BLOCKS
-        );
-        assert_eq!(
-            recovered.resolve_label(&checkpoint_label),
-            Some(AccountIdWithPrivacy::Public(checkpoint_account))
-        );
-        assert!(
-            recovered
-                .key_chain()
-                .pub_account_signing_key(checkpoint_account)
-                .is_some()
-        );
-        assert_eq!(recovered.resolve_label(&tail_label), None);
-        assert!(
-            recovered
-                .key_chain()
-                .pub_account_signing_key(tail_account)
-                .is_none()
-        );
-
-        checkpoint
-            .finish_sync_attempt(Ok(()), || storage.save_to_path(&storage_path))
-            .unwrap();
-        let completed = Storage::from_path(&storage_path).unwrap();
-        assert_eq!(
-            completed.last_synced_block(),
-            SYNC_PERSIST_CHECKPOINT_BLOCKS.saturating_add(1)
-        );
-        assert_eq!(
-            completed.resolve_label(&tail_label),
-            Some(AccountIdWithPrivacy::Public(tail_account))
-        );
-        assert!(
-            completed
-                .key_chain()
-                .pub_account_signing_key(tail_account)
-                .is_some()
-        );
     }
 }

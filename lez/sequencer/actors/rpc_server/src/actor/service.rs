@@ -368,6 +368,7 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
+        // TODO: Get programs from state
         let mut program_ids = BTreeMap::new();
         program_ids.insert(
             "authenticated_transfer".to_owned(),
@@ -425,6 +426,10 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
                 .collect(),
         })
     }
+}
+
+fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }
 
 fn validate_confirmation_depth(confirmation_depth: u8) -> Result<(), ErrorObjectOwned> {
@@ -673,8 +678,4 @@ fn instruction_data_sha256(instruction_data: &[u32]) -> HashType {
         hasher.update(word.to_le_bytes());
     }
     HashType(hasher.finalize().into())
-}
-
-fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }

@@ -235,6 +235,18 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetGenesisBlockId> for Ex
     }
 }
 
+impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProgramIds> for ExecutorActor<BP> {
+    type Reply = Vec<lee_core::program::ProgramId>;
+
+    async fn handle(
+        &mut self,
+        GetProgramIds: GetProgramIds,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.sequencer.with_state(lee::V03State::program_ids)
+    }
+}
+
 impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountBalance> for ExecutorActor<BP> {
     type Reply = Balance;
 
@@ -313,18 +325,6 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccount> for ExecutorA
                 .sequencer
                 .with_state(|state| state.get_account_by_id(account_id)),
         }
-    }
-}
-
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProgramIds> for ExecutorActor<BP> {
-    type Reply = Vec<lee_core::program::ProgramId>;
-
-    async fn handle(
-        &mut self,
-        GetProgramIds: GetProgramIds,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.sequencer.with_state(lee::V03State::program_ids)
     }
 }
 

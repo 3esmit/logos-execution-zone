@@ -24,6 +24,7 @@ thiserror.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
+lee.workspace = true
 sequencer_core = { workspace = true, features = ["mock"] }
 test_programs.workspace = true
 

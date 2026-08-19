@@ -26,12 +26,12 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::program::DEFAULT_PROGRAM_ID;
+use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
     FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiLocalBlockHeaderReceiptV1, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey,
-    FfiTransferResult, FfiU128, WalletHandle, error,
+    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
+    WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -197,7 +197,7 @@ unsafe extern "C" {
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_register_public_account_local(
+    fn wallet_ffi_register_public_account(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
         out_result: *mut FfiTransferResult,
@@ -216,13 +216,6 @@ unsafe extern "C" {
     fn wallet_ffi_get_current_block_height(
         handle: *mut WalletHandle,
         out_block_height: *mut u64,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_get_local_public_block_history(
-        handle: *mut WalletHandle,
-        start_block_id: u64,
-        expected_tip: *const FfiLocalBlockHeaderReceiptV1,
-        out_history_json: *mut *mut c_char,
     ) -> error::WalletFfiError;
 
     fn wallet_ffi_restore_data(
@@ -397,53 +390,6 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
             metrics_path.as_ptr(),
         )
     })
-}
-
-#[test]
-fn wallet_ffi_reads_bounded_local_public_history_from_configured_leader() -> Result<()> {
-    let ctx = BlockingTestContext::new_default()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    let mut raw_history_json: *mut c_char = std::ptr::null_mut();
-    unsafe {
-        wallet_ffi_get_local_public_block_history(
-            wallet_ffi_handle,
-            0,
-            std::ptr::null(),
-            &raw mut raw_history_json,
-        )
-        .unwrap();
-    }
-
-    if raw_history_json.is_null() {
-        unsafe {
-            wallet_ffi_destroy(wallet_ffi_handle);
-        }
-        anyhow::bail!("local public history returned success without a JSON result");
-    }
-    let history_json = unsafe { CStr::from_ptr(raw_history_json) }
-        .to_str()
-        .map(str::to_owned);
-    unsafe {
-        wallet_ffi_free_string(raw_history_json);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
-    let history_json = history_json?;
-
-    let page: serde_json::Value = serde_json::from_str(&history_json)?;
-    assert!(page["snapshot_tip"]["block_id"].is_u64());
-    assert!(page["snapshot_tip"]["timestamp"].is_u64());
-    assert!(
-        page["blocks"]
-            .as_array()
-            .is_some_and(|blocks| blocks.len() <= 32)
-    );
-
-    Ok(())
 }
 
 #[test]
@@ -688,7 +634,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -728,7 +674,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
 
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
@@ -872,7 +818,7 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
+fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     let ctx = BlockingTestContext::new_default()?;
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -897,12 +843,12 @@ fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
         .unwrap();
         (&out_account).try_into().unwrap()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_OWNER);
 
     // Call the init funciton
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        wallet_ffi_register_public_account_local(
+        wallet_ffi_register_public_account(
             wallet_ffi_handle,
             &raw const out_account_id,
             &raw mut transfer_result,
@@ -926,7 +872,7 @@ fn wallet_ffi_init_public_account_auth_transfer_local() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     unsafe {
@@ -986,7 +932,7 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     };
     assert_eq!(
         account.program_owner,
-        programs::authenticated_transfer().id()
+        programs::authenticated_transfer().id().into()
     );
 
     unsafe {
