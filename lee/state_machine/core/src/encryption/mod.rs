@@ -150,10 +150,6 @@ impl EncryptionScheme {
     }
 
     #[cfg(feature = "host")]
-    #[expect(
-        clippy::print_stdout,
-        reason = "This is the current way to debug things. TODO: fix later"
-    )]
     #[must_use]
     pub fn decrypt(
         ciphertext: &Ciphertext,
@@ -172,16 +168,8 @@ impl EncryptionScheme {
         let kind = PrivateAccountKind::from_header_bytes(header)?;
 
         let mut cursor = Cursor::new(&buffer[PrivateAccountKind::HEADER_LEN..]);
+        // Reject malformed notes without logging key or note material.
         Account::from_cursor(&mut cursor)
-            .inspect_err(|err| {
-                println!(
-                    "Failed to decode {ciphertext:?} \n
-                      with secret {:?} ,\n
-                      nullifier {nullifier:?} ,\n
-                      with error {err:?}",
-                    shared_secret.0
-                );
-            })
             .ok()
             .map(|account| (kind, account))
     }
@@ -194,6 +182,58 @@ mod tests {
         account::{Account, AccountId},
         program::PdaSeed,
     };
+
+    #[cfg(feature = "host")]
+    #[test]
+    #[expect(
+        clippy::print_stdout,
+        reason = "Markers isolate decryption output in the synthetic child-process probe"
+    )]
+    fn malformed_account_decryption_does_not_print() {
+        const CHILD: &str = "LOGOS_LEE_DECRYPT_OUTPUT_CHILD";
+        const BEGIN: &str = "LEE_DECRYPT_PROBE_BEGIN";
+        const END: &str = "LEE_DECRYPT_PROBE_END";
+
+        if std::env::var_os(CHILD).is_some() {
+            let secret = SharedSecretKey([0x5a; 32]);
+            let nullifier = Nullifier::for_account_initialization(&AccountId::new([0xa5; 32]));
+            // Valid note header, but no account body: reach Account::from_cursor's
+            // error path instead of rejecting an invalid header earlier.
+            let mut malformed = PrivateAccountKind::Regular(17).to_header_bytes().to_vec();
+            EncryptionScheme::symmetric_transform(&mut malformed, &secret, &nullifier);
+
+            println!("{BEGIN}");
+            assert!(
+                EncryptionScheme::decrypt(&Ciphertext(malformed), &secret, &nullifier).is_none()
+            );
+            println!("{END}");
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "encryption::tests::malformed_account_decryption_does_not_print",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("synthetic decryption probe must run");
+        assert!(output.status.success(), "synthetic decryption probe failed");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let (_, after_begin) = stdout
+            .split_once(BEGIN)
+            .expect("probe must actually execute");
+        let (diagnostics, _) = after_begin.split_once(END).expect("probe must complete");
+        assert!(
+            diagnostics.trim().is_empty(),
+            "decryption must not print secret-bearing diagnostics"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "decryption must not print to stderr"
+        );
+    }
 
     #[test]
     fn encrypt_same_length_for_account_and_pda() {
