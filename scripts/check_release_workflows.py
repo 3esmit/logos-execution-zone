@@ -56,6 +56,7 @@ def check_native() -> None:
         '"lez/sequencer/service/Cargo.toml"',
         '"lez/wallet-ffi/Cargo.toml"',
         '"lez/wallet/Cargo.toml"',
+        '"lee/state_machine/src/program/testnet_v0_2/**"',
         'tags:\n      - "v*"',
         "runs-on: ubuntu-24.04",
         "runs-on: macos-latest",
