@@ -34,7 +34,7 @@ fn sequencer_config() -> (SequencerConfig, tempfile::TempDir) {
             priority_fee: sequencer_core::config::default_priority_fee(),
         },
         genesis: Vec::new(),
-        initial_state_profile: Default::default(),
+        initial_state_profile: sequencer_core::config::InitialStateProfile::default(),
         cross_zone: None,
         metrics_address: None,
         gossip: None,
