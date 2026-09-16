@@ -2,6 +2,11 @@ use common::test_utils::produce_dummy_block;
 use lee::{Account, AccountId, PublicKey};
 use tempfile::tempdir;
 
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
+
 use super::*;
 
 fn genesis_block() -> Block {
@@ -31,7 +36,7 @@ fn initial_state() -> lee::V03State {
             (
                 id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id().into(),
+                    program_owner: network_programs::authenticated_transfer().id().into(),
                     balance,
                     ..Account::default()
                 },
@@ -44,7 +49,10 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_programs([programs::authenticated_transfer(), programs::clock()])
+        .with_programs([
+            network_programs::authenticated_transfer(),
+            network_programs::clock(),
+        ])
 }
 
 #[test]
