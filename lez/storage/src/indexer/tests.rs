@@ -1,11 +1,10 @@
 use common::test_utils::produce_dummy_block;
 use lee::{Account, AccountId, PublicKey};
-use tempfile::tempdir;
-
 #[cfg(not(feature = "testnet"))]
 use programs as network_programs;
 #[cfg(feature = "testnet")]
 use programs::testnet as network_programs;
+use tempfile::tempdir;
 
 use super::*;
 
