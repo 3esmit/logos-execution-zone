@@ -190,11 +190,11 @@ mod tests {
         reason = "Markers isolate decryption output in the synthetic child-process probe"
     )]
     fn malformed_account_decryption_does_not_print() {
-        const CHILD: &str = "LOGOS_LEE_DECRYPT_OUTPUT_CHILD";
+        const CHILD_ARG: &str = "lee-decrypt-output-child";
         const BEGIN: &str = "LEE_DECRYPT_PROBE_BEGIN";
         const END: &str = "LEE_DECRYPT_PROBE_END";
 
-        if std::env::var_os(CHILD).is_some() {
+        if std::env::args().any(|arg| arg == CHILD_ARG) {
             let secret = SharedSecretKey([0x5a; 32]);
             let nullifier = Nullifier::for_account_initialization(&AccountId::new([0xa5; 32]));
             // Valid note header, but no account body: reach Account::from_cursor's
@@ -215,12 +215,12 @@ mod tests {
                 "--exact",
                 "encryption::tests::malformed_account_decryption_does_not_print",
                 "--nocapture",
+                CHILD_ARG,
             ])
-            .env(CHILD, "1")
             .output()
             .expect("synthetic decryption probe must run");
         assert!(output.status.success(), "synthetic decryption probe failed");
-        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
         let (_, after_begin) = stdout
             .split_once(BEGIN)
             .expect("probe must actually execute");
