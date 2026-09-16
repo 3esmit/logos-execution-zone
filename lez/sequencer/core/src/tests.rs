@@ -125,6 +125,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
+        initial_state_profile: config::InitialStateProfile::default(),
         cross_zone: None,
         metrics_address: None,
         gossip: None,
