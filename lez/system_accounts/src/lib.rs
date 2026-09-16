@@ -4,6 +4,10 @@ use std::{collections::BTreeMap, str::FromStr as _};
 
 use clock_core::ClockAccountData;
 use lee_core::account::{Account, AccountId, Nonce};
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -32,7 +36,7 @@ pub fn pinata_account_id() -> AccountId {
 #[must_use]
 pub fn pinata_account() -> Account {
     Account {
-        program_owner: programs::pinata().id().into(),
+        program_owner: network_programs::pinata().id().into(),
         balance: 1_500_000,
         // Difficulty: 3
         data: vec![3; 33].try_into().expect("Should fit"),
@@ -42,13 +46,13 @@ pub fn pinata_account() -> Account {
 
 #[must_use]
 pub fn faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(programs::faucet().id())
+    faucet_core::compute_faucet_account_id(network_programs::faucet().id())
 }
 
 #[must_use]
 pub fn faucet_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: network_programs::authenticated_transfer().id().into(),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -56,13 +60,13 @@ pub fn faucet_account() -> Account {
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(programs::bridge().id())
+    bridge_core::compute_bridge_account_id(network_programs::bridge().id())
 }
 
 #[must_use]
 pub fn bridge_account() -> Account {
     Account {
-        program_owner: programs::authenticated_transfer().id().into(),
+        program_owner: network_programs::authenticated_transfer().id().into(),
         ..Account::default()
     }
 }
@@ -97,7 +101,7 @@ pub fn sequencer_stake_config_account() -> Account {
 #[must_use]
 pub fn clock_account() -> Account {
     Account {
-        program_owner: programs::clock().id().into(),
+        program_owner: network_programs::clock().id().into(),
         data: ClockAccountData {
             block_id: 0,
             timestamp: 0,

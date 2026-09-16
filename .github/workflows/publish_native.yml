@@ -15,6 +15,7 @@ on:
       - "lez/wallet-ffi/Cargo.toml"
       - "lez/wallet/Cargo.toml"
       - "lez/programs/src/testnet.rs"
+      - "lee/state_machine/src/program/testnet_v0_2/**"
       - "lez/testnet_initial_state/testnet-v0.2/**"
       - "scripts/build-native-release.sh"
       - "scripts/check_release_workflows.py"

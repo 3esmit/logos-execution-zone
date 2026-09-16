@@ -10,6 +10,9 @@ use serde::Serialize;
 
 use crate::error::LeeError;
 
+#[cfg(feature = "testnet-v0-2")]
+pub mod testnet_v0_2;
+
 /// Maximum number of cycles for a public execution.
 /// TODO: Make this variable when fees are implemented.
 const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
@@ -77,6 +80,10 @@ impl Program {
             .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
 
         // Get outputs
+        #[cfg(feature = "testnet-v0-2")]
+        if testnet_v0_2::uses_legacy_abi(self.id) {
+            return testnet_v0_2::decode_output(&session_info.journal);
+        }
         let program_output = session_info
             .journal
             .decode()
@@ -99,10 +106,19 @@ impl Program {
         env_builder
             .write(&caller_program_id)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
-        let pre_states = pre_states.to_vec();
-        env_builder
-            .write(&pre_states)
-            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        #[cfg(feature = "testnet-v0-2")]
+        let legacy = testnet_v0_2::uses_legacy_abi(program_id);
+        #[cfg(not(feature = "testnet-v0-2"))]
+        let legacy = false;
+
+        if legacy {
+            #[cfg(feature = "testnet-v0-2")]
+            testnet_v0_2::write_pre_states(pre_states, env_builder)?;
+        } else {
+            env_builder
+                .write(&pre_states)
+                .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        }
         env_builder
             .write(&instruction_data)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;

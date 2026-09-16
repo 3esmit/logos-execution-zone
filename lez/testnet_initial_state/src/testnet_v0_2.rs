@@ -163,11 +163,107 @@ mod tests {
             lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
         );
 
+        state
+            .transition_from_public_transaction(&transaction, 6_852, 1_783_235_730_974)
+            .expect("historical Testnet clock transaction should execute");
+
+        let clock_ids = system_accounts::clock_account_ids();
+        let latest = clock_core::ClockAccountData::from_bytes(
+            state.get_account_by_id(clock_ids[0]).data.as_ref(),
+        );
+        assert_eq!(latest.block_id, 6_852);
+        assert_eq!(latest.timestamp, 1_783_235_730_974);
+        for id in &clock_ids[1..] {
+            let unchanged = clock_core::ClockAccountData::from_bytes(
+                state.get_account_by_id(*id).data.as_ref(),
+            );
+            assert_eq!(unchanged.block_id, 6_850);
+            assert_eq!(unchanged.timestamp, 1_783_235_610_802);
+        }
+    }
+
+    #[test]
+    fn deployed_faucet_chains_to_authenticated_transfer() {
+        let mut state = initial_state();
+        let faucet_id = system_accounts::faucet_account_id();
+        let recipient_id = initial_public_user_accounts()[0].account_id;
+        let initial_balance = state.get_account_by_id(recipient_id).balance;
+        let message = lee::public_transaction::Message::try_new(
+            programs::testnet::faucet().id(),
+            vec![faucet_id, recipient_id],
+            vec![],
+            faucet_core::Instruction::GenesisTransferDirect { amount: 17 },
+        )
+        .unwrap();
+        let transaction = lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        );
+        state
+            .transition_from_public_transaction(&transaction, 1, 0)
+            .expect("deployed faucet and its nested authenticated transfer must execute");
+        assert_eq!(state.get_account_by_id(faucet_id).balance, u128::MAX - 17);
+        assert_eq!(
+            state.get_account_by_id(recipient_id).balance,
+            initial_balance + 17
+        );
+    }
+
+    #[test]
+    fn deployed_faucet_cannot_claim_unsigned_recipient() {
+        let mut state = initial_state();
+        let before = state.clone();
+        let message = lee::public_transaction::Message::try_new(
+            programs::testnet::faucet().id(),
+            vec![
+                system_accounts::faucet_account_id(),
+                AccountId::new([42; 32]),
+            ],
+            vec![],
+            faucet_core::Instruction::GenesisTransferDirect { amount: 17 },
+        )
+        .unwrap();
+        let transaction = lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        );
+        assert!(matches!(
+            state.transition_from_public_transaction(&transaction, 1, 0),
+            Err(lee::error::LeeError::InvalidProgramBehavior(
+                lee::error::InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { .. }
+            ))
+        ));
+        assert!(state == before);
+    }
+
+    #[test]
+    fn deployed_clock_rejects_wrong_owner_without_mutating_state() {
+        let mut state = initial_state();
+        let ids = system_accounts::clock_account_ids();
+        let wrong_account = Account {
+            program_owner: programs::clock().id().into(),
+            ..state.get_account_by_id(ids[0])
+        };
+        state = state.with_public_accounts([(ids[0], wrong_account.clone())]);
+        let before = state.clone();
+        let message = lee::public_transaction::Message::try_new(
+            programs::testnet::clock().id(),
+            ids.to_vec(),
+            vec![],
+            7_u64,
+        )
+        .unwrap();
+        let transaction = lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        );
         assert!(
             state
-                .transition_from_public_transaction(&transaction, 6_852, 1_783_235_730_974)
-                .is_ok()
+                .transition_from_public_transaction(&transaction, 1, 7)
+                .is_err()
         );
+        assert!(state == before);
+        assert_eq!(state.get_account_by_id(ids[0]), wrong_account);
     }
 
     #[test]
