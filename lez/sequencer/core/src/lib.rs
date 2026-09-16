@@ -32,6 +32,10 @@ use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
+#[cfg(not(feature = "testnet"))]
+use programs as network_programs;
+#[cfg(feature = "testnet")]
+use programs::testnet as network_programs;
 pub use storage::error::DbError;
 // Re-exported because `cross_zone_dead_letters` returns it and the service
 // crate does not depend on `storage`, so it could not otherwise name the type.
@@ -255,6 +259,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        config
+            .validate()
+            .unwrap_or_else(|err| panic!("Invalid sequencer config: {err}"));
         sequencer_core_metrics::init();
 
         let bedrock_signing_key =
@@ -290,6 +297,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
 
+        #[cfg(not(feature = "testnet"))]
         assert!(
             committee_discovery::config_is_readable(&state),
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
@@ -1415,6 +1423,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Shared handle to the two-tier follow state, for tests to drive the
     /// follow path directly.
     #[cfg(all(test, feature = "mock"))]
+    #[cfg(not(feature = "testnet"))]
     fn chain(&self) -> Arc<Mutex<ChainState>> {
         Arc::clone(&self.chain)
     }
@@ -1430,7 +1439,7 @@ struct BlockWithMeta {
 /// PDA exists. The receipt is the exactly-once ledger the bridge program keeps.
 fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
     let receipt_id =
-        bridge_core::deposit_receipt_account_id(programs::bridge().id(), deposit_op_id.0);
+        bridge_core::deposit_receipt_account_id(network_programs::bridge().id(), deposit_op_id.0);
     state
         .get_account_by_id_ref(receipt_id)
         .is_some_and(|receipt| *receipt != lee::Account::default())
@@ -1705,11 +1714,10 @@ fn apply_follow_update(
 /// the bootstrap sequencer's own stake, is applied as a genesis transaction in
 /// [`build_genesis_state`] so followers replay it instead of guessing it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
-    #[cfg(not(feature = "testnet"))]
-    let base = testnet_initial_state::initial_state();
-
-    #[cfg(feature = "testnet")]
-    let base = testnet_initial_state::initial_state_testnet();
+    if let Err(err) = config.initial_state_profile.validate_for_compiled_network() {
+        panic!("{err}");
+    }
+    let base = testnet_initial_state::initial_state_for_profile(config.initial_state_profile);
 
     // Bridge-lock holder balances belong to the source side and are not produced by
     // any transaction, so seed them directly. Cross-zone config is seeded by genesis
@@ -1727,6 +1735,9 @@ fn build_genesis_state(
     config: &SequencerConfig,
     bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
 ) -> (lee::V03State, Vec<LeeTransaction>) {
+    #[cfg(feature = "testnet")]
+    let _ = bootstrap_sequencer_key;
+
     let mut state = build_initial_state(config);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
@@ -1735,26 +1746,32 @@ fn build_genesis_state(
         hex::encode(state.genesis_fingerprint())
     );
 
-    // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. The wrapped-token minter and
-    // both emitters' pins are initialized on every zone: all three are builtins with
-    // a user-callable InitConfig, so a config PDA left default is claimable by the
-    // first initializer, hijacking the minter or repointing an emitter's outbox. The
-    // inbox allowlist is initialized only on receiving zones; the inbox is
-    // sequencer-only, so its default config PDA is not user-claimable, merely unused
-    // until the zone receives.
-    let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let ping_sender_config_tx = std::iter::once(cross_zone::build_ping_sender_init_config_tx());
-    let ping_receiver_config_tx = std::iter::once(cross_zone::build_ping_receiver_init_config_tx(
-        config.cross_zone.as_ref(),
-    ));
-    let bridge_lock_config_tx = std::iter::once(cross_zone::build_bridge_lock_init_config_tx());
-    let inbox_config_tx = config.cross_zone.as_ref().map(|_| {
-        let self_zone = *config.bedrock_config.channel_id.as_ref();
-        cross_zone::build_inbox_init_config_tx(self_zone)
-    });
+    let mut genesis_txs = Vec::new();
+
+    // These programs are not part of the deployed Testnet v0.2 state. Keep their
+    // development-network config transactions out of a testnet genesis block so
+    // replay still uses only the attested program set.
+    #[cfg(not(feature = "testnet"))]
+    {
+        // Config txs seed the config accounts by transaction, so every node
+        // reconstructs them by replaying the genesis block. The wrapped-token minter and
+        // both emitters' pins are initialized on every zone: all three are builtins with
+        // a user-callable InitConfig, so a config PDA left default is claimable by the
+        // first initializer, hijacking the minter or repointing an emitter's outbox. The
+        // inbox allowlist is initialized only on receiving zones; the inbox is
+        // sequencer-only, so its default config PDA is not user-claimable, merely unused
+        // until the zone receives.
+        genesis_txs.extend([
+            cross_zone::build_wrapped_token_init_config_tx(config.cross_zone.as_ref()),
+            cross_zone::build_ping_sender_init_config_tx(),
+            cross_zone::build_ping_receiver_init_config_tx(config.cross_zone.as_ref()),
+            cross_zone::build_bridge_lock_init_config_tx(),
+        ]);
+        if config.cross_zone.is_some() {
+            let self_zone = *config.bedrock_config.channel_id.as_ref();
+            genesis_txs.push(cross_zone::build_inbox_init_config_tx(self_zone));
+        }
+    }
     let supply_txs = config.genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyAccount {
             account_id,
@@ -1772,26 +1789,28 @@ fn build_genesis_state(
         }
     });
 
-    // The creator falls back to staking itself, signing with the key it owns.
-    let mut staked = founding_stakes(config);
-    if staked.is_empty() {
-        staked.extend(bootstrap_sequencer_key.map(|key| {
-            let key_path = config.home.join("sequencer_stake_signing_key");
-            let owner = load_or_create_stake_signing_key(&key_path)
-                .expect("Failed to load or create the stake signing key");
-            let signature = sign_genesis_stake(0, key, &owner);
-            (key, lee::PublicKey::new_from_private_key(&owner), signature)
-        }));
-    }
-    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
+    genesis_txs.extend(supply_txs);
 
-    let genesis_txs = wrapped_token_config_tx
-        .chain(ping_sender_config_tx)
-        .chain(ping_receiver_config_tx)
-        .chain(bridge_lock_config_tx)
-        .chain(inbox_config_tx)
-        .chain(supply_txs)
-        .chain(bootstrap_stake_txs)
+    // Sequencer staking is a development-network feature; Testnet v0.2 predates
+    // that program and must keep its legacy genesis transaction set.
+    #[cfg(not(feature = "testnet"))]
+    {
+        // The creator falls back to staking itself, signing with the key it owns.
+        let mut staked = founding_stakes(config);
+        if staked.is_empty() {
+            staked.extend(bootstrap_sequencer_key.map(|key| {
+                let key_path = config.home.join("sequencer_stake_signing_key");
+                let owner = load_or_create_stake_signing_key(&key_path)
+                    .expect("Failed to load or create the stake signing key");
+                let signature = sign_genesis_stake(0, key, &owner);
+                (key, lee::PublicKey::new_from_private_key(&owner), signature)
+            }));
+        }
+        genesis_txs.extend(build_stake_genesis_transactions(&staked));
+    }
+
+    let genesis_txs = genesis_txs
+        .into_iter()
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -1914,6 +1933,7 @@ pub fn sign_genesis_stake(
 
 /// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
 /// not raw state, so followers replay them instead of missing them.
+#[cfg(not(feature = "testnet"))]
 fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
     if staked.is_empty() {
         return Vec::new();
@@ -1995,8 +2015,8 @@ fn build_supply_account_genesis_transaction(
     account_id: &AccountId,
     balance: u128,
 ) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
+    let faucet_program_id = network_programs::faucet().id();
+    let vault_program_id = network_programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
@@ -2016,7 +2036,7 @@ fn build_supply_account_genesis_transaction(
 }
 
 fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTransaction {
-    let faucet_program_id = programs::faucet().id();
+    let faucet_program_id = network_programs::faucet().id();
     let bridge_account_id = system_accounts::bridge_account_id();
 
     let message = Message::try_new(
@@ -2044,8 +2064,8 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
     let metadata = DepositMetadata::try_from_slice(&event.metadata)
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
-    let bridge_program_id = programs::bridge().id();
-    let vault_program_id = programs::vault().id();
+    let bridge_program_id = network_programs::bridge().id();
+    let vault_program_id = network_programs::vault().id();
     let recipient_vault_id =
         vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
     // The receipt PDA carries the exactly-once check: the program reads it to
@@ -2280,7 +2300,7 @@ fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_id != network_programs::bridge().id() {
         return None;
     }
 
@@ -2303,7 +2323,7 @@ fn extract_bridge_withdraw_data(tx: &LeeTransaction) -> Option<WithdrawArg> {
     };
 
     let message = tx.message();
-    if message.program_id != programs::bridge().id() {
+    if message.program_id != network_programs::bridge().id() {
         return None;
     }
 
