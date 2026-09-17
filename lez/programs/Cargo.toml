@@ -98,7 +98,7 @@ required-features = ["programs"]
 artifacts = ["dep:build_utils", "dep:lee"]
 
 # Include immutable artifacts deployed by the current Testnet chain.
-testnet = ["artifacts"]
+testnet = ["artifacts", "lee/testnet-v0-2"]
 
 # Import dependencies required for program binaries.
 # You don't need this if you only want to use the library target.

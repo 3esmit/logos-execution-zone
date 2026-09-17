@@ -9,7 +9,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-sequencer_core = { workspace = true, features = ["testnet"] }
+sequencer_core.workspace = true
 sequencer_executor_actor.workspace = true
 sequencer_rpc_server_actor.workspace = true
 lee = { workspace = true, optional = true }
@@ -38,6 +38,7 @@ required-features = ["submit_stake"]
 
 [features]
 default = []
+testnet = ["sequencer_core/testnet"]
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
 standalone = ["sequencer_core/mock"]
 # Enable mDNS-based local peer discovery for gossip.

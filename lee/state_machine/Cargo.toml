@@ -35,5 +35,7 @@ test-case = "3.3.1"
 
 [features]
 default = []
+# Host-side wire compatibility for the source-attested Testnet v0.2 programs.
+testnet-v0-2 = []
 prove = ["risc0-zkvm/prove"]
 test-utils = []

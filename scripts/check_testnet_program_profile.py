@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROFILE_DIR = Path("lez/testnet_initial_state/testnet-v0.2")
-SOURCE_PATH = Path("lez/programs/src/testnet.rs")
+SOURCE_PATH = Path("lee/state_machine/src/program/testnet_v0_2/ids.rs")
 
 EXPECTED_ARTIFACTS = {
     "authenticated_transfer": "AUTHENTICATED_TRANSFER",

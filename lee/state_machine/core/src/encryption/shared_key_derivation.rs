@@ -136,11 +136,10 @@ impl SharedSecretKey {
 
 #[cfg(test)]
 mod tests {
-    use ml_kem::KeyExport as _;
-
     use super::*;
-    use crate::ML_KEM_768_CIPHERTEXT_LEN;
+    use crate::{ML_KEM_768_CIPHERTEXT_LEN, encryption::EphemeralSecretKey};
 
+    #[cfg(feature = "host")]
     #[test]
     fn encapsulate_decapsulate_round_trip() {
         let d = [1_u8; 32];
@@ -155,6 +154,37 @@ mod tests {
         let ek = MlKem768EncapsulationKey(ek_bytes.to_vec());
 
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&ek);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
+
+        assert_eq!(sender_ss.0, receiver_ss.0, "shared secrets must match");
+        assert_eq!(
+            epk.0.len(),
+            ML_KEM_768_CIPHERTEXT_LEN,
+            "ML-KEM-768 ciphertext length"
+        );
+        assert_eq!(
+            ek.0.len(),
+            MlKem768EncapsulationKey::LEN,
+            "ML-KEM-768 encapsulation key length"
+        );
+    }
+
+    #[cfg(not(feature = "host"))]
+    #[test]
+    fn encapsulate_decapsulate_round_trip() {
+        let d = [1_u8; 32];
+        let z = [2_u8; 32];
+
+        let mut seed = Seed::default();
+        seed[..32].copy_from_slice(&d);
+        seed[32..].copy_from_slice(&z);
+
+        let dk = ml_kem::DecapsulationKey768::from_seed(seed);
+        let ek_bytes = dk.encapsulation_key().to_bytes();
+        let ek = MlKem768EncapsulationKey(ek_bytes.to_vec());
+        let esk = EphemeralSecretKey([3_u8; 32]);
+
+        let (sender_ss, epk) = SharedSecretKey::encapsulate_deterministic(&ek, &esk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         assert_eq!(sender_ss.0, receiver_ss.0, "shared secrets must match");
@@ -217,8 +247,9 @@ mod tests {
             MlKem768EncapsulationKey(dk.encapsulation_key().to_bytes().to_vec())
         };
 
-        let (ss1, _) = SharedSecretKey::encapsulate(&ek1);
-        let (ss2, _) = SharedSecretKey::encapsulate(&ek2);
+        let esk = EphemeralSecretKey([5_u8; 32]);
+        let (ss1, _) = SharedSecretKey::encapsulate_deterministic(&ek1, &esk);
+        let (ss2, _) = SharedSecretKey::encapsulate_deterministic(&ek2, &esk);
 
         assert_ne!(ss1.0, ss2.0);
     }

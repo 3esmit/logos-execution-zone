@@ -4,8 +4,8 @@ use anyhow::Result;
 use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
-    InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, DummyInput,
+    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
@@ -201,6 +201,7 @@ impl AccountManager {
         wallet: &WalletCore,
         accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
+        let requires_private_proof_refresh = requires_private_proof_refresh(&accounts);
         let mut states = Vec::with_capacity(accounts.len());
         let mut pin = None;
 
@@ -314,7 +315,13 @@ impl AccountManager {
             states.push(state);
         }
 
-        let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
+        let dummy_commitment_root = if requires_private_proof_refresh {
+            fetch_private_proofs_and_root(wallet, &mut states).await?
+        } else {
+            // Pure public transactions never consume a commitment root, so they remain
+            // compatible with sequencers that do not expose the bulk proof RPC.
+            DUMMY_COMMITMENT_HASH
+        };
 
         Ok(Self {
             states,
@@ -639,6 +646,10 @@ async fn fetch_private_proofs_and_root(
     Ok(root)
 }
 
+fn requires_private_proof_refresh(accounts: &[AccountIdentity]) -> bool {
+    accounts.iter().any(AccountIdentity::is_private)
+}
+
 fn validate_proofs_against_root(
     commitments: &[Commitment],
     proofs: &[Option<MembershipProof>],
@@ -713,6 +724,26 @@ mod tests {
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
+    }
+
+    #[test]
+    fn public_accounts_skip_private_proof_refresh() {
+        let accounts = [
+            AccountIdentity::Public(AccountId::new([1; 32])),
+            AccountIdentity::PublicNoSign(AccountId::new([2; 32])),
+        ];
+
+        assert!(!requires_private_proof_refresh(&accounts));
+    }
+
+    #[test]
+    fn private_accounts_require_private_proof_refresh() {
+        let accounts = [
+            AccountIdentity::Public(AccountId::new([1; 32])),
+            AccountIdentity::PrivateOwned(AccountId::new([2; 32])),
+        ];
+
+        assert!(requires_private_proof_refresh(&accounts));
     }
 
     fn private_state() -> State {

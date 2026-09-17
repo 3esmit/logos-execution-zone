@@ -441,7 +441,6 @@ mod tests {
     use std::str::FromStr as _;
 
     use key_protocol::key_management::secret_holders::ViewingSecretKey;
-    use lee_core::program::ProgramId;
 
     use super::*;
 
@@ -489,6 +488,8 @@ mod tests {
     #[cfg(not(feature = "testnet"))]
     #[test]
     fn development_fixture_profile_contains_development_pinata_state() {
+        use lee_core::program::ProgramId;
+
         let state = initial_state_for_profile(InitialStateProfile::DevelopmentFixture);
         let expected_pinata_account_id = system_accounts::pinata_account_id();
         let expected_pinata_account = system_accounts::pinata_account();
