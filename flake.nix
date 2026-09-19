@@ -173,7 +173,10 @@
             // {
               pname = "logos-execution-zone-indexer-ffi";
               version = "0.1.0";
-              cargoExtraArgs = "-p indexer_ffi";
+              # The deployed Testnet channel uses the immutable Testnet program
+              # artifacts, including its clock program ID. Without this feature,
+              # the indexer validates blocks against development artifacts.
+              cargoExtraArgs = "-p indexer_ffi --features testnet";
               postInstall = ''
                 mkdir -p $out/include
                 cp lez/indexer/ffi/indexer_ffi.h $out/include/
